@@ -306,6 +306,8 @@ class Theme:
     value_box = dict(boxstyle="round,pad=0.25", fc="#F2F2F2", ec="0.7", lw=0.8)
     edge_label_size, glyph_name_size, value_size, node_size, title_size, suptitle_size = 8.5, 8, 9.5, 10, 11.5, 13
     plane_cmap, points_cmap = "RdBu_r", "bwr"
+    table_size, table_title_size, table_row_height = 10, 10.5, 0.058  # row height as a fraction of the panel
+    table_edge, table_head, table_highlight = "0.8", "#F2F2F2", "#FFF1D6"
 
 
 THEME = Theme()
@@ -536,24 +538,51 @@ def draw_history(ax, history, R, T):
 
 
 def draw_slope_table(ax, S, w):
-    """For each weight: the change of R for +0.1, and the slope dR/dw from R.backward()."""
+    """A table with one row per weight: the change of R when that weight alone grows by 0.1, and the slope dR/dw.
+
+    The row with the steepest slope is highlighted. Above 15 rows the table continues in a second block to the right.
+    """
     ax.axis("off")
-    R0, g, lines = S.risk(w), S.slopes(w), []
+    T = S.theme
+    R0, g = S.risk(w), S.slopes(w)
+    deltas = []
     for k in range(len(w)):
         wk = list(w)
         wk[k] += 0.1
-        lines.append(f"{S.model.names[k]:>4}: {S.risk(wk) - R0:+.4f}   {g[k]:+.3f}")
-    for ci, m0 in enumerate(range(0, len(lines), TABLE_ROWS)):
-        head = "      +0.1 in w:   slope\n      change of R\n" if ci == 0 else "\n\n"
-        ax.text(
-            0.52 * ci,
-            1.0,
-            head + "\n".join(lines[m0 : m0 + TABLE_ROWS]),
-            fontsize=S.layout.table_fontsize(len(w)),
-            family="monospace",
-            va="top",
-            transform=ax.transAxes,
+        deltas.append(S.risk(wk) - R0)
+    rows = [[S.model.names[k], f"{deltas[k]:+.4f}", f"{g[k]:+.3f}"] for k in range(len(w))]
+    steepest = int(np.argmax(np.abs(g)))
+    blocks = [rows[i : i + TABLE_ROWS] for i in range(0, len(rows), TABLE_ROWS)]
+    n_blocks = len(blocks)
+    fontsize = T.table_size if n_blocks == 1 else max(T.table_size - 2, 8)
+    headers = ["weight", "change of R for +0.1", "slope dR/dw"] if n_blocks == 1 else ["w", "R for +0.1", "slope"]
+    ax.set_title("Change of R when one weight grows by 0.1,\nand the slope dR/dw", fontsize=T.table_title_size)
+    gap = 0.03
+    width = (1 - gap * (n_blocks - 1)) / n_blocks
+    for b, block in enumerate(blocks):
+        height = min(1.0, T.table_row_height * (len(block) + 1))
+        tbl = ax.table(
+            cellText=block,
+            colLabels=headers,
+            colWidths=[0.22, 0.44, 0.34],
+            cellLoc="right",
+            colLoc="center",
+            bbox=[b * (width + gap), 1 - height, width, height],
         )
+        tbl.auto_set_font_size(False)
+        tbl.set_fontsize(fontsize)
+        for (r, c), cell in tbl.get_celld().items():
+            cell.set_edgecolor(T.table_edge)
+            text = cell.get_text()
+            if r == 0:
+                cell.set_facecolor(T.table_head)
+                text.set_fontweight("bold")
+            else:
+                if c > 0:
+                    text.set_family("monospace")
+                if b * TABLE_ROWS + r - 1 == steepest:
+                    cell.set_facecolor(T.table_highlight)
+                    text.set_fontweight("bold")
 
 
 def draw_figure(S, w, history):

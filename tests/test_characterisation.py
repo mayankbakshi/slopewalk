@@ -89,13 +89,16 @@ def history_title(fig):
 
 
 def slope_table(fig):
-    """{name: (change of R for +0.1, slope)} parsed from the table panel."""
+    """{name: (change of R for +0.1, slope)} read from the cells of the table panel, in row order."""
     rows = {}
-    for s in texts(fig):
-        for line in s.split("\n"):
-            m = re.fullmatch(r"\s*(w\d+):\s+([+-]\d+\.\d{4})\s+([+-]\d+\.\d{3})", line)
-            if m:
-                rows[m.group(1)] = (float(m.group(2)), float(m.group(3)))
+    for ax in fig.axes:
+        for tbl in ax.tables:
+            cells = tbl.get_celld()
+            for r in range(1, max(key[0] for key in cells) + 1):
+                name, delta, slope = (cells[r, c].get_text().get_text() for c in range(3))
+                assert re.fullmatch(r"w\d+", name) and re.fullmatch(r"[+-]\d+\.\d{4}", delta)
+                assert re.fullmatch(r"[+-]\d+\.\d{3}", slope)
+                rows[name] = (float(delta), float(slope))
     return rows
 
 
