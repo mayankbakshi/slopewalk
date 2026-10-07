@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+message: "If you use slopewalk in teaching or research, please cite it as below."
+title: "slopewalk: gradient descent by hand on small PyTorch networks"
+type: software
+authors:
+  - family-names: Bakshi
+    given-names: Mayank
+    email: mayank.bakshi@gmail.com
+repository-code: "https://github.com/mayankbakshi/slopewalk"
+license: MIT
+version: 0.1.0.dev0

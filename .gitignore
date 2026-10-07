@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.pyc
+*.egg-info/
+build/
+.DS_Store
+gradviz_demo.html
+examples/*.html
+examples/*_executed.ipynb

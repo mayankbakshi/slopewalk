@@ -1,0 +1,54 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "slopewalk"
+version = "0.1.0.dev0"
+description = "Gradient descent by hand on small PyTorch networks: a slider per weight, the slopes, and the loss, drawn as the network."
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Mayank Bakshi", email = "mayank.bakshi@gmail.com" }]
+keywords = ["teaching", "gradient descent", "pytorch", "ipywidgets", "neural networks"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Education",
+    "Programming Language :: Python :: 3",
+    "Framework :: Jupyter",
+    "Topic :: Education",
+]
+dependencies = [
+    "numpy>=1.21",
+    "matplotlib>=3.5",
+    "torch>=1.12",
+    "ipywidgets>=7.6,<9",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff", "nbformat"]
+
+[project.urls]
+Repository = "https://github.com/mayankbakshi/slopewalk"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/slopewalk"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/slopewalk", "tests", "tools", "README.md", "LICENSE", "CHANGELOG.md", "CITATION.cff"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py39"
+extend-exclude = ["dist", "baseline", "*.md", "*.ipynb"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E741"]  # l for the layer index
+
+[tool.ruff.lint.per-file-ignores]
+"examples/*" = ["E501", "E731"]  # notebook prose in long strings; md and code as one-line helpers
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

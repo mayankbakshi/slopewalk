@@ -1,0 +1,293 @@
+"""Drawing with matplotlib: the network panels, the glyphs, the input plane, R over the steps, the slope table."""
+
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
+from matplotlib.patches import Rectangle
+
+from .layout import BW, TABLE_ROWS
+from .model import SIGMOID
+
+
+class Theme:
+    """Colours, fonts and sizes. Red is class 1 and blue class 0."""
+
+    class_colour = {0: "blue", 1: "red"}
+    class_tint = {0: "#E5ECFF", 1: "#FFE5E5"}
+    mixed_colour, mixed_tint = "black", "#EEEEEE"
+    positive, negative, negative_text, changed = "black", "tab:orange", "#B35900", "tab:blue"
+    hidden = "green"  # the h boxes, the dot and the band on the glyphs, the history line
+    arrow, curve, node_edge = "0.45", "0.35", "gray"
+    value_box = dict(boxstyle="round,pad=0.25", fc="#F2F2F2", ec="0.7", lw=0.8)
+    edge_label_size, glyph_name_size, value_size, node_size, title_size, suptitle_size = 8.5, 8, 9.5, 10, 11.5, 13
+    plane_cmap, points_cmap = "RdBu_r", "bwr"
+
+
+THEME = Theme()
+
+
+def letter(c):
+    """A, B, C, ... for the groups."""
+    return chr(65 + c) if c < 26 else str(c)
+
+
+def num(m, sd, sign=True):
+    """A value, with its standard deviation on a second line when it is not zero."""
+    s = f"{m:+.2f}" if sign else f"{m:.2f}"
+    return s + (f"\n±{sd:.2f}" if np.any(sd > 0) else "")
+
+
+def glyph(ax, xc, yc, act, m, sd, T):
+    """The activation function as a small curve; a dot at m and, for groups, a band from m - sd to m + sd."""
+    name, f, lim = act
+    w_, h_ = 0.62, 0.5
+    ax.add_patch(Rectangle((xc - w_ / 2, yc - h_ / 2), w_, h_, fc="white", ec="0.75", lw=0.8, zorder=2))
+    u = np.linspace(-lim, lim, 100)
+
+    def fx(t):
+        return xc - w_ / 2 + (np.clip(t, -lim, lim) + lim) / (2 * lim) * w_
+
+    vals = f(u)
+    g = (vals - vals.min()) / (vals.max() - vals.min()) - 0.5
+    ax.plot(fx(u), yc + 0.85 * h_ * g, color=T.curve, lw=1.2, zorder=3)
+    if sd > 0:
+        band = Rectangle(
+            (fx(m - sd), yc - h_ / 2), max(fx(m + sd) - fx(m - sd), 0.01), h_, fc=T.hidden, alpha=0.18, ec="none"
+        )
+        band.set_zorder(2)
+        ax.add_patch(band)
+    ym = yc + 0.85 * h_ * ((f(np.clip(m, -lim, lim)) - vals.min()) / (vals.max() - vals.min()) - 0.5)
+    ax.plot([fx(m)], [ym], "o", color=T.hidden, ms=4, zorder=4)
+    ax.text(xc, yc - h_ / 2 - 0.04, name, fontsize=T.glyph_name_size, ha="center", va="top", color=T.curve)
+
+
+def draw_case(ax, S, out, w, c, changed):
+    """One copy of the network for group c: the lines with their weights, the units, the score, p and the loss."""
+    M, D, L, T = S.model, S.data, S.layout, S.theme
+    labs = D.y[D.gsel[c]]
+    yi = int(round(float(labs.mean())))
+    mixed = bool(labs.min() != labs.max())
+    col, tint = (T.mixed_colour, T.mixed_tint) if mixed else (T.class_colour[yi], T.class_tint[yi])
+    arrow = dict(arrowstyle="-|>", color=T.arrow, lw=1.0, shrinkA=0, shrinkB=0)
+    show_names = L.show_names(len(w))
+    src = [(0.12, yy) for yy in L.y_inputs]
+    src_x, k = 0.0, 0
+    for l, layer in enumerate(M.layers):
+        last = l == len(M.layers) - 1
+        tx = (L.x_a if last else L.blocks[l][0]) - BW
+        tys = np.array([1.2]) if last else L.unit_ys(layer.out_features)
+        bias = (src_x if l == 0 else src_x + 0.45, 2.8)
+        ax.text(
+            *bias,
+            "1",
+            fontsize=T.node_size,
+            ha="center",
+            va="center",
+            zorder=4,
+            bbox=dict(boxstyle="circle", fc="white", ec=T.node_edge),
+        )
+        sources = src + [(bias[0] + 0.1, bias[1] - 0.1)]
+        ns, nt = len(sources), len(tys)
+        for j, ty in enumerate(tys):
+            for si, (sx, sy) in enumerate(sources):
+                hot = k in changed
+                t = L.label_fraction(si, j, ns, nt)
+                ax.plot(
+                    [sx, tx],
+                    [sy, ty],
+                    color=T.changed if hot else (T.positive if w[k] >= 0 else T.negative),
+                    lw=min(0.6 + 1.3 * abs(w[k]), 7),
+                    zorder=1,
+                    solid_capstyle="round",
+                )
+                ax.text(
+                    sx + t * (tx - sx),
+                    sy + t * (ty - sy),
+                    f"{M.names[k]} = {w[k]:.2f}" if show_names else f"{w[k]:.2f}",
+                    fontsize=T.edge_label_size,
+                    ha="center",
+                    va="center",
+                    zorder=3,
+                    color=T.changed if hot else (T.positive if w[k] >= 0 else T.negative_text),
+                    fontweight="bold" if hot else "normal",
+                    bbox=dict(boxstyle="round,pad=0.08", fc="white", ec="none", alpha=0.9),
+                )
+                k += 1
+        if not last:
+            XZ, XG, XH = L.blocks[l]
+            (zm, zs), (hm, hs) = D.stats(out.hidden[l][0], c), D.stats(out.hidden[l][1], c)
+            for j, ty in enumerate(tys):
+                nm = M.unit_name(l, j)
+                ax.text(
+                    XZ,
+                    ty,
+                    f"z{nm}\n" + num(zm[j], zs[j]),
+                    fontsize=T.value_size,
+                    ha="center",
+                    va="center",
+                    zorder=5,
+                    bbox=T.value_box,
+                )
+                if layer.act:
+                    ax.annotate("", xy=(XG - 0.31, ty), xytext=(XZ + BW, ty), arrowprops=arrow)
+                    glyph(ax, XG, ty, layer.act, zm[j], zs[j], T)
+                    ax.annotate("", xy=(XH - BW, ty), xytext=(XG + 0.31, ty), arrowprops=arrow)
+                else:
+                    ax.annotate("", xy=(XH - BW, ty), xytext=(XZ + BW, ty), arrowprops=arrow)
+                ax.text(
+                    XH,
+                    ty,
+                    f"h{nm}\n" + num(hm[j], hs[j]),
+                    fontsize=T.value_size,
+                    ha="center",
+                    va="center",
+                    zorder=5,
+                    color=T.hidden,
+                    bbox=T.value_box,
+                )
+            src = [(XH + BW, ty) for ty in tys]
+            src_x = XH
+    xm, xs = D.stats(D.X.numpy(), c)
+    for i, yy in enumerate(L.y_inputs):
+        ax.text(
+            0,
+            yy,
+            f"x{i + 1}",
+            fontsize=T.node_size,
+            ha="center",
+            va="center",
+            zorder=4,
+            color=col,
+            bbox=dict(boxstyle="circle", fc=tint, ec=col),
+        )
+        ax.text(
+            -0.24,
+            yy,
+            num(xm[i], xs[i]),
+            fontsize=T.node_size,
+            ha="right",
+            va="center",
+            color=col,
+            bbox=dict(boxstyle="round,pad=0.25", fc=tint, ec=col, lw=0.8),
+        )
+    (am, as_), (pm, ps), (lm, _) = D.stats(out.a, c), D.stats(out.p, c), D.stats(out.loss, c)
+    ax.text(
+        L.x_a, 1.2, "a\n" + num(am, as_), fontsize=T.node_size, ha="center", va="center", zorder=5, bbox=T.value_box
+    )
+    ax.annotate("", xy=(L.x_sigmoid - 0.31, 1.2), xytext=(L.x_a + BW, 1.2), arrowprops=arrow)
+    glyph(ax, L.x_sigmoid, 1.2, SIGMOID, am, as_, T)
+    ax.annotate("", xy=(L.x_p - BW, 1.2), xytext=(L.x_sigmoid + 0.31, 1.2), arrowprops=arrow)
+    ax.text(
+        L.x_p,
+        1.2,
+        "p\n" + num(pm, ps, sign=False),
+        fontsize=T.node_size,
+        ha="center",
+        va="center",
+        zorder=5,
+        bbox=T.value_box,
+    )
+    ytxt = "y mixed" if mixed else f"y = {yi}"
+    ax.text(
+        L.x_loss,
+        1.2,
+        f"{ytxt}\nloss {lm:.3f}\nchange\nfrom start\n{lm - S.loss0[c]:+.3f}",
+        fontsize=T.node_size,
+        ha="center",
+        va="center",
+        color=col,
+        bbox=dict(boxstyle="round,pad=0.3", fc=tint, ec=col, lw=0.8),
+    )
+    where = "(" + ", ".join(f"{v:.1f}" for v in xm) + ")"
+    what = "classes mixed" if mixed else f"class {yi}"
+    npts = int(D.gsel[c].sum())
+    ax.set_title(
+        f"{letter(c)}: {'mean of ' + str(npts) + ' points ' if npts > 1 else ''}{where}, {what}:  loss {lm:.3f}",
+        fontsize=T.title_size,
+        color=col,
+    )
+    ax.set_xlim(*L.xlim)
+    ax.set_ylim(*L.ylim)
+    ax.axis("off")
+
+
+def draw_input_plane(ax, S):
+    """p for class 1 over the input plane, the boundary p = 0.5, the points and the group means (two inputs only)."""
+    D, M, T = S.data, S.model, S.theme
+    if D.d != 2:
+        ax.axis("off")
+        ax.text(0.5, 0.5, f"{D.d} inputs: no picture of the input plane", ha="center", va="center")
+        return
+    X, y = D.X, D.y
+    lo, hi = min(-2.0, float(X.min()) - 0.5), max(2.0, float(X.max()) + 0.5)
+    u = np.linspace(lo, hi, 101)
+    P1, P2 = np.meshgrid(u, u)
+    with torch.no_grad():
+        grid = torch.tensor(np.c_[P1.ravel(), P2.ravel()], dtype=torch.float32)
+        P = torch.sigmoid(M.net(grid)).numpy().reshape(P1.shape)
+    ax.contourf(P1, P2, P, levels=np.linspace(0, 1, 11), cmap=T.plane_cmap, alpha=0.5)
+    if P.min() < 0.5 < P.max():
+        ax.contour(P1, P2, P, levels=[0.5], colors="k")
+    if D.n > D.G:
+        ax.scatter(X[:, 0].numpy(), X[:, 1].numpy(), c=y.numpy(), cmap=T.points_cmap, s=4, vmin=0, vmax=1)
+    for c in range(D.G):
+        xm = X[D.gsel[c]].mean(0)
+        yi = int(round(float(y[D.gsel[c]].mean())))
+        ax.scatter(*xm.numpy(), s=160, color=T.class_colour[yi], edgecolor="k", zorder=3)
+        ax.text(xm[0] + 0.15, xm[1] + 0.15, letter(c), fontsize=12)
+    ax.set_title("p for class 1 and the boundary")
+    ax.set_aspect("equal")
+
+
+def draw_history(ax, history, R, T):
+    """R over the gradient steps taken."""
+    ax.plot(range(len(history)), history, "o-", color=T.hidden, ms=4)
+    ax.set_xlabel("gradient steps taken")
+    ax.set_ylabel("R")
+    ax.set_ylim(0, max(1.1, max(history) * 1.05))
+    ax.set_title(f"R = {R:.3f}")
+    if len(history) < 12:
+        ax.set_xticks(range(len(history)))
+
+
+def draw_slope_table(ax, S, w):
+    """For each weight: the change of R for +0.1, and the slope dR/dw from R.backward()."""
+    ax.axis("off")
+    R0, g, lines = S.risk(w), S.slopes(w), []
+    for k in range(len(w)):
+        wk = list(w)
+        wk[k] += 0.1
+        lines.append(f"{S.model.names[k]:>4}: {S.risk(wk) - R0:+.4f}   {g[k]:+.3f}")
+    for ci, m0 in enumerate(range(0, len(lines), TABLE_ROWS)):
+        head = "      +0.1 in w:   slope\n      change of R\n" if ci == 0 else "\n\n"
+        ax.text(
+            0.52 * ci,
+            1.0,
+            head + "\n".join(lines[m0 : m0 + TABLE_ROWS]),
+            fontsize=S.layout.table_fontsize(len(w)),
+            family="monospace",
+            va="top",
+            transform=ax.transAxes,
+        )
+
+
+def draw_figure(S, w, history):
+    """The whole picture at w: one panel per group, then the input plane, R over the steps and the slope table."""
+    M, D, L = S.model, S.data, S.layout
+    changed = {k for k in range(len(w)) if abs(w[k] - S.w0[k]) > 1e-9}
+    out = M.forward(D.X, D.y, w)
+    per_row, rows = L.per_row(), L.rows(D.G)
+    fig = plt.figure(figsize=L.figsize(D.G))
+    gs = fig.add_gridspec(rows + 1, 3, height_ratios=[1] * rows + [1.45])
+    for c in range(D.G):
+        r, cc = divmod(c, per_row)
+        ax = fig.add_subplot(gs[r, :] if per_row == 1 else gs[r, :].subgridspec(1, 2)[0, cc])
+        draw_case(ax, S, out, w, c, changed)
+    if S.title:
+        fig.suptitle(S.title, fontsize=S.theme.suptitle_size)
+    draw_input_plane(fig.add_subplot(gs[rows, 0]), S)
+    draw_history(fig.add_subplot(gs[rows, 1]), history, S.risk(w), S.theme)
+    draw_slope_table(fig.add_subplot(gs[rows, 2]), S, w)
+    M.set_weights(w)
+    fig.tight_layout()
+    return fig

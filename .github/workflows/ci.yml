@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+env:
+  MPLBACKEND: Agg
+
+jobs:
+  tests:
+    name: tests (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: oldest, Python 3.9
+            python: "3.9"
+            torch: "torch==1.12.1"
+            deps: "numpy==1.21.6 matplotlib==3.5.3 ipywidgets==7.6.6 'pytest<9'"
+          - name: Colab 2026.07, Python 3.12
+            python: "3.12"
+            torch: "torch==2.11.0"
+            deps: "numpy==2.0.2 matplotlib ipywidgets pytest"
+          - name: newest, Python 3.13
+            python: "3.13"
+            torch: "torch"
+            deps: "numpy matplotlib ipywidgets pytest"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install torch (CPU build)
+        run: python -m pip install "${{ matrix.torch }}" --index-url https://download.pytorch.org/whl/cpu
+      - name: Install the other dependencies and the package
+        run: |
+          python -m pip install ${{ matrix.deps }}
+          python -m pip install -e .
+      - name: Tests
+        run: python -m pytest -q
+      - name: Single file is up to date
+        run: python tools/make_single_file.py --check
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install ruff
+      - run: ruff check .
+      - run: ruff format --check .
