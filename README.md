@@ -59,14 +59,12 @@ With the backward pass on, the widgets have buttons to step back and forth throu
    - `hidden`: each case at its values in the last hidden layer, with the output unit's boundary (a line for two units, a plane for three);
    - `momentum`: R over the next steps of gradient descent and of momentum (each step keeps the share beta of the last one).
 
-Controls, in four numbered tabs, each opening with what to try:
+Controls: one panel opening with what to try, a slider per weight grouped by unit (a drop-down list and one slider above 30 weights; a slider widens its range when a step takes its weight past the end), `eta`, `gradient step` (w ← w − eta · dR/dw for every weight), `10 steps` and `reset`. Tabs appear only for what the call asks for:
 
-1. **By hand**: a slider per weight, grouped by unit (a drop-down list and one slider above 30 weights). A slider widens its range when a step takes its weight past the end.
-2. **Steps**: `eta`, `gradient step` (w ← w − eta · dR/dw for every weight), `10 steps` and `reset`.
-3. **Backprop**: opening the tab turns the backward pass on; `next ▶` and `◀ back` move through its stages, `trace case` chooses the case written out, and the caption gives the formula of the stage.
-4. **Views**: the extra panels, the layout (wide or standard) and their settings.
+1. **Backprop**, when `views` includes `"backprop"` (or `backprop_step` is above 0): `next ▶` and `◀ back` move through the stages, `trace case` chooses the case written out, and the caption gives the formula of the stage. Leaving the tab turns the backward pass off; coming back turns it on.
+2. **Views**, when other views are asked for: a checkbox per extra panel, with their settings.
 
-Under the tabs, a status bar gives R, the size of the gradient, the accuracy, the predicted change of R for the next step and the last step's predicted and actual change, with one sentence on what the last action did (for example "You set w10 from 0.49 to 0.70: R went from 0.5680 to 0.5619, down 0.0061."). Every control has a tooltip.
+Beside or under the controls, a status bar gives R, the size of the gradient, the accuracy, the predicted change of R for the next step and the last step's predicted and actual change, with one sentence on what the last action did (for example "You set w10 from 0.49 to 0.70: R went from 0.5680 to 0.5619, down 0.0061."). Every control has a tooltip, and a switch changes between the wide and the standard layout.
 
 ## Supported networks
 
