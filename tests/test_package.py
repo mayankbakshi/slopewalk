@@ -40,9 +40,16 @@ def test_version_matches_pyproject_and_citation():
 
 
 def test_public_names_and_signatures():
-    assert set(slopewalk.__all__) >= {"explore", "clusters", "xor_centres", "two_points", "weight_table", "Session"}
+    expected = {"explore", "clusters", "xor_centres", "two_points", "sine_points", "weight_table", "Session"}
+    assert set(slopewalk.__all__) >= expected
     for name in slopewalk.__all__:
         assert hasattr(slopewalk, name)
-    assert str(inspect.signature(slopewalk.explore)) == "(net, X, y, groups=None, eta=1.0, title=None)"
+    signature = str(inspect.signature(slopewalk.explore))
+    assert signature.startswith("(net, X, y, groups=None, eta=1.0, title=None, *, ")
+    assert signature == (
+        "(net, X, y, groups=None, eta=1.0, title=None, *, task=None, params=None, views=(), case_slopes=None, "
+        "slice_weights=None, beta=0.9, lookahead=30, log_scale=False)"
+    )
     assert str(inspect.signature(slopewalk.clusters)) == "(centers, labels, noise=0.0, n_per=50, seed=0)"
     assert str(inspect.signature(slopewalk.xor_centres)) == "(noise=0.0, n_per=50, seed=0)"
+    assert str(inspect.signature(slopewalk.sine_points)) == "(n=16, noise=0.1, seed=0)"

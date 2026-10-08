@@ -21,26 +21,46 @@ X, y, groups = clusters([(-1, 1), (1, 1), (-1, -1), (1, -1)], [1, 0, 0, 1])   # 
 explore(net, X, y, groups)
 ```
 
-1. `explore(net, X, y, groups=None, eta=1.0, title=None)`: `X` holds the inputs (n x d), `y` the classes (0 or 1). One panel per group of points; without `groups`, one panel per point (up to 8 points) or per class. Returns a session: `save("state.png")` writes the current picture, `step(k)` takes k gradient steps, `reset()` returns to the start, `weights()` and `history` give the weights and R after each step.
+1. `explore(net, X, y, groups=None, eta=1.0, title=None)`: `X` holds the inputs (n x d), `y` the classes (0 or 1). One panel per group of points; without `groups`, one panel per point (up to 8 points) or per class.
 2. `clusters(centers, labels, noise=0.0, n_per=50, seed=0)`: the centres themselves (`noise = 0`), or `n_per` points around each centre with standard deviation `noise`. Returns `X, y, groups`.
-3. `xor_centres(noise=0.0, n_per=50, seed=0)` and `two_points()`: the built-in examples, as `X, y, groups`.
+3. `xor_centres(noise=0.0, n_per=50, seed=0)`, `two_points()` and `sine_points(n=16, noise=0.1, seed=0)` (for regression): the built-in examples, as `X, y, groups`.
 4. `weight_table(net)`: name, layer, unit, input and value of every weight, in the order of the names.
 5. The sliders change the weights of `net` itself. After the cell, `net` holds the last weights; to start again, rebuild or reload the network.
+
+Options of `explore`, all keyword-only; without them the picture is as above:
+
+| option | effect |
+|---|---|
+| `task="regression"` | the output is a prediction and R the mean squared error; `y` holds numbers. Labels other than 0 and 1 without this option raise an error. |
+| `params=["w10", "w11"]`, `"output"`, `"layer:1"` | only these weights get sliders and move in a step; the others are drawn lighter and stay fixed. |
+| `views=("slice", "line", "hidden", "momentum", "cases")` | extra panels, see below. |
+| `case_slopes="w10"` | the per-case panel for this weight. |
+| `slice_weights=("w10", "w11")` | the weights of the slice panel (one or two). |
+| `beta=0.9`, `lookahead=30` | momentum and the number of steps in the momentum panel. |
+| `log_scale=True` | R on a log axis. |
+
+`explore` returns a session: `step(k)` takes k gradient steps (the sliders follow), `reset()` returns to the start, `predict()` gives the first-order change of R for the next step, `lookahead()` the next steps of gradient descent and of momentum, `case_slopes()` each case's slope along every weight, `save("state.png")` writes the current picture and `record("run.gif", steps=40)` a GIF of a run. `history`, `predictions` and `path` hold R, the predicted and actual change, and the weights after each step.
 
 ## What it draws
 
 1. One copy of the network per point or group (red: class 1; blue: class 0). With several points in a group, every value is a mean ± standard deviation over the group.
 2. Each weight and bias on its line (line width: its size; orange: negative; blue: changed by you). Names `w1, w2, ...` on the lines for networks with at most 9 weights; otherwise the values only, and the slider groups say which inputs each unit's weights belong to.
 3. Each unit as pre-activation z, activation function (a small curve; dot: the value of z; shaded: the group's spread) and value h. Then the score a, the sigmoid, p for class 1, and the log loss with its change since the start.
-4. Below: the boundary p = 0.5 in the input plane (two inputs only), R (the average log loss) over the gradient steps taken, and for each weight the change of R for +0.1 and the slope dR/dw from `R.backward()`.
+4. Below: the boundary p = 0.5 in the input plane (two inputs; dashed: the boundary at the start; one input: p against x1), R (the average log loss) over the gradient steps taken with the first-order prediction of each step (hollow markers), and a table with each weight's value, the change of R for +0.1 and the slope dR/dw from `R.backward()`.
+5. The extra views, in rows of three below:
+   - `cases`: each case's slope of its own loss along one weight, by group, and their average, which is dR/dw;
+   - `slice`: R over one or two weights with the others fixed, the start, the path of the steps and the direction of −∇R;
+   - `line`: R along the next step, w − t·∇R, with the tangent line (the first-order prediction) and where the step of eta lands;
+   - `hidden`: each case at its values in the last hidden layer, with the output unit's boundary (a line for two units, a plane for three);
+   - `momentum`: R over the next steps of gradient descent and of momentum (each step keeps the share beta of the last one).
 
-Controls: a slider per weight (a drop-down list and one slider above 30 weights), `eta`, `gradient step` (w ← w − eta · dR/dw for every weight), `10 steps`, `reset`.
+Controls: a slider per weight (a drop-down list and one slider above 30 weights), `eta`, `gradient step` (w ← w − eta · dR/dw for every weight), `10 steps`, `reset`; a strip with R, the size of the gradient, the accuracy and the predicted and actual change of R; and a "More views" section to switch the views on and off. A slider widens its range when a step takes its weight past the end.
 
 ## Supported networks
 
-`nn.Sequential` of `nn.Linear` layers with `nn.Tanh`, `nn.ReLU`, `nn.Sigmoid` or nothing between them, ending in `nn.Linear(..., 1)`: its output is the score a of class 1, and R is the cross-entropy, as `F.binary_cross_entropy_with_logits`. Anything else raises `ValueError`.
+`nn.Sequential` of `nn.Linear` layers (with bias) with `nn.Tanh`, `nn.ReLU`, `nn.Sigmoid` or nothing between them, ending in `nn.Linear(..., 1)`: its output is the score a of class 1, and R is the cross-entropy, as `F.binary_cross_entropy_with_logits`; with `task="regression"` it is the prediction and R the mean squared error, as `F.mse_loss`. The network must be on the CPU in float32 or float64. Anything else, and points with NaN, the wrong shape or labels other than 0 and 1, raise `ValueError` with the reason.
 
-Weight names: layer by layer, unit by unit, each unit's incoming weights in the order of its inputs, then its bias. For `nn.Sequential(nn.Linear(2, 3), nn.Tanh(), nn.Linear(3, 1))` this gives w1, w2, w3 (unit 1: x1, x2, bias), w4 to w6 (unit 2), w7 to w9 (unit 3), w10 to w12 (output weights) and w13 (output bias). Networks with more than a few hidden units work but the drawing gets crowded.
+Weight names: layer by layer, unit by unit, each unit's incoming weights in the order of its inputs, then its bias. For `nn.Sequential(nn.Linear(2, 3), nn.Tanh(), nn.Linear(3, 1))` this gives w1, w2, w3 (unit 1: x1, x2, bias), w4 to w6 (unit 2), w7 to w9 (unit 3), w10 to w12 (output weights) and w13 (output bias). Rows grow with the number of units up to 12 per layer; beyond that the drawing gets crowded and the values move from the lines to the table.
 
 ## Where it runs
 
@@ -48,7 +68,7 @@ Weight names: layer by layer, unit by unit, each unit's incoming weights in the 
 2. Jupyter or VS Code: install the package and ipywidgets once (`%pip install ipywidgets`, then restart the kernel).
 3. Without ipywidgets the cell draws the starting picture and says how to get the sliders. With the environment variable `NB_STATIC=1` (used to make HTML copies of notebooks) it draws the starting picture only.
 
-`examples/slopewalk_demo.ipynb` shows six uses.
+`examples/slopewalk_demo.ipynb` shows ten uses, including the views, regression and a recorded run.
 
 ## Development
 
@@ -56,5 +76,6 @@ Weight names: layer by layer, unit by unit, each unit's incoming weights in the 
     ruff check . && ruff format --check .    # lint and format
     python tools/make_single_file.py         # rebuilds dist/slopewalk_single.py; --check tells whether it is current
     python tools/render_examples.py out      # the example figures as PNG
+    python tools/measure_redraw.py           # how long a slider move takes to redraw
 
 CI (GitHub Actions, Linux) runs the tests with Python 3.9 and the oldest supported versions (torch 1.12.1, numpy 1.21, matplotlib 3.5, ipywidgets 7.6), with Python 3.12 and the versions of Colab's 2026.07 runtime, and with Python 3.13 and the newest releases.

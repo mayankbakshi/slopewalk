@@ -87,6 +87,56 @@ torch.manual_seed(0)
 net = nn.Sequential(nn.Linear(2, 2), nn.Tanh(), nn.Linear(2, 1))
 explore(net, X=[(-2, 0), (-1, 0), (0, 0), (0.5, 0), (1, 0), (2, 0)], y=[0, 0, 1, 1, 0, 0])
 """)
+md(r"""
+## 7. Two weights at a time
+
+`params` chooses the weights that move: here the output weights $w_{10}$ and $w_{11}$; the others are drawn lighter and stay fixed. Extra panels below: R over $w_{10}$ and $w_{11}$ with the path of your steps and the direction of $-\nabla R$; R along the next step with its first-order prediction; and the next 30 steps of gradient descent and of momentum from the current weights.
+""")
+code(r"""
+torch.manual_seed(0)
+net = nn.Sequential(nn.Linear(2, 3), nn.Tanh(), nn.Linear(3, 1))
+X, y, groups = clusters(CENTERS, LABELS)
+explore(net, X, y, groups, eta=0.5, params=["w10", "w11"], views=("slice", "line", "momentum"))
+""")
+md(r"""
+## 8. Each case's slope, and the hidden layer
+
+With clusters of points, `case_slopes="w10"` shows the slope of every case's own loss along $w_{10}$; their average (dashed) is the slope $dR/dw_{10}$ of the table. The hidden view draws each case at its hidden values $(h_1, h_2, h_3)$ with the plane where the output unit's score is 0.
+""")
+code(r"""
+torch.manual_seed(0)
+net = nn.Sequential(nn.Linear(2, 3), nn.Tanh(), nn.Linear(3, 1))
+X, y, groups = clusters(CENTERS, LABELS, noise=0.35)
+explore(net, X, y, groups, eta=0.5, case_slopes="w10", views=("hidden",))
+""")
+md(r"""
+## 9. Regression
+
+`task="regression"`: the network predicts a number, and R is the mean squared error. 16 points on a sine curve, in four groups of neighbouring points.
+""")
+code(r"""
+from slopewalk import sine_points
+
+torch.manual_seed(0)
+net = nn.Sequential(nn.Linear(1, 3), nn.Tanh(), nn.Linear(3, 1))
+X, y, groups = sine_points()
+explore(net, X, y, groups, eta=0.2, task="regression", views=("line",))
+""")
+md(r"""
+## 10. A recorded run
+
+`record` takes the steps and writes the picture after each one to a GIF (here 30 steps, a frame every 3).
+""")
+code(r"""
+from IPython.display import Image
+
+torch.manual_seed(0)
+net = nn.Sequential(nn.Linear(2, 3), nn.Tanh(), nn.Linear(3, 1))
+X, y, groups = clusters(CENTERS, LABELS)
+s = explore(net, X, y, groups, eta=0.5)
+s.record("run.gif", steps=30, every=3)
+Image("run.gif")
+""")
 nb = nbf.v4.new_notebook()
 nb["cells"] = cells
 nb["metadata"] = {

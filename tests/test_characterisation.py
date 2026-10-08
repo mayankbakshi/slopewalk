@@ -244,7 +244,18 @@ def test_layers_rejects_unsupported_networks(net, fragment):
 
 
 def test_public_signatures_unchanged():
-    assert str(inspect.signature(explore)) == "(net, X, y, groups=None, eta=1.0, title=None)"
+    """The parameters of the original explore keep their names, order and defaults; new ones are keyword-only."""
+    P = inspect.Parameter
+    params = list(inspect.signature(explore).parameters.values())
+    assert [(p.name, p.kind, p.default) for p in params[:6]] == [
+        ("net", P.POSITIONAL_OR_KEYWORD, P.empty),
+        ("X", P.POSITIONAL_OR_KEYWORD, P.empty),
+        ("y", P.POSITIONAL_OR_KEYWORD, P.empty),
+        ("groups", P.POSITIONAL_OR_KEYWORD, None),
+        ("eta", P.POSITIONAL_OR_KEYWORD, 1.0),
+        ("title", P.POSITIONAL_OR_KEYWORD, None),
+    ]
+    assert all(p.kind == P.KEYWORD_ONLY and p.default is not P.empty for p in params[6:])
     assert str(inspect.signature(clusters)) == "(centers, labels, noise=0.0, n_per=50, seed=0)"
 
 
@@ -371,11 +382,16 @@ def controller(monkeypatch):
 
     def run(net, X, y, groups=None, **kw):
         plt.close("all")
-        explore(net, X, y, groups, **kw)
+        shown.clear()
+        s = explore(net, X, y, groups, **kw)
         tree = widget_tree(shown)
-        sliders = {w.description: w for w in tree if isinstance(w, widgets.FloatSlider)}
+        sliders = {
+            w.description: w
+            for w in tree
+            if isinstance(w, widgets.FloatSlider) and (re.fullmatch(r"w\d+", w.description) or w.description == "eta")
+        }
         buttons = {w.description: w for w in tree if isinstance(w, widgets.Button)}
-        return sliders, buttons
+        return sliders, buttons, s
 
     yield run
     plt.close("all")
@@ -383,7 +399,7 @@ def controller(monkeypatch):
 
 def test_controller_sliders_buttons_and_steps(controller):
     net, X, y, _ = two_point()
-    sliders, buttons = controller(net, X, y)
+    sliders, buttons, s = controller(net, X, y)
     assert set(sliders) == {"w1", "w2", "w3", "eta"} and set(buttons) == {"gradient step", "10 steps", "reset"}
     assert [sliders[k].value for k in ["w1", "w2", "w3"]] == [0.5, 0.5, 0.0]
     assert (sliders["w1"].min, sliders["w1"].max, sliders["w1"].step) == (-4, 4, 0.001)
@@ -391,7 +407,7 @@ def test_controller_sliders_buttons_and_steps(controller):
     # a slider changes the network itself
     sliders["w1"].value = 0.6
     assert net[0].weight[0, 0].item() == pytest.approx(0.6)
-    assert history_title(plt.gcf()).startswith("R = ")
+    assert history_title(s.fig).startswith("R = ")
     sliders["w1"].value = 0.5
     # one gradient step: w <- w - eta * dR/dw
     _, g, *_ = oracle(net, X, y)
@@ -401,13 +417,13 @@ def test_controller_sliders_buttons_and_steps(controller):
     # reset returns to the weights at call time
     buttons["reset"].click()
     assert flat(net) == pytest.approx([0.5, 0.5, 0.0], abs=1e-9)
-    assert history_title(plt.gcf()) == "R = 1.003"
+    assert history_title(s.fig) == "R = 1.003"
 
 
 def test_controller_ten_steps_lower_R(controller):
     net = reference_net(40)
     Xc, yc, gc = clusters(CENTERS, LABELS)
-    sliders, buttons = controller(net, Xc, yc, gc)
+    sliders, buttons, s = controller(net, Xc, yc, gc)
     assert set(sliders) == set(NAMES13) | {"eta"}
     sliders["eta"].value = 0.5
     buttons["10 steps"].click()
@@ -424,6 +440,6 @@ def test_controller_ten_steps_lower_R(controller):
     assert w == pytest.approx(flat(ref), abs=1e-5)
     R_after = oracle(net, Xc, yc)[0]
     assert R_after < 0.568
-    assert history_title(plt.gcf()) == f"R = {R_after:.3f}"
-    hist_ax = [ax for ax in plt.gcf().axes if ax.get_title().startswith("R = ")][0]
+    assert history_title(s.fig) == f"R = {R_after:.3f}"
+    hist_ax = [ax for ax in s.fig.axes if ax.get_title().startswith("R = ")][0]
     assert len(hist_ax.lines[0].get_xdata()) == 11  # start plus ten steps

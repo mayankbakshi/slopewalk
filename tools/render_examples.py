@@ -18,7 +18,7 @@ import torch  # noqa: E402
 import torch.nn as nn  # noqa: E402
 import torch.nn.functional as F  # noqa: E402
 
-from slopewalk import clusters, explore  # noqa: E402
+from slopewalk import clusters, explore, sine_points  # noqa: E402
 
 CENTERS = [(-1, 1), (1, 1), (-1, -1), (1, -1)]  # A, B, C, D: top left, top right, bottom left, bottom right
 LABELS = [1, 0, 0, 1]
@@ -102,17 +102,52 @@ CASES = {
 }
 
 
+def sine_regression():
+    torch.manual_seed(0)
+    return (nn.Sequential(nn.Linear(1, 3), nn.Tanh(), nn.Linear(3, 1)), *sine_points())
+
+
+def three_inputs():
+    torch.manual_seed(0)
+    net = nn.Sequential(nn.Linear(3, 2), nn.Tanh(), nn.Linear(2, 1))
+    return net, [(0, 0, 1), (1, 1, 1), (1, 0, 0)], [0, 1, 1], None
+
+
+def wide():
+    torch.manual_seed(0)
+    return (nn.Sequential(nn.Linear(2, 12), nn.Tanh(), nn.Linear(12, 1)), *clusters(CENTERS, LABELS))
+
+
+# name -> (builder, options of explore, steps taken before the picture): the new options and views
+EXTRA_CASES = {
+    "8_three_inputs": (three_inputs, {}, 0),
+    "9_49_weights": (wide, {}, 0),
+    "10_output_weights_slice_line_momentum": (
+        xor_step40,
+        dict(eta=0.5, params=["w10", "w11"], views=("slice", "line", "momentum")),
+        15,
+    ),
+    "11_clusters_case_slopes_hidden": (xor_clusters, dict(eta=0.5, case_slopes="w10", views=("hidden",)), 0),
+    "12_sine_regression": (sine_regression, dict(eta=0.2, task="regression", views=("line", "hidden", "cases")), 30),
+}
+
+
 def render_all(outdir, dpi=90):
     outdir = pathlib.Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
     os.environ["NB_STATIC"] = "1"
     saved = []
     plt.show = lambda *a, **k: None
-    for name, (build, _) in CASES.items():
+    jobs = [(name, build, {}, 0) for name, (build, _) in CASES.items()]
+    jobs += [(name, build, options, steps) for name, (build, options, steps) in EXTRA_CASES.items()]
+    for name, build, options, steps in jobs:
         path = outdir / f"{name}.png"
         net, X, y, groups = build()
-        explore(net, X, y, groups)
-        plt.gcf().savefig(path, dpi=dpi)
+        s = explore(net, X, y, groups, **options)
+        if steps:
+            s.step(steps)
+            s.draw()
+        s.fig.savefig(path, dpi=dpi)
         plt.close("all")
         saved.append(path)
         print("wrote", path)

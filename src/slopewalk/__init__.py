@@ -8,9 +8,18 @@ X, y, groups = clusters([(-1, 1), (1, 1), (-1, -1), (1, -1)], [1, 0, 0, 1])
 explore(net, X, y, groups)
 """
 
-from .data import clusters, two_points, xor_centres
+from .data import clusters, sine_points, two_points, xor_centres
 from .model import weight_table
 from .session import Session, explore
 
 __version__ = "0.1.0.dev0"
-__all__ = ["explore", "clusters", "xor_centres", "two_points", "weight_table", "Session", "__version__"]
+__all__ = [
+    "explore",
+    "clusters",
+    "xor_centres",
+    "two_points",
+    "sine_points",
+    "weight_table",
+    "Session",
+    "__version__",
+]

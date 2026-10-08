@@ -46,10 +46,14 @@ def test_widgets_are_built(live):
     assert (sl.min, sl.max, sl.step, sl.continuous_update, sl.readout_format) == (-4, 4, 0.001, False, ".2f")
     assert C.eta.value == 0.7 and (C.eta.min, C.eta.max, C.eta.step) == (0.1, 5, 0.1)
     assert list(C.buttons) == ["gradient step", "10 steps", "reset"]
-    panel, controls, out = C.widgets
+    panel, controls, more, readout, image, out = C.widgets
     assert isinstance(panel, ipywidgets.Box) and isinstance(out, ipywidgets.Output)
     assert list(controls.children) == [C.eta, *C.buttons.values()]
-    assert s.fig is not None  # drawn once at the start
+    assert isinstance(more, ipywidgets.Accordion) and more.selected_index is None  # "More views", closed
+    assert isinstance(readout, ipywidgets.HTML) and "next step, eta 0.7" in readout.value
+    assert isinstance(image, ipywidgets.Image) and image.value[:8] == b"\x89PNG\r\n\x1a\n"
+    assert s.fig is not None and s.fig is C.picture.fig  # drawn once at the start, off pyplot
+    assert s.fig not in [plt.figure(n) for n in plt.get_fignums()]
 
 
 def test_grouped_panel_headers(live):
@@ -82,10 +86,13 @@ def test_dropdown_above_thirty_weights(live):
 def test_slider_changes_the_network_and_redraws(live):
     net, X, y = logistic_start()
     s = explore(net, X, y)
-    fig0 = s.fig
+    fig0, png0 = s.fig, s.controller.image.value
     s.controller.sliders[0].value = 0.6
     assert net[0].weight[0, 0].item() == pytest.approx(0.6)
-    assert s.fig is not fig0
+    assert s.fig is fig0  # the same figure, drawn again
+    assert s.controller.image.value != png0
+    labels = [t.get_text() for ax in s.fig.axes for t in ax.texts if t.get_fontsize() == 8.5]
+    assert "w1 = 0.60" in labels
     assert len(s.history) == 1  # moving a slider is not a gradient step
 
 
@@ -130,12 +137,86 @@ def test_reset_button(live):
     assert s.history == [s.risk(s.w0)]
 
 
-def test_step_beyond_the_slider_range_is_clipped(live):
+def test_step_beyond_the_slider_range_widens_it(live):
     net, X, y = logistic_start()
     with torch.no_grad():
         net[0].weight[0, 0] = -3.99
     s = explore(net, X, y)
     s.controller.eta.value = 5.0
-    assert -3.99 - 5.0 * s.slopes()[0] < -4  # this step would leave the range of the slider
+    target = -3.99 - 5.0 * s.slopes()[0]
+    assert target < -4  # this step leaves the starting range of the slider
     s.controller.buttons["gradient step"].click()
-    assert s.controller.sliders[0].value == -4.0 and net[0].weight[0, 0].item() == -4.0
+    slider = s.controller.sliders[0]
+    assert net[0].weight[0, 0].item() == pytest.approx(target, abs=1e-6)  # not clipped
+    assert slider.value == pytest.approx(target, abs=1e-6) and slider.min <= target and slider.max == 4
+    s.controller.buttons["reset"].click()
+    assert (slider.min, slider.max) == (-4, 4)  # reset restores the starting range
+
+
+def test_start_range_around_a_large_weight(live):
+    net, X, y = logistic_start()
+    with torch.no_grad():
+        net[0].weight[0, 1] = 5.3
+    s = explore(net, X, y)
+    slider = s.controller.sliders[1]
+    assert (slider.min, slider.max, slider.value) == (-4, 7, pytest.approx(5.3))
+
+
+def test_subset_sliders_and_frozen_note(live):
+    s = explore(make("tanh3"), *xor_centres(), params=["w10", "w11"])
+    C = s.controller
+    assert [sl.description for sl in C.sliders] == ["w10", "w11"]
+    panel = C.widgets[0]
+    boxes, note = panel.children
+    assert [b.children[0].value for b in boxes.children] == ["<b>output unit</b>: weights for h1, h2"]
+    assert "w1 to w9, w12 to w13" in note.value
+    assert C.values() == s.weights() and len(C.values()) == 13
+
+
+def test_steps_in_code_update_the_sliders(live):
+    s = explore(make("tanh3"), *xor_centres(), eta=0.5)
+    png = s.controller.image.value
+    s.step(3)
+    assert s.controller.values() == pytest.approx(s.weights(), abs=1e-9)
+    assert s.controller.image.value != png
+    s.controller.sliders[0].value += 0.2  # a slider move after the steps keeps them
+    assert len(s.history) == 4 and s.weights()[1] == pytest.approx(s.controller.values()[1])
+
+
+def test_readout_strip(live):
+    s = explore(make("tanh3"), *xor_centres(), eta=0.5)
+    C = s.controller
+    assert "next step, eta 0.5: predicted change of R" in C.readout.value and "last step" not in C.readout.value
+    C.buttons["gradient step"].click()
+    p = s.predictions[-1]
+    assert f"{p.predicted - p.before:+.4f}, {p.actual - p.before:+.4f}" in C.readout.value
+    C.eta.value = 2.0
+    assert s.eta == 2.0 and "next step, eta 2: predicted change" in C.readout.value
+
+
+def test_view_toggles_rebuild_the_picture(live):
+    s = explore(make("tanh3"), *xor_centres())
+    C = s.controller
+    n_axes = len(s.fig.axes)
+    C.view_boxes["line"].value = True
+    assert s.views == ("line",) and len(s.fig.axes) == n_axes + 1
+    C.view_boxes["cases"].value = True
+    C.case_pick.value = "w11"
+    assert s.case_weight == 10 and any("along w11" in ax.get_title() for ax in s.fig.axes)
+    C.slice_pick[1].value = "none"
+    C.view_boxes["slice"].value = True
+    assert s.slice_weights == [9] and any(ax.get_title().startswith("R over w10") for ax in s.fig.axes)
+    C.log_box.value = True
+    assert s.log_scale and [ax for ax in s.fig.axes if ax.get_title().startswith("R = ")][0].get_yscale() == "log"
+
+
+def test_output_fallback(live, monkeypatch):
+    import IPython.display
+
+    shown = []
+    monkeypatch.setenv("SLOPEWALK_DISPLAY", "output")
+    monkeypatch.setattr(IPython.display, "display", lambda *a, **k: shown.extend(a))
+    monkeypatch.setattr(IPython.display, "clear_output", lambda *a, **k: None)
+    s = explore(make("tanh3"), *xor_centres())
+    assert s.controller.image not in s.controller.widgets
+    assert any(isinstance(obj, IPython.display.Image) for obj in shown)

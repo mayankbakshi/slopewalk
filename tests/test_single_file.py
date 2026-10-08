@@ -8,7 +8,7 @@ import sys
 import make_single_file  # tools/ is on sys.path, see conftest.py
 import matplotlib.pyplot as plt
 import pytest
-from render_examples import CASES
+from render_examples import CASES, EXTRA_CASES
 
 import slopewalk
 
@@ -67,4 +67,21 @@ def test_same_numbers_and_text_on_the_examples(name, single, monkeypatch):
     (w1, R1, g1, t1, tab1), (w2, R2, g2, t2, tab2) = results
     assert w1 == w2 and R1 == R2 and g1 == g2 and tab1 == tab2
     assert t1 == t2
+    plt.close("all")
+
+
+@pytest.mark.parametrize("name", list(EXTRA_CASES))
+def test_same_numbers_and_text_with_the_new_options(name, single, monkeypatch):
+    monkeypatch.setenv("NB_STATIC", "1")
+    monkeypatch.setattr(plt, "show", lambda *a, **k: None)
+    build, options, steps = EXTRA_CASES[name]
+    results = []
+    for mod in (slopewalk, single):
+        net, X, y, groups = build()
+        plt.close("all")
+        s = mod.explore(net, X, y, groups, **options)
+        s.step(min(steps, 3))
+        fig = s.draw()
+        results.append((s.weights(), s.history, texts(fig)))
+    assert results[0] == results[1]
     plt.close("all")
