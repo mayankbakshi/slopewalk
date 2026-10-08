@@ -46,7 +46,8 @@ def test_widgets_are_built(live):
     assert (sl.min, sl.max, sl.step, sl.continuous_update, sl.readout_format) == (-4, 4, 0.001, False, ".2f")
     assert C.eta.value == 0.7 and (C.eta.min, C.eta.max, C.eta.step) == (0.1, 5, 0.1)
     assert list(C.buttons) == ["gradient step", "10 steps", "reset"]
-    panel, controls, more, readout, image, out = C.widgets
+    panel, controls, more, backprop, readout, image, out = C.widgets
+    assert backprop.layout.display == "none"  # the backward pass controls appear with its view
     assert isinstance(panel, ipywidgets.Box) and isinstance(out, ipywidgets.Output)
     assert list(controls.children) == [C.eta, *C.buttons.values()]
     assert isinstance(more, ipywidgets.Accordion) and more.selected_index is None  # "More views", closed

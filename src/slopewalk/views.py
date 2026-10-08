@@ -1,6 +1,7 @@
 """The extra panels below the networks, chosen with explore(..., views=...).
 
-"cases": each case's slope along one weight and their average. "slice": R over one or two weights with the path of
+"backprop": the backward pass of one case, step by step (see backprop.py). "cases": each case's slope along one
+weight and their average. "slice": R over one or two weights with the path of
 the steps. "line": R along the direction of the next step, with the first-order prediction. "hidden": the cases at
 their hidden values with the output unit's boundary. "momentum": the next steps of gradient descent and of momentum.
 Every function takes (ax, S, F) like the panels in draw.py.
@@ -10,7 +11,7 @@ import numpy as np
 
 from .draw import letter
 
-VIEWS = ("cases", "slice", "line", "hidden", "momentum")
+VIEWS = ("backprop", "cases", "slice", "line", "hidden", "momentum")
 
 
 def message(ax, text):

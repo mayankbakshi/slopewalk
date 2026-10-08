@@ -2,7 +2,8 @@
 
 ## Unreleased
 
-- `layout="wide"` and `width`: a figure 24 inches wide with up to four network panels and six lower panels per row, and the controls in a column beside the picture. Narrow tables use short headers.
+- Backpropagation step by step: `views="backprop"` (or `backprop_step=k`) draws the backward pass stage by stage, from δ at the output through the slopes of the output weights, ∂ℓ/∂h, δ through the activation (with its tangent) and the slopes of each earlier layer, to the average over the cases. A text panel writes out the numbers for one case (`backprop_case`); the widgets step through the stages; `Session.record_backprop` writes them to a GIF. Every value is computed with the taught formulas and checked against autograd.
+- `layout="wide"` and `width`: a figure 27 inches wide with up to four network panels and six lower panels per row, and the controls in a column beside the picture. Narrow tables use short headers.
 - New options of `explore`, all keyword-only, so existing calls are unchanged: `task="regression"` (mean squared error, a prediction box instead of the sigmoid and p, the fitted curve or surface in the input panel), `params` (the weights that move; the others are drawn lighter), `views` (extra panels: each case's slope along one weight, R over one or two weights with the path of the steps, R along the next step with its first-order prediction, the cases in the hidden layer, and gradient descent against momentum), `case_slopes`, `slice_weights`, `beta`, `lookahead` and `log_scale`.
 - The first-order prediction -eta times the sum of the squared slopes is recorded for every step and shown next to the actual change: in the history panel, in its note, and in a new readout strip of the widgets.
 - The starting boundary is drawn dashed once the weights have moved; a network with one input shows p against x1.

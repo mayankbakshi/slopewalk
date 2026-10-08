@@ -1,0 +1,367 @@
+"""Backpropagation step by step: the stages of the backward pass, its numbers for every case, and how they are drawn.
+
+The stages go from the output back to the first layer: delta at the output (dl/da = p - y, or 2(y-hat - y) for
+regression); the slopes of the output weights (delta times the input of each line, 1 for the bias); then for each
+hidden layer, from the last to the first: dl/dh (the sum over the next units of weight times delta), delta through
+the activation (its derivative at z times dl/dh), and the slopes of that layer's weights. The last stage: R is the
+average of the losses, so dR/dw is the average of the cases' slopes, the column of the table.
+"""
+
+from collections import namedtuple
+
+import numpy as np
+import torch
+import torch.nn as nn
+
+from .draw import letter, num
+
+Stage = namedtuple("Stage", "kind layer text")  # kind: forward, output, weights, to_h, delta, average
+Backward = namedtuple("Backward", "inputs z out delta dh deriv grads")  # per case, as numpy arrays
+
+
+def layer_title(model, l):
+    if l == len(model.layers) - 1:
+        return "the output weights"
+    if len(model.hidden) == 1:
+        return "the first-layer weights"
+    return f"the weights into layer {l + 1}"
+
+
+def act_name(model, l):
+    act = model.layers[l].act
+    return act[0] if act else "no activation"
+
+
+def backprop_stages(model):
+    """The stages of the backward pass for this network, from the forward pass to the average over the cases."""
+    L = len(model.layers)
+    regression = model.task == "regression"
+    out = [
+        Stage("forward", None, "forward pass: z, h and " + ("ŷ" if regression else "a and p") + " of every case"),
+        Stage(
+            "output",
+            L - 1,
+            "at the output: δa = ∂ℓ/∂a = " + ("2(ŷ - y)" if regression else "p - y"),
+        ),
+        Stage("weights", L - 1, f"slopes of {layer_title(model, L - 1)}: δ of the unit × the input of the line"),
+    ]
+    for l in range(L - 2, -1, -1):
+        h = "h" if len(model.hidden) == 1 else f"h{l + 1},"
+        act = act_name(model, l)
+        out += [
+            Stage("to_h", l, f"back to {h}: ∂ℓ/∂h = sum over the next units of weight × δ"),
+            Stage("delta", l, f"through {act}: δ = {act}′(z) × ∂ℓ/∂h"),
+            Stage("weights", l, f"slopes of {layer_title(model, l)}: δ of the unit × the input of the line"),
+        ]
+    out.append(Stage("average", None, "R is the average loss: dR/dw = the average of the cases' slopes (the table)"))
+    return out
+
+
+def derivative(layer, z, out):
+    """The derivative of the layer's activation at z (out: its value there), elementwise."""
+    m = layer.module
+    if m is None or isinstance(m, nn.Identity):
+        return torch.ones_like(z)
+    if isinstance(m, nn.Tanh):
+        return 1 - out**2
+    if isinstance(m, nn.Sigmoid):
+        return out * (1 - out)
+    if isinstance(m, nn.ReLU):
+        return (z > 0).to(z.dtype)
+    raise ValueError(f"slopewalk: no derivative for {m}")
+
+
+def backward_pass(model, X, y, w=None):
+    """The forward and backward values of every case, with the formulas of the stages (no autograd).
+
+    inputs[l]: the inputs of layer l (x, then the h of the layer before); z[l] and out[l]: its pre-activations and
+    values; delta[l] = dl/dz[l] (the last layer: dl/da); dh[l] = dl/dout[l] for the hidden layers; deriv[l]: the
+    activation's derivative at z[l]; grads: each case's slope along every weight, n x n_weights, in the order of the
+    names. The network is left at w.
+    """
+    if w is not None:
+        model.set_weights(w)
+    layers = model.layers
+    n = X.shape[0]
+    with torch.no_grad():
+        inputs, zs, outs = [], [], []
+        h = X
+        for layer in layers:
+            inputs.append(h)
+            z = layer.linear(h)
+            h = layer.module(z) if layer.module is not None else z
+            zs.append(z)
+            outs.append(h)
+        a = zs[-1][:, 0]
+        d_out = torch.sigmoid(a) - y if model.task == "binary" else 2 * (a - y)
+        deltas = [None] * len(layers)
+        dh = [None] * len(layers)
+        deriv = [None] * len(layers)
+        deltas[-1] = d_out[:, None]
+        for l in range(len(layers) - 2, -1, -1):
+            dh[l] = deltas[l + 1] @ layers[l + 1].linear.weight
+            deriv[l] = derivative(layers[l], zs[l], outs[l])
+            deltas[l] = deriv[l] * dh[l]
+        blocks = []
+        for h_in, d in zip(inputs, deltas):
+            with_one = torch.cat([h_in, torch.ones(n, 1, dtype=h_in.dtype)], dim=1)
+            blocks.append((d[:, :, None] * with_one[:, None, :]).reshape(n, -1))
+        grads = torch.cat(blocks, dim=1)
+
+    def arr(ts):
+        return [None if t is None else t.detach().numpy().astype(float) for t in ts]
+
+    return Backward(arr(inputs), arr(zs), arr(outs), arr(deltas), arr(dh), arr(deriv), grads.numpy().astype(float))
+
+
+def traced_case(S, c):
+    """The case whose backward pass the derivation shows for group c: the point nearest the group's mean."""
+    D = S.data
+    idx = np.nonzero(D.gsel[c])[0]
+    X = D.X.numpy()[idx]
+    return int(idx[np.argmin(((X - X.mean(0)) ** 2).sum(1))])
+
+
+# ---------------------------------------------------------------- the network panels
+
+
+def stage_index(S):
+    return max(0, min(S.backprop_step, len(S.backprop_stages) - 1))
+
+
+def line_styles(S, F):
+    """Colour and opacity of each weight's line at the current stage, or None for the usual drawing."""
+    st = F.stage
+    if st is None or st.kind == "forward":
+        return None
+    M, T = S.model, S.theme
+    styles = {k: (None, 0.25) for k in range(M.n_weights)}  # faint, in the weight's own colour
+    if st.kind == "weights":
+        for k in M.layer_indices(st.layer):
+            styles[k] = (T.backprop_colour, 1.0)
+    elif st.kind == "average":
+        for k in styles:
+            styles[k] = (T.backprop_colour, 1.0)
+    elif st.kind == "to_h":
+        for k in M.layer_indices(st.layer + 1):
+            if M.where[k][2] >= 0:  # not the bias
+                styles[k] = (None, 1.0)
+    return styles
+
+
+def label_spec(S, F, c):
+    """The labels on the lines at the current stage: {k: (long text, short text, colour)}, or None for the usual
+    labels. Weights stages: each line's slope (mean over the group); back to h: the weights used; else none."""
+    st = F.stage
+    if st is None or st.kind == "forward":
+        return None
+    M, T, D = S.model, S.theme, S.data
+    g = F.bp.grads[D.gsel[c]].mean(0)
+    spec = {}
+    if st.kind in ("weights", "average"):
+        ks = M.layer_indices(st.layer) if st.kind == "weights" else range(M.n_weights)
+        for k in ks:
+            spec[k] = (f"∂ℓ/∂{M.names[k]} = {g[k]:+.3f}", f"{g[k]:+.3f}", T.backprop_colour)
+    elif st.kind == "to_h":
+        for k in M.layer_indices(st.layer + 1):
+            if M.where[k][2] >= 0:
+                colour = T.positive if F.w[k] >= 0 else T.negative_text
+                spec[k] = (f"{M.names[k]} = {F.w[k]:.2f}", f"{F.w[k]:.2f}", colour)
+    return spec
+
+
+def box(ax, x, y, text, T):
+    """A backward value under the forward box at (x, y)."""
+    ax.annotate(
+        text,
+        xy=(x, y),
+        xytext=(0, -31),
+        textcoords="offset points",
+        ha="center",
+        va="center",
+        fontsize=T.backprop_size,
+        color=T.backprop_colour,
+        zorder=6,
+        bbox=dict(boxstyle="round,pad=0.2", fc=T.backprop_tint, ec=T.backprop_colour, lw=0.8),
+    )
+
+
+def tangent(ax, xc, yc, act, m, T, height):
+    """The tangent of the activation at m on its glyph: its slope is the derivative used at this stage."""
+    name, f, lim, df = act
+    w_, h_ = 0.62, height
+    u = np.linspace(-lim, lim, 100)
+    vals = f(u)
+    lo, span = vals.min(), vals.max() - vals.min()
+    m = float(np.clip(m, -lim, lim))
+    ts = np.linspace(max(-lim, m - 0.35 * lim), min(lim, m + 0.35 * lim), 2)
+    ys = f(m) + df(m) * (ts - m)
+
+    def gx(t):
+        return xc - w_ / 2 + (t + lim) / (2 * lim) * w_
+
+    def gy(v):
+        return yc + 0.85 * h_ * ((v - lo) / span - 0.5)
+
+    ax.plot(gx(ts), gy(ys), color=T.backprop_colour, lw=1.6, zorder=5)
+
+
+def overlay(ax, S, F, c, edges):
+    """The backward values on network panel c, for every stage reached so far: delta at the output, dl/dh under the
+    h boxes, delta under the z boxes; at the "through the activation" stage, the tangents on the glyphs; at the
+    "back to h" stage, arrows back along the lines used."""
+    st = F.stage
+    if st is None or st.kind == "forward":
+        return
+    M, D, L, T = S.model, S.data, S.layout, S.theme
+    bp = F.bp
+    sel = D.gsel[c]
+    reached = S.backprop_stages[1 : stage_index(S) + 1]
+    for s in reached:
+        if s.kind == "output":
+            m, sd = D.stats(bp.delta[-1][:, 0], c)
+            box(ax, L.x_a, 1.2, "δa\n" + num(m, sd), T)
+        elif s.kind in ("to_h", "delta"):
+            l = s.layer
+            XZ, XG, XH = L.blocks[l]
+            tys = L.unit_ys(M.layers[l].out_features)
+            values = bp.dh[l] if s.kind == "to_h" else bp.delta[l]
+            for j, ty in enumerate(tys):
+                m, sd = D.stats(values[:, j], c)
+                nm = M.unit_name(l, j)
+                if s.kind == "to_h":
+                    box(ax, XH, ty, f"∂ℓ/∂h{nm}\n" + num(m, sd), T)
+                else:
+                    box(ax, XZ, ty, f"δ{nm}\n" + num(m, sd), T)
+    if st.kind == "delta" and M.layers[st.layer].act:
+        l = st.layer
+        XZ, XG, XH = L.blocks[l]
+        tys = L.unit_ys(M.layers[l].out_features)
+        height = min(0.5, 0.75 * (tys[0] - tys[1])) if len(tys) > 1 else 0.5
+        z = bp.z[l][sel].mean(0)
+        for j, ty in enumerate(tys):
+            tangent(ax, XG, ty, M.layers[l].act, z[j], T, height)
+    if st.kind == "to_h":
+        arrow = dict(arrowstyle="-|>", color=T.backprop_colour, lw=1.4, shrinkA=0, shrinkB=0)
+        for k, p0, p1, _ in edges:
+            if M.where[k][0] == st.layer + 1 and M.where[k][2] >= 0:
+                a = (p0[0] + 0.62 * (p1[0] - p0[0]), p0[1] + 0.62 * (p1[1] - p0[1]))
+                b = (p0[0] + 0.38 * (p1[0] - p0[0]), p0[1] + 0.38 * (p1[1] - p0[1]))
+                ax.annotate("", xy=b, xytext=a, arrowprops=arrow, zorder=4)
+
+
+# ---------------------------------------------------------------- the derivation panel
+
+
+def factor(v, digits=3):
+    """A number as the second factor of a product: in parentheses when it is negative."""
+    text = f"{v:+.{digits}f}"
+    return f"({text})" if v < 0 else text
+
+
+def derivation_lines(S, F, i):
+    """The steps of the backward pass for case i, as (stage index, text) pairs."""
+    M = S.model
+    bp = F.bp
+    y = float(S.data.y[i])
+    a = bp.z[-1][i, 0]
+    regression = S.task == "regression"
+    out = []
+    for s_idx, st in enumerate(S.backprop_stages):
+        if st.kind == "forward":
+            if regression:
+                out.append((s_idx, f"forward: ŷ = {a:+.3f}, y = {y:+.3f}"))
+            else:
+                p = 1 / (1 + np.exp(-a))
+                out.append((s_idx, f"forward: a = {a:+.3f}, p = {p:.3f}, y = {y:g}"))
+        elif st.kind == "output":
+            d = bp.delta[-1][i, 0]
+            if regression:
+                out.append((s_idx, f"δa = 2(ŷ - y) = 2({a:+.3f} - {y:+.3f}) = {d:+.3f}"))
+            else:
+                p = 1 / (1 + np.exp(-a))
+                out.append((s_idx, f"δa = p - y = {p:.3f} - {y:g} = {d:+.3f}"))
+        elif st.kind == "weights":
+            l = st.layer
+            labels = M.input_labels(l)
+            for k in M.layer_indices(l):
+                _, j, src = M.where[k]
+                unit = "a" if l == len(M.layers) - 1 else M.unit_name(l, j)
+                d = bp.delta[l][i, j]
+                if src < 0:
+                    out.append((s_idx, f"{M.names[k]}: δ{unit} × 1 = {bp.grads[i, k]:+.3f}"))
+                else:
+                    v = bp.inputs[l][i, src]
+                    out.append(
+                        (
+                            s_idx,
+                            f"{M.names[k]}: δ{unit} × {labels[src]} = {d:+.3f} × {factor(v)} = {bp.grads[i, k]:+.3f}",
+                        )
+                    )
+        elif st.kind == "to_h":
+            l = st.layer
+            nxt = M.layers[l + 1]
+            Wn = nxt.linear.weight.detach().numpy()
+            for j in range(M.layers[l].out_features):
+                nm = M.unit_name(l, j)
+                if nxt.out_features == 1:
+                    k = M.layer_indices(l + 1)[j]
+                    unit = "a" if l + 1 == len(M.layers) - 1 else M.unit_name(l + 1, 0)
+                    d = bp.delta[l + 1][i, 0]
+                    product = f"{Wn[0, j]:+.3f} × {factor(d)} = {bp.dh[l][i, j]:+.3f}"
+                    out.append((s_idx, f"∂ℓ/∂h{nm} = {M.names[k]} × δ{unit} = {product}"))
+                else:
+                    terms = " + ".join(
+                        f"{Wn[q, j]:+.2f} × {factor(bp.delta[l + 1][i, q])}" for q in range(nxt.out_features)
+                    )
+                    out.append((s_idx, f"∂ℓ/∂h{nm} = {terms} = {bp.dh[l][i, j]:+.3f}"))
+        elif st.kind == "delta":
+            l = st.layer
+            act = act_name(S.model, l)
+            for j in range(M.layers[l].out_features):
+                nm = M.unit_name(l, j)
+                out.append(
+                    (
+                        s_idx,
+                        f"δ{nm} = {act}′(z{nm}) × ∂ℓ/∂h{nm} = {bp.deriv[l][i, j]:.3f} × {factor(bp.dh[l][i, j])} "
+                        f"= {bp.delta[l][i, j]:+.3f}",
+                    )
+                )
+        elif st.kind == "average":
+            k = M.layer_indices(len(M.layers) - 1)[0]
+            mean = bp.grads[:, k].mean()
+            out.append((s_idx, f"dR/dw = average over the {S.data.n} cases, e.g. dR/d{M.names[k]} = {mean:+.4f}"))
+    return out
+
+
+def draw_derivation(ax, S, F):
+    """The backward pass of one case, step by step: the stages reached so far, the current one in bold."""
+    T = S.theme
+    ax.axis("off")
+    c = max(0, min(S.backprop_case, S.data.G - 1))
+    i = traced_case(S, c)
+    step = stage_index(S)
+    stage = S.backprop_stages[step]
+    lines = [(s, t) for s, t in derivation_lines(S, F, i) if s <= step]
+    per_column, columns = 12, 2  # the steps run down the first column, then the second
+    most = per_column * columns
+    shown = lines[-most:]
+    group = "" if S.data.gsel[c].sum() == 1 else f", the case nearest the mean of group {letter(c)}"
+    head = f"backward pass of {letter(c)}{group}"
+    ax.set_title(f"{head}\nstep {step} of {len(S.backprop_stages) - 1}: {stage.text}", fontsize=10.5, loc="left")
+    dy = 0.96 / per_column
+    if len(lines) > most:
+        shown = [(None, "... (earlier steps above)")] + shown[1:]
+    for n, (s, text) in enumerate(shown):
+        current = s == step
+        col, row = divmod(n, per_column)
+        ax.text(
+            0.5 * col,
+            0.98 - row * dy,
+            text,
+            transform=ax.transAxes,
+            fontsize=9.5,
+            va="top",
+            color=T.backprop_colour if current else ("0.5" if s is None else "0.2"),
+            fontweight="bold" if current else "normal",
+        )

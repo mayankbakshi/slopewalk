@@ -143,7 +143,7 @@ def test_wide_layout_sizes(static):
     standard = explore(make("tanh3"), X, y, groups)
     wide = explore(make("tanh3"), X, y, groups, layout="wide")
     assert tuple(standard.fig.get_size_inches()) == pytest.approx((15, 2 * 2.9 + 4.2))
-    assert tuple(wide.fig.get_size_inches()) == pytest.approx((24, 2.9 + 4.2))  # four panels in one row
+    assert tuple(wide.fig.get_size_inches()) == pytest.approx((27, 2.9 + 4.2))  # four panels in one row
     tops = {round(ax.get_position().y0, 3) for ax in panels(wide.fig)}
     assert len(tops) == 1 and len(panels(wide.fig)) == 4
     views = explore(make("tanh3"), X, y, groups, layout="wide", views=("slice", "line", "momentum"))
@@ -179,3 +179,20 @@ def test_edge_labels_do_not_overlap_in_the_wide_layout(name, static):
                     assert overlap_area(a, b) <= 0.02 * area, (name, ax.get_title(), i, j)
             for b in others + glyphs:
                 assert overlap_area(a, b) <= 0.05 * area, (name, ax.get_title(), i)
+
+
+@pytest.mark.parametrize("step", [2, 3, 5, 6])
+@pytest.mark.parametrize("style", ["standard", "wide"])
+def test_backprop_labels_do_not_overlap(step, style, static):
+    from render_examples import reference_net
+
+    s = explore(reference_net(40), *xor_centres(), views="backprop", backprop_step=step, layout=style)
+    for ax in panels(s.fig):
+        labels, others, glyphs = boxes_of(s.fig, ax)
+        for i, a in enumerate(labels):
+            area = (a[2] - a[0]) * (a[3] - a[1])
+            for j, b in enumerate(labels):
+                if j != i:
+                    assert overlap_area(a, b) <= 0.02 * area, (step, style, ax.get_title(), i, j)
+            for b in others + glyphs:
+                assert overlap_area(a, b) <= 0.05 * area, (step, style, ax.get_title(), i)

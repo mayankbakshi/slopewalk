@@ -6,6 +6,7 @@ from collections import namedtuple
 
 import numpy as np
 
+from .backprop import backprop_stages
 from .data import prepare
 from .draw import THEME
 from .layout import Layout
@@ -75,6 +76,8 @@ class Session:
         log_scale=False,
         layout="standard",
         width=None,
+        backprop_step=0,
+        backprop_case=0,
     ):
         self.model = Model(net)
         self.data = prepare(X, y, groups, n_inputs=self.model.n_inputs, dtype=self.model.dtype, task=task)
@@ -102,6 +105,13 @@ class Session:
             raise ValueError("slopewalk: lookahead must be at least 1 step.")
         self.lookahead_steps = int(lookahead)
         self.log_scale = bool(log_scale)
+        n_stages = len(backprop_stages(self.model))
+        if not (isinstance(backprop_step, (int, np.integer)) and 0 <= backprop_step < n_stages):
+            raise ValueError(f"slopewalk: backprop_step must be a whole number from 0 to {n_stages - 1}.")
+        self.backprop_step = int(backprop_step)
+        self.backprop_case = self.group_index(backprop_case)
+        if self.backprop_step > 0:
+            self.views = as_views(self.views + ("backprop",))
         self.w0 = self.model.get_weights()
         start = self.model.forward(self.data.X, self.data.y)
         self.loss0 = [self.data.stats(start.loss, c)[0] for c in range(self.data.G)]
@@ -115,6 +125,20 @@ class Session:
     @property
     def names(self):
         return self.model.names
+
+    @property
+    def backprop_stages(self):
+        """The stages of the backward pass: forward, the output's delta, then layer by layer back to the input."""
+        return backprop_stages(self.model)
+
+    def group_index(self, v):
+        """The index of a group given by its letter ("A") or its index."""
+        G = self.data.G
+        if isinstance(v, (int, np.integer)) and not isinstance(v, bool) and 0 <= v < G:
+            return int(v)
+        if isinstance(v, str) and len(v) == 1 and 0 <= ord(v.upper()) - 65 < G:
+            return ord(v.upper()) - 65
+        raise ValueError(f"slopewalk: {v!r} is not a group; the groups are A to {chr(64 + G)} (or 0 to {G - 1}).")
 
     def weight_index(self, v):
         """The index of a weight given by its name ("w10") or its index."""
@@ -281,6 +305,36 @@ class Session:
         self.changed()
         return path
 
+    def record_backprop(self, path, fps=1, dpi=80):
+        """Writes every stage of the backward pass at the current weights to an animated GIF (or .mp4 with ffmpeg),
+        one frame per stage. The weights do not change. Returns path."""
+        from matplotlib.animation import FFMpegWriter, PillowWriter
+
+        path = str(path)
+        ext = os.path.splitext(path)[1].lower()
+        if ext == ".gif":
+            writer = PillowWriter(fps=fps)
+        elif ext == ".mp4":
+            if not FFMpegWriter.isAvailable():
+                raise ValueError(
+                    "slopewalk: writing .mp4 needs ffmpeg, which was not found. Use a path ending in .gif."
+                )
+            writer = FFMpegWriter(fps=fps)
+        else:
+            raise ValueError(f"slopewalk: record writes .gif files (or .mp4 with ffmpeg), not {ext or 'no extension'}.")
+        views, step = self.views, self.backprop_step
+        self.views = as_views(views + ("backprop",))
+        try:
+            picture = Picture(self, dpi=dpi)
+            with writer.saving(picture.fig, path, dpi):
+                for k in range(len(self.backprop_stages)):
+                    self.backprop_step = k
+                    picture.refresh()
+                    writer.grab_frame()
+        finally:
+            self.views, self.backprop_step = views, step
+        return path
+
     def _ipython_display_(self):
         pass  # the picture and the controls are shown by explore itself
 
@@ -306,6 +360,8 @@ def explore(
     log_scale=False,
     layout="standard",
     width=None,
+    backprop_step=0,
+    backprop_case=0,
 ):
     """Gradient descent by hand on `net`, with inputs X (n x d) and labels y.
 
@@ -322,6 +378,8 @@ def explore(
     log_scale: R on a log axis.
     layout: "standard", or "wide" for wide screens (network panels side by side, the lower panels in one row, and the
     controls beside the picture); width: the figure width in inches.
+    backprop_step: with the view "backprop", the stage of the backward pass drawn (0: the forward pass; a step above
+    0 switches the view on); backprop_case: the group whose case the derivation follows ("A" or 0 is the first).
 
     Draws one copy of the network per group (every value a mean ± standard deviation over the group), with each
     weight on its line, the units as z, activation and h, then the output and the loss with its change from the
@@ -349,6 +407,8 @@ def explore(
         log_scale=log_scale,
         layout=layout,
         width=width,
+        backprop_step=backprop_step,
+        backprop_case=backprop_case,
     )
     if os.environ.get("NB_STATIC") == "1":
         return still_picture(session, STATIC_MESSAGE)

@@ -13,11 +13,14 @@ import numpy as np
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
 
+from .backprop import backward_pass, draw_derivation, label_spec, line_styles, overlay, stage_index
 from .draw import draw_case, draw_edge_labels, draw_history, draw_input_plane, draw_slope_table
-from .layout import BOTTOM_HEIGHT
+from .layout import BOTTOM_HEIGHT, BOTTOM_PER_ROW
 from .views import VIEW_DRAWERS, VIEWS, needs_3d
 
-Frame = namedtuple("Frame", "w out R g deltas changed moving history predictions eta next_change cases lookahead")
+Frame = namedtuple(
+    "Frame", "w out R g deltas changed moving history predictions eta next_change cases lookahead bp stage"
+)
 LIVE_DPI = 100  # resolution of the picture shown by the widgets
 
 
@@ -39,6 +42,8 @@ def make_frame(S, w=None):
     next_change = -S.eta * float(sum(g[k] ** 2 for k in moving))
     cases = M.case_slopes(D.X, D.y) if "cases" in S.views else None
     lookahead = S.lookahead(w=w) if "momentum" in S.views else None
+    bp = backward_pass(M, D.X, D.y, w) if "backprop" in S.views else None
+    stage = S.backprop_stages[stage_index(S)] if "backprop" in S.views else None
     M.set_weights(w)
     return Frame(
         w,
@@ -54,12 +59,34 @@ def make_frame(S, w=None):
         next_change,
         cases,
         lookahead,
+        bp,
+        stage,
     )
 
 
 def bottom_panels(S):
     """The panels below the networks, in order: the input plane, R over the steps, the table, then the views."""
     return ["plane", "history", "table"] + [v for v in VIEWS if v in S.views]
+
+
+def bottom_slots(S, panels):
+    """(row, column, columns spanned) of each lower panel, and the number of columns. The derivation of the backward
+    pass is text: it takes a whole row (two columns of the wide layout); the other panels take one column each."""
+    L = S.layout
+    span = {name: 1 for name in panels}
+    if "backprop" in span:
+        span["backprop"] = 2 if L.style == "wide" else BOTTOM_PER_ROW
+    cols = L.bottom_per_row(sum(span.values()))
+    slots, r, c = {}, 0, 0
+    for name in panels:
+        width = min(span[name], cols)
+        if c + width > cols:
+            r, c = r + 1, 0
+        slots[name] = (r, c, width)
+        c += width
+        if c >= cols:
+            r, c = r + 1, 0
+    return slots, cols
 
 
 class Picture:
@@ -75,15 +102,16 @@ class Picture:
         self.panels = bottom_panels(S)
         per_row, rows = L.per_row(D.G), L.rows(D.G)
         with_sd = any(sel.sum() > 1 for sel in D.gsel)  # groups of points: the boxes show mean and standard deviation
-        n_bottom = L.bottom_rows(len(self.panels))
-        bottom_cols = L.bottom_per_row(len(self.panels))
-        size = L.figsize(D.G, with_sd, len(self.panels))
+        backprop = "backprop" in S.views  # taller rows: room for the backward boxes under the units
+        slots, bottom_cols = bottom_slots(S, self.panels)
+        n_bottom = max(r for r, _, _ in slots.values()) + 1
+        size = (L.width, L.row_height(with_sd, backprop) * rows + BOTTOM_HEIGHT * n_bottom)
         if pyplot:
             fig = plt.figure(figsize=size)
         else:
             fig = Figure(figsize=size, dpi=dpi)
             FigureCanvasAgg(fig)
-        heights = [L.row_height(with_sd)] * rows + [BOTTOM_HEIGHT] * n_bottom
+        heights = [L.row_height(with_sd, backprop)] * rows + [BOTTOM_HEIGHT] * n_bottom
         gs = fig.add_gridspec(rows + n_bottom, bottom_cols, height_ratios=heights)
         self.case_axes = []
         for c in range(D.G):
@@ -91,10 +119,10 @@ class Picture:
             cell = gs[r, :] if per_row == 1 else gs[r, :].subgridspec(1, per_row)[0, cc]
             self.case_axes.append(fig.add_subplot(cell))
         self.axes = {}
-        for i, name in enumerate(self.panels):
-            r, cc = divmod(i, bottom_cols)
+        for name in self.panels:
+            r, cc, span = slots[name]
             extra = {"projection": "3d"} if name == "hidden" and needs_3d(S) else {}
-            self.axes[name] = fig.add_subplot(gs[rows + r, cc], **extra)
+            self.axes[name] = fig.add_subplot(gs[rows + r, cc : cc + span], **extra)
         if S.title:
             fig.suptitle(S.title, fontsize=S.theme.suptitle_size)
         self.fig = fig
@@ -107,18 +135,23 @@ class Picture:
         if self.laid_out:
             for ax in self.case_axes + list(self.axes.values()):
                 ax.clear()
-        parts = [draw_case(ax, S, F, c) for c, ax in enumerate(self.case_axes)]
+        styles = line_styles(S, F)
+        parts = [draw_case(ax, S, F, c, styles) for c, ax in enumerate(self.case_axes)]
+        for c, (ax, (edges, _)) in enumerate(zip(self.case_axes, parts)):
+            overlay(ax, S, F, c, edges)
         draw_input_plane(self.axes["plane"], S, F)
         draw_history(self.axes["history"], S, F)
         draw_slope_table(self.axes["table"], S, F)
+        drawers = dict(VIEW_DRAWERS, backprop=draw_derivation)
         for name in self.panels[3:]:
-            VIEW_DRAWERS[name](self.axes[name], S, F)
+            drawers[name](self.axes[name], S, F)
             S.model.set_weights(F.w)
         if not self.laid_out:
             self.layout()
-        for ax, (edges, obstacles) in zip(self.case_axes, parts):
-            draw_edge_labels(ax, S, F, edges, obstacles)
+        for c, (ax, (edges, obstacles)) in enumerate(zip(self.case_axes, parts)):
+            draw_edge_labels(ax, S, F, edges, obstacles, label_spec(S, F, c))
         S.model.set_weights(F.w)
+        self.frame = F
         return self.fig
 
     def layout(self):

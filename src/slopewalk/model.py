@@ -8,13 +8,18 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# activation module -> (name, numpy function, half-width of the curve drawn in the glyph)
+# activation module -> (name, numpy function, half-width of the curve drawn in the glyph, numpy derivative)
 ACTIVATIONS = {
-    nn.Tanh: ("tanh", np.tanh, 3.0),
-    nn.ReLU: ("ReLU", lambda t: np.maximum(t, 0), 3.0),
-    nn.Sigmoid: ("sigmoid", lambda t: 1 / (1 + np.exp(-t)), 6.0),
+    nn.Tanh: ("tanh", np.tanh, 3.0, lambda t: 1 - np.tanh(t) ** 2),
+    nn.ReLU: ("ReLU", lambda t: np.maximum(t, 0), 3.0, lambda t: (np.asarray(t) > 0).astype(float)),
+    nn.Sigmoid: (
+        "sigmoid",
+        lambda t: 1 / (1 + np.exp(-t)),
+        6.0,
+        lambda t: np.exp(-t) / (1 + np.exp(-t)) ** 2,
+    ),
 }
-SIGMOID = ("sigmoid", lambda t: 1 / (1 + np.exp(-t)), 6.0)
+SIGMOID = ACTIVATIONS[nn.Sigmoid]
 SUPPORTED = "nn.Linear with nn.Tanh, nn.ReLU or nn.Sigmoid between them"
 TASKS = ("binary", "regression")
 BATCH_CELLS = 400_000  # risk_batch handles at most this many (weight vector, point) pairs at once

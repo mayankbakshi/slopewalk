@@ -8,6 +8,7 @@ from .picture import LIVE_DPI, Picture
 from .views import VIEWS
 
 VIEW_LABELS = {
+    "backprop": "backward pass",
     "cases": "each case's slope",
     "slice": "R over two weights",
     "line": "R along the next step",
@@ -105,6 +106,7 @@ class Controller:
         self.image = widgets.Image(format="png", layout=widgets.Layout(max_width="100%", height="auto"))
         self.out = widgets.Output()
         self.more = self.views_panel(widgets)
+        self.backprop = self.backprop_panel(widgets)
         for s in self.sliders:
             s.observe(self.on_slider, names="value")
         self.eta.observe(self.on_eta, names="value")
@@ -113,7 +115,7 @@ class Controller:
         self.buttons["reset"].on_click(lambda _: self.reset())
         if S.layout.style == "wide":  # the controls in a column beside the picture
             column = widgets.VBox(
-                [panel, self.eta, widgets.HBox(list(self.buttons.values())), self.readout, self.more]
+                [panel, self.eta, widgets.HBox(list(self.buttons.values())), self.backprop, self.readout, self.more]
                 + ([] if self.use_output else [self.out]),
                 layout=widgets.Layout(width="390px", min_width="390px"),
             )
@@ -123,7 +125,7 @@ class Controller:
         else:
             controls = widgets.HBox([self.eta, *self.buttons.values()])
             shown = [self.out] if self.use_output else [self.image, self.out]
-            self.widgets = [panel, controls, self.more, self.readout, *shown]
+            self.widgets = [panel, controls, self.more, self.backprop, self.readout, *shown]
 
     # ---------------------------------------------------------------- building
 
@@ -185,6 +187,30 @@ class Controller:
         acc.selected_index = None
         return acc
 
+    def backprop_panel(self, widgets):
+        """The steps of the backward pass: back and forward buttons, the step, the group whose case the derivation
+        follows, and the formula of the current step. Shown while the view "backprop" is on."""
+        S = self.session
+        n = len(S.backprop_stages)
+        self.bp_prev = widgets.Button(description="◀ step back")
+        self.bp_next = widgets.Button(description="next step ▶")
+        self.bp_step = widgets.IntSlider(value=S.backprop_step, min=0, max=n - 1, description="backprop step")
+        letters = [chr(65 + c) if c < 26 else str(c) for c in range(S.data.G)]
+        self.bp_case = widgets.Dropdown(
+            options=letters, value=letters[S.backprop_case], description="case of", layout=widgets.Layout(width="150px")
+        )
+        self.bp_caption = widgets.HTML()
+        self.bp_prev.on_click(lambda _: setattr(self.bp_step, "value", max(0, self.bp_step.value - 1)))
+        self.bp_next.on_click(lambda _: setattr(self.bp_step, "value", min(n - 1, self.bp_step.value + 1)))
+        self.bp_step.observe(self.on_backprop, names="value")
+        self.bp_case.observe(self.on_backprop, names="value")
+        row = widgets.HBox(
+            [self.bp_prev, self.bp_step, self.bp_next, self.bp_case], layout=widgets.Layout(flex_flow="row wrap")
+        )
+        box = widgets.VBox([row, self.bp_caption])
+        box.layout.display = None if "backprop" in S.views else "none"
+        return box
+
     # ---------------------------------------------------------------- state
 
     def values(self):
@@ -205,6 +231,13 @@ class Controller:
         if not self.busy:
             self.redraw()
 
+    def on_backprop(self, *_):
+        S = self.session
+        S.backprop_step = int(self.bp_step.value)
+        S.backprop_case = ord(self.bp_case.value) - 65 if len(self.bp_case.value) == 1 else int(self.bp_case.value)
+        if not self.busy:
+            self.redraw()
+
     def on_views(self, *_):
         if self.busy:
             return
@@ -218,6 +251,7 @@ class Controller:
         S.beta = float(self.beta.value)
         S.lookahead_steps = int(self.ahead.value)
         S.log_scale = bool(self.log_box.value)
+        self.backprop.layout.display = None if "backprop" in S.views else "none"
         self.picture = None  # the panels changed: a new figure
         self.redraw()
 
@@ -265,6 +299,9 @@ class Controller:
             S.fig = self.picture.fig
             png = self.picture.png()
             self.readout.value = readout_html(S.readouts(self.eta.value, w))
+            if "backprop" in S.views:
+                stage = S.backprop_stages[S.backprop_step]
+                self.bp_caption.value = f"<b>step {S.backprop_step} of {len(S.backprop_stages) - 1}</b>: {stage.text}"
             if self.use_output:
                 from IPython.display import Image, clear_output, display
 

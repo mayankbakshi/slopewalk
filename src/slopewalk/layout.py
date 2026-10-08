@@ -10,7 +10,7 @@ LABEL_TOLERANCE = 0.02  # a label may overlap other labels or the boxes by at mo
 BOTTOM_PER_ROW = 3  # panels per row below the networks
 BOTTOM_HEIGHT = 4.2  # height in inches of one row of those panels
 LAYOUTS = ("standard", "wide")
-WIDTH = {"standard": 15.0, "wide": 24.0}  # default figure width in inches
+WIDTH = {"standard": 15.0, "wide": 27.0}  # default figure width in inches
 WIDE_PER_ROW, WIDE_BOTTOM_PER_ROW = 4, 6  # the most network panels and lower panels per row of the wide layout
 
 
@@ -19,7 +19,7 @@ class Layout:
 
     task "binary" ends each panel with a, the sigmoid, p and the loss box; "regression" with the prediction and the
     loss box. style "standard": a figure 15 inches wide, two network panels per row (one for deep networks) and
-    three lower panels per row. "wide": 24 inches, up to four network panels in a row (two for deep networks) and up
+    three lower panels per row. "wide": 27 inches, up to four network panels in a row (two for deep networks) and up
     to six lower panels in a row, for wide screens. width (inches) overrides the width of either.
     """
 
@@ -75,16 +75,18 @@ class Layout:
         """Lower panels per row: 3; the wide layout puts all of them in one row, up to 6."""
         return max(BOTTOM_PER_ROW, min(WIDE_BOTTOM_PER_ROW, n_bottom)) if self.style == "wide" else BOTTOM_PER_ROW
 
-    def row_height(self, with_sd=False):
+    def row_height(self, with_sd=False, backprop=False):
         """Height of a panel row in inches: taller when a layer has more than 3 units (up to four times the usual,
-        for 12 units), and by a fifth when the boxes carry a standard deviation line (groups of points)."""
-        return 2.9 * min(4.0, max(1.0, max(self.hidden, default=1) / 3)) * (1.2 if with_sd else 1.0)
+        for 12 units), by a fifth when the boxes carry a standard deviation line (groups of points), and by 40% when
+        the backward pass adds its boxes under the units."""
+        units = min(4.0, max(1.0, max(self.hidden, default=1) / 3))
+        return 2.9 * units * (1.2 if with_sd else 1.0) * (1.4 if backprop else 1.0)
 
     def bottom_rows(self, n_bottom):
         return -(-n_bottom // self.bottom_per_row(n_bottom))
 
-    def figsize(self, n_panels, with_sd=False, n_bottom=BOTTOM_PER_ROW):
-        height = self.row_height(with_sd) * self.rows(n_panels) + BOTTOM_HEIGHT * self.bottom_rows(n_bottom)
+    def figsize(self, n_panels, with_sd=False, n_bottom=BOTTOM_PER_ROW, backprop=False):
+        height = self.row_height(with_sd, backprop) * self.rows(n_panels) + BOTTOM_HEIGHT * self.bottom_rows(n_bottom)
         return (self.width, height)
 
     @staticmethod

@@ -129,6 +129,8 @@ EXTRA_CASES = {
     ),
     "11_clusters_case_slopes_hidden": (xor_clusters, dict(eta=0.5, case_slopes="w10", views=("hidden",)), 0),
     "12_sine_regression": (sine_regression, dict(eta=0.2, task="regression", views=("line", "hidden", "cases")), 30),
+    "13_backprop_step5": (xor_step40, dict(views=("backprop",), backprop_step=5), 0),
+    "14_wide_backprop_step4": (xor_step40, dict(layout="wide", views=("backprop", "slice"), backprop_step=4), 0),
 }
 
 

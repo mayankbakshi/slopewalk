@@ -35,6 +35,7 @@ class Theme:
     plane_cmap, points_cmap, value_cmap = "RdBu_r", "bwr", "viridis"
     table_size, table_title_size, table_row_height = 10, 10.5, 0.058  # row height as a fraction of the panel
     table_edge, table_head, table_highlight = "0.8", "#F2F2F2", "#FFF1D6"
+    backprop_colour, backprop_tint, backprop_size = "#7B1FA2", "#F3E5F5", 9  # the backward pass
 
 
 THEME = Theme()
@@ -57,7 +58,7 @@ def glyph(ax, xc, yc, act, m, sd, T, height=0.5):
 
     Returns the box (x0, y0, x1, y1) it occupies, including its name below.
     """
-    name, f, lim = act
+    name, f, lim = act[:3]
     w_, h_ = 0.62, height
     ax.add_patch(Rectangle((xc - w_ / 2, yc - h_ / 2), w_, h_, fc="white", ec="0.75", lw=0.8, zorder=2))
     u = np.linspace(-lim, lim, 100)
@@ -146,19 +147,27 @@ def weight_colour(T, k, w, changed, frozen):
     return T.changed if k in changed else (T.positive if w[k] >= 0 else T.negative)
 
 
-def draw_edge_labels(ax, S, F, edges, obstacles):
+def draw_edge_labels(ax, S, F, edges, obstacles, spec=None):
     """The labels on the lines: names and values for small networks, values only for larger ones, none when
     even the values cannot be placed without overlaps (the values stay on the sliders and in the table).
-    Returns the mode used: "names", "values" or "none"."""
+    spec: {k: (long text, short text, colour)} replaces the labels (only those lines get one), as in the
+    backward pass. Returns the mode used: "names", "values" or "none"."""
     M, L, T = S.model, S.layout, S.theme
     w = F.w
     renderer = get_renderer(ax.figure)
     obstacles = obstacles + box_obstacles(ax, renderer, T.edge_label_size)
+    if spec is not None:
+        edges = [e for e in edges if e[0] in spec]
+        if not edges:
+            return "none"
     segments = [(p0, p1) for _, p0, p1, _ in edges]
     defaults = [t0 for _, _, _, t0 in edges]
     modes = ["names", "values"] if L.show_names(len(w)) else ["values"]
     for mode in modes:
-        labels = [f"{M.names[k]} = {w[k]:.2f}" if mode == "names" else f"{w[k]:.2f}" for k, _, _, _ in edges]
+        if spec is not None:
+            labels = [spec[k][0] if mode == "names" else spec[k][1] for k, _, _, _ in edges]
+        else:
+            labels = [f"{M.names[k]} = {w[k]:.2f}" if mode == "names" else f"{w[k]:.2f}" for k, _, _, _ in edges]
         sizes = [text_size(ax, renderer, s, T.edge_label_size) for s in labels]
         positions, _, worst_labels, worst_boxes = place_labels(segments, sizes, obstacles, defaults, pad=0.03)
         if max(worst_labels, worst_boxes) <= LABEL_TOLERANCE:
@@ -167,8 +176,10 @@ def draw_edge_labels(ax, S, F, edges, obstacles):
         return "none"
     for (k, _, _, _), label, (cx, cy) in zip(edges, labels, positions):
         frozen = k not in F.moving
-        hot = k in F.changed and not frozen
+        hot = k in F.changed and not frozen and spec is None
         colour = T.frozen_text if frozen else (T.changed if hot else (T.positive if w[k] >= 0 else T.negative_text))
+        if spec is not None:
+            colour = spec[k][2]
         ax.text(
             cx,
             cy,
@@ -184,11 +195,11 @@ def draw_edge_labels(ax, S, F, edges, obstacles):
     return mode
 
 
-def draw_case(ax, S, F, c):
+def draw_case(ax, S, F, c, styles=None):
     """One copy of the network for group c: the lines with their weights, the units, the output and the loss.
 
     The labels on the lines are drawn afterwards by draw_edge_labels, once the figure's layout is fixed.
-    Returns (edges, obstacles) for them.
+    styles: {k: (colour or None, alpha)} overrides the lines' look (the backward pass). Returns (edges, obstacles).
     """
     M, D, L, T = S.model, S.data, S.layout, S.theme
     out, w = F.out, F.w
@@ -301,12 +312,16 @@ def draw_case(ax, S, F, c):
     ax.axis("off")
     for k, (sx, sy), (tx, ty), _ in edges:
         frozen = k not in F.moving
+        colour, alpha = weight_colour(T, k, w, F.changed, frozen), T.frozen_alpha if frozen else 1.0
+        if styles is not None:
+            colour = styles[k][0] or weight_colour(T, k, w, set(), frozen)
+            alpha = styles[k][1] * (T.frozen_alpha if frozen else 1.0)
         ax.plot(
             [sx, tx],
             [sy, ty],
-            color=weight_colour(T, k, w, F.changed, frozen),
+            color=colour,
             lw=min(0.6 + 1.3 * abs(w[k]), 7),
-            alpha=T.frozen_alpha if frozen else 1.0,
+            alpha=alpha,
             zorder=1,
             solid_capstyle="round",
         )

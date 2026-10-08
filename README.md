@@ -33,12 +33,15 @@ Options of `explore`, all keyword-only; without them the picture is as above:
 |---|---|
 | `task="regression"` | the output is a prediction and R the mean squared error; `y` holds numbers. Labels other than 0 and 1 without this option raise an error. |
 | `params=["w10", "w11"]`, `"output"`, `"layer:1"` | only these weights get sliders and move in a step; the others are drawn lighter and stay fixed. |
-| `views=("slice", "line", "hidden", "momentum", "cases")` | extra panels, see below. |
+| `views=("backprop", "slice", "line", "hidden", "momentum", "cases")` | extra panels, see below. |
+| `backprop_step=3`, `backprop_case="B"` | the stage of the backward pass drawn, and the group whose case the derivation follows; a step above 0 turns the view on. |
 | `case_slopes="w10"` | the per-case panel for this weight. |
 | `slice_weights=("w10", "w11")` | the weights of the slice panel (one or two). |
 | `beta=0.9`, `lookahead=30` | momentum and the number of steps in the momentum panel. |
 | `log_scale=True` | R on a log axis. |
-| `layout="wide"`, `width=24` | for wide screens: the network panels side by side (up to four), the lower panels in one row (up to six), and the controls in a column beside the picture; `width` sets the figure width in inches. Colab shows notebooks at a fixed width, so the wide layout helps most in VS Code or JupyterLab on a large monitor. |
+| `layout="wide"`, `width=27` | for wide screens: the network panels side by side (up to four), the lower panels in one row (up to six), and the controls in a column beside the picture; `width` sets the figure width in inches. Colab shows notebooks at a fixed width, so the wide layout helps most in VS Code or JupyterLab on a large monitor. |
+
+With the backward pass on, the widgets have buttons to step back and forth through the stages, a picker for the traced case, and a caption with the formula of the current stage. `record_backprop("backprop.gif")` writes one frame per stage.
 
 `explore` returns a session: `step(k)` takes k gradient steps (the sliders follow), `reset()` returns to the start, `predict()` gives the first-order change of R for the next step, `lookahead()` the next steps of gradient descent and of momentum, `case_slopes()` each case's slope along every weight, `save("state.png")` writes the current picture and `record("run.gif", steps=40)` a GIF of a run. `history`, `predictions` and `path` hold R, the predicted and actual change, and the weights after each step.
 
@@ -49,6 +52,7 @@ Options of `explore`, all keyword-only; without them the picture is as above:
 3. Each unit as pre-activation z, activation function (a small curve; dot: the value of z; shaded: the group's spread) and value h. Then the score a, the sigmoid, p for class 1, and the log loss with its change since the start.
 4. Below: the boundary p = 0.5 in the input plane (two inputs; dashed: the boundary at the start; one input: p against x1), R (the average log loss) over the gradient steps taken with the first-order prediction of each step (hollow markers), and a table with each weight's value, the change of R for +0.1 and the slope dR/dw from `R.backward()`.
 5. The extra views, in rows of three below:
+   - `backprop`: backpropagation step by step, from the output back to the first layer. The stages: δa = ∂ℓ/∂a at the output (p − y, or 2(ŷ − y)); the slopes of the output weights (δ × the input of the line); then for each hidden layer ∂ℓ/∂h (the sum over the next units of weight × δ), δ = act′(z) × ∂ℓ/∂h (with the tangent drawn on the activation curve), and the slopes of that layer's weights; finally the average over the cases, which is the slope column of the table. Each stage adds its values under the boxes of every network panel, and a text panel writes out the numbers for one case;
    - `cases`: each case's slope of its own loss along one weight, by group, and their average, which is dR/dw;
    - `slice`: R over one or two weights with the others fixed, the start, the path of the steps and the direction of −∇R;
    - `line`: R along the next step, w − t·∇R, with the tangent line (the first-order prediction) and where the step of eta lands;
@@ -69,7 +73,7 @@ Weight names: layer by layer, unit by unit, each unit's incoming weights in the 
 2. Jupyter or VS Code: install the package and ipywidgets once (`%pip install ipywidgets`, then restart the kernel).
 3. Without ipywidgets the cell draws the starting picture and says how to get the sliders. With the environment variable `NB_STATIC=1` (used to make HTML copies of notebooks) it draws the starting picture only.
 
-`examples/slopewalk_demo.ipynb` shows ten uses, including the views, regression and a recorded run.
+`examples/slopewalk_demo.ipynb` shows twelve uses, including the views, regression, a recorded run, backpropagation step by step and the wide layout.
 
 ## Development
 

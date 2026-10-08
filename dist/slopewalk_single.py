@@ -28,13 +28,18 @@ __version__ = "0.1.0.dev0"
 
 # ------------------------ model.py ------------------------
 
-# activation module -> (name, numpy function, half-width of the curve drawn in the glyph)
+# activation module -> (name, numpy function, half-width of the curve drawn in the glyph, numpy derivative)
 ACTIVATIONS = {
-    nn.Tanh: ("tanh", np.tanh, 3.0),
-    nn.ReLU: ("ReLU", lambda t: np.maximum(t, 0), 3.0),
-    nn.Sigmoid: ("sigmoid", lambda t: 1 / (1 + np.exp(-t)), 6.0),
+    nn.Tanh: ("tanh", np.tanh, 3.0, lambda t: 1 - np.tanh(t) ** 2),
+    nn.ReLU: ("ReLU", lambda t: np.maximum(t, 0), 3.0, lambda t: (np.asarray(t) > 0).astype(float)),
+    nn.Sigmoid: (
+        "sigmoid",
+        lambda t: 1 / (1 + np.exp(-t)),
+        6.0,
+        lambda t: np.exp(-t) / (1 + np.exp(-t)) ** 2,
+    ),
 }
-SIGMOID = ("sigmoid", lambda t: 1 / (1 + np.exp(-t)), 6.0)
+SIGMOID = ACTIVATIONS[nn.Sigmoid]
 SUPPORTED = "nn.Linear with nn.Tanh, nn.ReLU or nn.Sigmoid between them"
 TASKS = ("binary", "regression")
 BATCH_CELLS = 400_000  # risk_batch handles at most this many (weight vector, point) pairs at once
@@ -492,7 +497,7 @@ LABEL_TOLERANCE = 0.02  # a label may overlap other labels or the boxes by at mo
 BOTTOM_PER_ROW = 3  # panels per row below the networks
 BOTTOM_HEIGHT = 4.2  # height in inches of one row of those panels
 LAYOUTS = ("standard", "wide")
-WIDTH = {"standard": 15.0, "wide": 24.0}  # default figure width in inches
+WIDTH = {"standard": 15.0, "wide": 27.0}  # default figure width in inches
 WIDE_PER_ROW, WIDE_BOTTOM_PER_ROW = 4, 6  # the most network panels and lower panels per row of the wide layout
 
 
@@ -501,7 +506,7 @@ class Layout:
 
     task "binary" ends each panel with a, the sigmoid, p and the loss box; "regression" with the prediction and the
     loss box. style "standard": a figure 15 inches wide, two network panels per row (one for deep networks) and
-    three lower panels per row. "wide": 24 inches, up to four network panels in a row (two for deep networks) and up
+    three lower panels per row. "wide": 27 inches, up to four network panels in a row (two for deep networks) and up
     to six lower panels in a row, for wide screens. width (inches) overrides the width of either.
     """
 
@@ -557,16 +562,18 @@ class Layout:
         """Lower panels per row: 3; the wide layout puts all of them in one row, up to 6."""
         return max(BOTTOM_PER_ROW, min(WIDE_BOTTOM_PER_ROW, n_bottom)) if self.style == "wide" else BOTTOM_PER_ROW
 
-    def row_height(self, with_sd=False):
+    def row_height(self, with_sd=False, backprop=False):
         """Height of a panel row in inches: taller when a layer has more than 3 units (up to four times the usual,
-        for 12 units), and by a fifth when the boxes carry a standard deviation line (groups of points)."""
-        return 2.9 * min(4.0, max(1.0, max(self.hidden, default=1) / 3)) * (1.2 if with_sd else 1.0)
+        for 12 units), by a fifth when the boxes carry a standard deviation line (groups of points), and by 40% when
+        the backward pass adds its boxes under the units."""
+        units = min(4.0, max(1.0, max(self.hidden, default=1) / 3))
+        return 2.9 * units * (1.2 if with_sd else 1.0) * (1.4 if backprop else 1.0)
 
     def bottom_rows(self, n_bottom):
         return -(-n_bottom // self.bottom_per_row(n_bottom))
 
-    def figsize(self, n_panels, with_sd=False, n_bottom=BOTTOM_PER_ROW):
-        height = self.row_height(with_sd) * self.rows(n_panels) + BOTTOM_HEIGHT * self.bottom_rows(n_bottom)
+    def figsize(self, n_panels, with_sd=False, n_bottom=BOTTOM_PER_ROW, backprop=False):
+        height = self.row_height(with_sd, backprop) * self.rows(n_panels) + BOTTOM_HEIGHT * self.bottom_rows(n_bottom)
         return (self.width, height)
 
     @staticmethod
@@ -650,6 +657,7 @@ class Theme:
     plane_cmap, points_cmap, value_cmap = "RdBu_r", "bwr", "viridis"
     table_size, table_title_size, table_row_height = 10, 10.5, 0.058  # row height as a fraction of the panel
     table_edge, table_head, table_highlight = "0.8", "#F2F2F2", "#FFF1D6"
+    backprop_colour, backprop_tint, backprop_size = "#7B1FA2", "#F3E5F5", 9  # the backward pass
 
 
 THEME = Theme()
@@ -672,7 +680,7 @@ def glyph(ax, xc, yc, act, m, sd, T, height=0.5):
 
     Returns the box (x0, y0, x1, y1) it occupies, including its name below.
     """
-    name, f, lim = act
+    name, f, lim = act[:3]
     w_, h_ = 0.62, height
     ax.add_patch(Rectangle((xc - w_ / 2, yc - h_ / 2), w_, h_, fc="white", ec="0.75", lw=0.8, zorder=2))
     u = np.linspace(-lim, lim, 100)
@@ -761,19 +769,27 @@ def weight_colour(T, k, w, changed, frozen):
     return T.changed if k in changed else (T.positive if w[k] >= 0 else T.negative)
 
 
-def draw_edge_labels(ax, S, F, edges, obstacles):
+def draw_edge_labels(ax, S, F, edges, obstacles, spec=None):
     """The labels on the lines: names and values for small networks, values only for larger ones, none when
     even the values cannot be placed without overlaps (the values stay on the sliders and in the table).
-    Returns the mode used: "names", "values" or "none"."""
+    spec: {k: (long text, short text, colour)} replaces the labels (only those lines get one), as in the
+    backward pass. Returns the mode used: "names", "values" or "none"."""
     M, L, T = S.model, S.layout, S.theme
     w = F.w
     renderer = get_renderer(ax.figure)
     obstacles = obstacles + box_obstacles(ax, renderer, T.edge_label_size)
+    if spec is not None:
+        edges = [e for e in edges if e[0] in spec]
+        if not edges:
+            return "none"
     segments = [(p0, p1) for _, p0, p1, _ in edges]
     defaults = [t0 for _, _, _, t0 in edges]
     modes = ["names", "values"] if L.show_names(len(w)) else ["values"]
     for mode in modes:
-        labels = [f"{M.names[k]} = {w[k]:.2f}" if mode == "names" else f"{w[k]:.2f}" for k, _, _, _ in edges]
+        if spec is not None:
+            labels = [spec[k][0] if mode == "names" else spec[k][1] for k, _, _, _ in edges]
+        else:
+            labels = [f"{M.names[k]} = {w[k]:.2f}" if mode == "names" else f"{w[k]:.2f}" for k, _, _, _ in edges]
         sizes = [text_size(ax, renderer, s, T.edge_label_size) for s in labels]
         positions, _, worst_labels, worst_boxes = place_labels(segments, sizes, obstacles, defaults, pad=0.03)
         if max(worst_labels, worst_boxes) <= LABEL_TOLERANCE:
@@ -782,8 +798,10 @@ def draw_edge_labels(ax, S, F, edges, obstacles):
         return "none"
     for (k, _, _, _), label, (cx, cy) in zip(edges, labels, positions):
         frozen = k not in F.moving
-        hot = k in F.changed and not frozen
+        hot = k in F.changed and not frozen and spec is None
         colour = T.frozen_text if frozen else (T.changed if hot else (T.positive if w[k] >= 0 else T.negative_text))
+        if spec is not None:
+            colour = spec[k][2]
         ax.text(
             cx,
             cy,
@@ -799,11 +817,11 @@ def draw_edge_labels(ax, S, F, edges, obstacles):
     return mode
 
 
-def draw_case(ax, S, F, c):
+def draw_case(ax, S, F, c, styles=None):
     """One copy of the network for group c: the lines with their weights, the units, the output and the loss.
 
     The labels on the lines are drawn afterwards by draw_edge_labels, once the figure's layout is fixed.
-    Returns (edges, obstacles) for them.
+    styles: {k: (colour or None, alpha)} overrides the lines' look (the backward pass). Returns (edges, obstacles).
     """
     M, D, L, T = S.model, S.data, S.layout, S.theme
     out, w = F.out, F.w
@@ -916,12 +934,16 @@ def draw_case(ax, S, F, c):
     ax.axis("off")
     for k, (sx, sy), (tx, ty), _ in edges:
         frozen = k not in F.moving
+        colour, alpha = weight_colour(T, k, w, F.changed, frozen), T.frozen_alpha if frozen else 1.0
+        if styles is not None:
+            colour = styles[k][0] or weight_colour(T, k, w, set(), frozen)
+            alpha = styles[k][1] * (T.frozen_alpha if frozen else 1.0)
         ax.plot(
             [sx, tx],
             [sy, ty],
-            color=weight_colour(T, k, w, F.changed, frozen),
+            color=colour,
             lw=min(0.6 + 1.3 * abs(w[k]), 7),
-            alpha=T.frozen_alpha if frozen else 1.0,
+            alpha=alpha,
             zorder=1,
             solid_capstyle="round",
         )
@@ -1150,7 +1172,7 @@ def draw_slope_table(ax, S, F):
 
 # ------------------------ views.py ------------------------
 
-VIEWS = ("cases", "slice", "line", "hidden", "momentum")
+VIEWS = ("backprop", "cases", "slice", "line", "hidden", "momentum")
 
 
 def message(ax, text):
@@ -1494,9 +1516,364 @@ VIEW_DRAWERS = {
     "momentum": draw_momentum,
 }
 
+# ------------------------ backprop.py ------------------------
+
+Stage = namedtuple("Stage", "kind layer text")  # kind: forward, output, weights, to_h, delta, average
+Backward = namedtuple("Backward", "inputs z out delta dh deriv grads")  # per case, as numpy arrays
+
+
+def layer_title(model, l):
+    if l == len(model.layers) - 1:
+        return "the output weights"
+    if len(model.hidden) == 1:
+        return "the first-layer weights"
+    return f"the weights into layer {l + 1}"
+
+
+def act_name(model, l):
+    act = model.layers[l].act
+    return act[0] if act else "no activation"
+
+
+def backprop_stages(model):
+    """The stages of the backward pass for this network, from the forward pass to the average over the cases."""
+    L = len(model.layers)
+    regression = model.task == "regression"
+    out = [
+        Stage("forward", None, "forward pass: z, h and " + ("ŷ" if regression else "a and p") + " of every case"),
+        Stage(
+            "output",
+            L - 1,
+            "at the output: δa = ∂ℓ/∂a = " + ("2(ŷ - y)" if regression else "p - y"),
+        ),
+        Stage("weights", L - 1, f"slopes of {layer_title(model, L - 1)}: δ of the unit × the input of the line"),
+    ]
+    for l in range(L - 2, -1, -1):
+        h = "h" if len(model.hidden) == 1 else f"h{l + 1},"
+        act = act_name(model, l)
+        out += [
+            Stage("to_h", l, f"back to {h}: ∂ℓ/∂h = sum over the next units of weight × δ"),
+            Stage("delta", l, f"through {act}: δ = {act}′(z) × ∂ℓ/∂h"),
+            Stage("weights", l, f"slopes of {layer_title(model, l)}: δ of the unit × the input of the line"),
+        ]
+    out.append(Stage("average", None, "R is the average loss: dR/dw = the average of the cases' slopes (the table)"))
+    return out
+
+
+def derivative(layer, z, out):
+    """The derivative of the layer's activation at z (out: its value there), elementwise."""
+    m = layer.module
+    if m is None or isinstance(m, nn.Identity):
+        return torch.ones_like(z)
+    if isinstance(m, nn.Tanh):
+        return 1 - out**2
+    if isinstance(m, nn.Sigmoid):
+        return out * (1 - out)
+    if isinstance(m, nn.ReLU):
+        return (z > 0).to(z.dtype)
+    raise ValueError(f"slopewalk: no derivative for {m}")
+
+
+def backward_pass(model, X, y, w=None):
+    """The forward and backward values of every case, with the formulas of the stages (no autograd).
+
+    inputs[l]: the inputs of layer l (x, then the h of the layer before); z[l] and out[l]: its pre-activations and
+    values; delta[l] = dl/dz[l] (the last layer: dl/da); dh[l] = dl/dout[l] for the hidden layers; deriv[l]: the
+    activation's derivative at z[l]; grads: each case's slope along every weight, n x n_weights, in the order of the
+    names. The network is left at w.
+    """
+    if w is not None:
+        model.set_weights(w)
+    layers = model.layers
+    n = X.shape[0]
+    with torch.no_grad():
+        inputs, zs, outs = [], [], []
+        h = X
+        for layer in layers:
+            inputs.append(h)
+            z = layer.linear(h)
+            h = layer.module(z) if layer.module is not None else z
+            zs.append(z)
+            outs.append(h)
+        a = zs[-1][:, 0]
+        d_out = torch.sigmoid(a) - y if model.task == "binary" else 2 * (a - y)
+        deltas = [None] * len(layers)
+        dh = [None] * len(layers)
+        deriv = [None] * len(layers)
+        deltas[-1] = d_out[:, None]
+        for l in range(len(layers) - 2, -1, -1):
+            dh[l] = deltas[l + 1] @ layers[l + 1].linear.weight
+            deriv[l] = derivative(layers[l], zs[l], outs[l])
+            deltas[l] = deriv[l] * dh[l]
+        blocks = []
+        for h_in, d in zip(inputs, deltas):
+            with_one = torch.cat([h_in, torch.ones(n, 1, dtype=h_in.dtype)], dim=1)
+            blocks.append((d[:, :, None] * with_one[:, None, :]).reshape(n, -1))
+        grads = torch.cat(blocks, dim=1)
+
+    def arr(ts):
+        return [None if t is None else t.detach().numpy().astype(float) for t in ts]
+
+    return Backward(arr(inputs), arr(zs), arr(outs), arr(deltas), arr(dh), arr(deriv), grads.numpy().astype(float))
+
+
+def traced_case(S, c):
+    """The case whose backward pass the derivation shows for group c: the point nearest the group's mean."""
+    D = S.data
+    idx = np.nonzero(D.gsel[c])[0]
+    X = D.X.numpy()[idx]
+    return int(idx[np.argmin(((X - X.mean(0)) ** 2).sum(1))])
+
+
+# ---------------------------------------------------------------- the network panels
+
+
+def stage_index(S):
+    return max(0, min(S.backprop_step, len(S.backprop_stages) - 1))
+
+
+def line_styles(S, F):
+    """Colour and opacity of each weight's line at the current stage, or None for the usual drawing."""
+    st = F.stage
+    if st is None or st.kind == "forward":
+        return None
+    M, T = S.model, S.theme
+    styles = {k: (None, 0.25) for k in range(M.n_weights)}  # faint, in the weight's own colour
+    if st.kind == "weights":
+        for k in M.layer_indices(st.layer):
+            styles[k] = (T.backprop_colour, 1.0)
+    elif st.kind == "average":
+        for k in styles:
+            styles[k] = (T.backprop_colour, 1.0)
+    elif st.kind == "to_h":
+        for k in M.layer_indices(st.layer + 1):
+            if M.where[k][2] >= 0:  # not the bias
+                styles[k] = (None, 1.0)
+    return styles
+
+
+def label_spec(S, F, c):
+    """The labels on the lines at the current stage: {k: (long text, short text, colour)}, or None for the usual
+    labels. Weights stages: each line's slope (mean over the group); back to h: the weights used; else none."""
+    st = F.stage
+    if st is None or st.kind == "forward":
+        return None
+    M, T, D = S.model, S.theme, S.data
+    g = F.bp.grads[D.gsel[c]].mean(0)
+    spec = {}
+    if st.kind in ("weights", "average"):
+        ks = M.layer_indices(st.layer) if st.kind == "weights" else range(M.n_weights)
+        for k in ks:
+            spec[k] = (f"∂ℓ/∂{M.names[k]} = {g[k]:+.3f}", f"{g[k]:+.3f}", T.backprop_colour)
+    elif st.kind == "to_h":
+        for k in M.layer_indices(st.layer + 1):
+            if M.where[k][2] >= 0:
+                colour = T.positive if F.w[k] >= 0 else T.negative_text
+                spec[k] = (f"{M.names[k]} = {F.w[k]:.2f}", f"{F.w[k]:.2f}", colour)
+    return spec
+
+
+def box(ax, x, y, text, T):
+    """A backward value under the forward box at (x, y)."""
+    ax.annotate(
+        text,
+        xy=(x, y),
+        xytext=(0, -31),
+        textcoords="offset points",
+        ha="center",
+        va="center",
+        fontsize=T.backprop_size,
+        color=T.backprop_colour,
+        zorder=6,
+        bbox=dict(boxstyle="round,pad=0.2", fc=T.backprop_tint, ec=T.backprop_colour, lw=0.8),
+    )
+
+
+def tangent(ax, xc, yc, act, m, T, height):
+    """The tangent of the activation at m on its glyph: its slope is the derivative used at this stage."""
+    name, f, lim, df = act
+    w_, h_ = 0.62, height
+    u = np.linspace(-lim, lim, 100)
+    vals = f(u)
+    lo, span = vals.min(), vals.max() - vals.min()
+    m = float(np.clip(m, -lim, lim))
+    ts = np.linspace(max(-lim, m - 0.35 * lim), min(lim, m + 0.35 * lim), 2)
+    ys = f(m) + df(m) * (ts - m)
+
+    def gx(t):
+        return xc - w_ / 2 + (t + lim) / (2 * lim) * w_
+
+    def gy(v):
+        return yc + 0.85 * h_ * ((v - lo) / span - 0.5)
+
+    ax.plot(gx(ts), gy(ys), color=T.backprop_colour, lw=1.6, zorder=5)
+
+
+def overlay(ax, S, F, c, edges):
+    """The backward values on network panel c, for every stage reached so far: delta at the output, dl/dh under the
+    h boxes, delta under the z boxes; at the "through the activation" stage, the tangents on the glyphs; at the
+    "back to h" stage, arrows back along the lines used."""
+    st = F.stage
+    if st is None or st.kind == "forward":
+        return
+    M, D, L, T = S.model, S.data, S.layout, S.theme
+    bp = F.bp
+    sel = D.gsel[c]
+    reached = S.backprop_stages[1 : stage_index(S) + 1]
+    for s in reached:
+        if s.kind == "output":
+            m, sd = D.stats(bp.delta[-1][:, 0], c)
+            box(ax, L.x_a, 1.2, "δa\n" + num(m, sd), T)
+        elif s.kind in ("to_h", "delta"):
+            l = s.layer
+            XZ, XG, XH = L.blocks[l]
+            tys = L.unit_ys(M.layers[l].out_features)
+            values = bp.dh[l] if s.kind == "to_h" else bp.delta[l]
+            for j, ty in enumerate(tys):
+                m, sd = D.stats(values[:, j], c)
+                nm = M.unit_name(l, j)
+                if s.kind == "to_h":
+                    box(ax, XH, ty, f"∂ℓ/∂h{nm}\n" + num(m, sd), T)
+                else:
+                    box(ax, XZ, ty, f"δ{nm}\n" + num(m, sd), T)
+    if st.kind == "delta" and M.layers[st.layer].act:
+        l = st.layer
+        XZ, XG, XH = L.blocks[l]
+        tys = L.unit_ys(M.layers[l].out_features)
+        height = min(0.5, 0.75 * (tys[0] - tys[1])) if len(tys) > 1 else 0.5
+        z = bp.z[l][sel].mean(0)
+        for j, ty in enumerate(tys):
+            tangent(ax, XG, ty, M.layers[l].act, z[j], T, height)
+    if st.kind == "to_h":
+        arrow = dict(arrowstyle="-|>", color=T.backprop_colour, lw=1.4, shrinkA=0, shrinkB=0)
+        for k, p0, p1, _ in edges:
+            if M.where[k][0] == st.layer + 1 and M.where[k][2] >= 0:
+                a = (p0[0] + 0.62 * (p1[0] - p0[0]), p0[1] + 0.62 * (p1[1] - p0[1]))
+                b = (p0[0] + 0.38 * (p1[0] - p0[0]), p0[1] + 0.38 * (p1[1] - p0[1]))
+                ax.annotate("", xy=b, xytext=a, arrowprops=arrow, zorder=4)
+
+
+# ---------------------------------------------------------------- the derivation panel
+
+
+def factor(v, digits=3):
+    """A number as the second factor of a product: in parentheses when it is negative."""
+    text = f"{v:+.{digits}f}"
+    return f"({text})" if v < 0 else text
+
+
+def derivation_lines(S, F, i):
+    """The steps of the backward pass for case i, as (stage index, text) pairs."""
+    M = S.model
+    bp = F.bp
+    y = float(S.data.y[i])
+    a = bp.z[-1][i, 0]
+    regression = S.task == "regression"
+    out = []
+    for s_idx, st in enumerate(S.backprop_stages):
+        if st.kind == "forward":
+            if regression:
+                out.append((s_idx, f"forward: ŷ = {a:+.3f}, y = {y:+.3f}"))
+            else:
+                p = 1 / (1 + np.exp(-a))
+                out.append((s_idx, f"forward: a = {a:+.3f}, p = {p:.3f}, y = {y:g}"))
+        elif st.kind == "output":
+            d = bp.delta[-1][i, 0]
+            if regression:
+                out.append((s_idx, f"δa = 2(ŷ - y) = 2({a:+.3f} - {y:+.3f}) = {d:+.3f}"))
+            else:
+                p = 1 / (1 + np.exp(-a))
+                out.append((s_idx, f"δa = p - y = {p:.3f} - {y:g} = {d:+.3f}"))
+        elif st.kind == "weights":
+            l = st.layer
+            labels = M.input_labels(l)
+            for k in M.layer_indices(l):
+                _, j, src = M.where[k]
+                unit = "a" if l == len(M.layers) - 1 else M.unit_name(l, j)
+                d = bp.delta[l][i, j]
+                if src < 0:
+                    out.append((s_idx, f"{M.names[k]}: δ{unit} × 1 = {bp.grads[i, k]:+.3f}"))
+                else:
+                    v = bp.inputs[l][i, src]
+                    out.append(
+                        (
+                            s_idx,
+                            f"{M.names[k]}: δ{unit} × {labels[src]} = {d:+.3f} × {factor(v)} = {bp.grads[i, k]:+.3f}",
+                        )
+                    )
+        elif st.kind == "to_h":
+            l = st.layer
+            nxt = M.layers[l + 1]
+            Wn = nxt.linear.weight.detach().numpy()
+            for j in range(M.layers[l].out_features):
+                nm = M.unit_name(l, j)
+                if nxt.out_features == 1:
+                    k = M.layer_indices(l + 1)[j]
+                    unit = "a" if l + 1 == len(M.layers) - 1 else M.unit_name(l + 1, 0)
+                    d = bp.delta[l + 1][i, 0]
+                    product = f"{Wn[0, j]:+.3f} × {factor(d)} = {bp.dh[l][i, j]:+.3f}"
+                    out.append((s_idx, f"∂ℓ/∂h{nm} = {M.names[k]} × δ{unit} = {product}"))
+                else:
+                    terms = " + ".join(
+                        f"{Wn[q, j]:+.2f} × {factor(bp.delta[l + 1][i, q])}" for q in range(nxt.out_features)
+                    )
+                    out.append((s_idx, f"∂ℓ/∂h{nm} = {terms} = {bp.dh[l][i, j]:+.3f}"))
+        elif st.kind == "delta":
+            l = st.layer
+            act = act_name(S.model, l)
+            for j in range(M.layers[l].out_features):
+                nm = M.unit_name(l, j)
+                out.append(
+                    (
+                        s_idx,
+                        f"δ{nm} = {act}′(z{nm}) × ∂ℓ/∂h{nm} = {bp.deriv[l][i, j]:.3f} × {factor(bp.dh[l][i, j])} "
+                        f"= {bp.delta[l][i, j]:+.3f}",
+                    )
+                )
+        elif st.kind == "average":
+            k = M.layer_indices(len(M.layers) - 1)[0]
+            mean = bp.grads[:, k].mean()
+            out.append((s_idx, f"dR/dw = average over the {S.data.n} cases, e.g. dR/d{M.names[k]} = {mean:+.4f}"))
+    return out
+
+
+def draw_derivation(ax, S, F):
+    """The backward pass of one case, step by step: the stages reached so far, the current one in bold."""
+    T = S.theme
+    ax.axis("off")
+    c = max(0, min(S.backprop_case, S.data.G - 1))
+    i = traced_case(S, c)
+    step = stage_index(S)
+    stage = S.backprop_stages[step]
+    lines = [(s, t) for s, t in derivation_lines(S, F, i) if s <= step]
+    per_column, columns = 12, 2  # the steps run down the first column, then the second
+    most = per_column * columns
+    shown = lines[-most:]
+    group = "" if S.data.gsel[c].sum() == 1 else f", the case nearest the mean of group {letter(c)}"
+    head = f"backward pass of {letter(c)}{group}"
+    ax.set_title(f"{head}\nstep {step} of {len(S.backprop_stages) - 1}: {stage.text}", fontsize=10.5, loc="left")
+    dy = 0.96 / per_column
+    if len(lines) > most:
+        shown = [(None, "... (earlier steps above)")] + shown[1:]
+    for n, (s, text) in enumerate(shown):
+        current = s == step
+        col, row = divmod(n, per_column)
+        ax.text(
+            0.5 * col,
+            0.98 - row * dy,
+            text,
+            transform=ax.transAxes,
+            fontsize=9.5,
+            va="top",
+            color=T.backprop_colour if current else ("0.5" if s is None else "0.2"),
+            fontweight="bold" if current else "normal",
+        )
+
 # ------------------------ picture.py ------------------------
 
-Frame = namedtuple("Frame", "w out R g deltas changed moving history predictions eta next_change cases lookahead")
+Frame = namedtuple(
+    "Frame", "w out R g deltas changed moving history predictions eta next_change cases lookahead bp stage"
+)
 LIVE_DPI = 100  # resolution of the picture shown by the widgets
 
 
@@ -1518,6 +1895,8 @@ def make_frame(S, w=None):
     next_change = -S.eta * float(sum(g[k] ** 2 for k in moving))
     cases = M.case_slopes(D.X, D.y) if "cases" in S.views else None
     lookahead = S.lookahead(w=w) if "momentum" in S.views else None
+    bp = backward_pass(M, D.X, D.y, w) if "backprop" in S.views else None
+    stage = S.backprop_stages[stage_index(S)] if "backprop" in S.views else None
     M.set_weights(w)
     return Frame(
         w,
@@ -1533,12 +1912,34 @@ def make_frame(S, w=None):
         next_change,
         cases,
         lookahead,
+        bp,
+        stage,
     )
 
 
 def bottom_panels(S):
     """The panels below the networks, in order: the input plane, R over the steps, the table, then the views."""
     return ["plane", "history", "table"] + [v for v in VIEWS if v in S.views]
+
+
+def bottom_slots(S, panels):
+    """(row, column, columns spanned) of each lower panel, and the number of columns. The derivation of the backward
+    pass is text: it takes a whole row (two columns of the wide layout); the other panels take one column each."""
+    L = S.layout
+    span = {name: 1 for name in panels}
+    if "backprop" in span:
+        span["backprop"] = 2 if L.style == "wide" else BOTTOM_PER_ROW
+    cols = L.bottom_per_row(sum(span.values()))
+    slots, r, c = {}, 0, 0
+    for name in panels:
+        width = min(span[name], cols)
+        if c + width > cols:
+            r, c = r + 1, 0
+        slots[name] = (r, c, width)
+        c += width
+        if c >= cols:
+            r, c = r + 1, 0
+    return slots, cols
 
 
 class Picture:
@@ -1554,15 +1955,16 @@ class Picture:
         self.panels = bottom_panels(S)
         per_row, rows = L.per_row(D.G), L.rows(D.G)
         with_sd = any(sel.sum() > 1 for sel in D.gsel)  # groups of points: the boxes show mean and standard deviation
-        n_bottom = L.bottom_rows(len(self.panels))
-        bottom_cols = L.bottom_per_row(len(self.panels))
-        size = L.figsize(D.G, with_sd, len(self.panels))
+        backprop = "backprop" in S.views  # taller rows: room for the backward boxes under the units
+        slots, bottom_cols = bottom_slots(S, self.panels)
+        n_bottom = max(r for r, _, _ in slots.values()) + 1
+        size = (L.width, L.row_height(with_sd, backprop) * rows + BOTTOM_HEIGHT * n_bottom)
         if pyplot:
             fig = plt.figure(figsize=size)
         else:
             fig = Figure(figsize=size, dpi=dpi)
             FigureCanvasAgg(fig)
-        heights = [L.row_height(with_sd)] * rows + [BOTTOM_HEIGHT] * n_bottom
+        heights = [L.row_height(with_sd, backprop)] * rows + [BOTTOM_HEIGHT] * n_bottom
         gs = fig.add_gridspec(rows + n_bottom, bottom_cols, height_ratios=heights)
         self.case_axes = []
         for c in range(D.G):
@@ -1570,10 +1972,10 @@ class Picture:
             cell = gs[r, :] if per_row == 1 else gs[r, :].subgridspec(1, per_row)[0, cc]
             self.case_axes.append(fig.add_subplot(cell))
         self.axes = {}
-        for i, name in enumerate(self.panels):
-            r, cc = divmod(i, bottom_cols)
+        for name in self.panels:
+            r, cc, span = slots[name]
             extra = {"projection": "3d"} if name == "hidden" and needs_3d(S) else {}
-            self.axes[name] = fig.add_subplot(gs[rows + r, cc], **extra)
+            self.axes[name] = fig.add_subplot(gs[rows + r, cc : cc + span], **extra)
         if S.title:
             fig.suptitle(S.title, fontsize=S.theme.suptitle_size)
         self.fig = fig
@@ -1586,18 +1988,23 @@ class Picture:
         if self.laid_out:
             for ax in self.case_axes + list(self.axes.values()):
                 ax.clear()
-        parts = [draw_case(ax, S, F, c) for c, ax in enumerate(self.case_axes)]
+        styles = line_styles(S, F)
+        parts = [draw_case(ax, S, F, c, styles) for c, ax in enumerate(self.case_axes)]
+        for c, (ax, (edges, _)) in enumerate(zip(self.case_axes, parts)):
+            overlay(ax, S, F, c, edges)
         draw_input_plane(self.axes["plane"], S, F)
         draw_history(self.axes["history"], S, F)
         draw_slope_table(self.axes["table"], S, F)
+        drawers = dict(VIEW_DRAWERS, backprop=draw_derivation)
         for name in self.panels[3:]:
-            VIEW_DRAWERS[name](self.axes[name], S, F)
+            drawers[name](self.axes[name], S, F)
             S.model.set_weights(F.w)
         if not self.laid_out:
             self.layout()
-        for ax, (edges, obstacles) in zip(self.case_axes, parts):
-            draw_edge_labels(ax, S, F, edges, obstacles)
+        for c, (ax, (edges, obstacles)) in enumerate(zip(self.case_axes, parts)):
+            draw_edge_labels(ax, S, F, edges, obstacles, label_spec(S, F, c))
         S.model.set_weights(F.w)
+        self.frame = F
         return self.fig
 
     def layout(self):
@@ -1642,6 +2049,7 @@ def still_picture(session, message):
 # ------------------------ widgets.py ------------------------
 
 VIEW_LABELS = {
+    "backprop": "backward pass",
     "cases": "each case's slope",
     "slice": "R over two weights",
     "line": "R along the next step",
@@ -1739,6 +2147,7 @@ class Controller:
         self.image = widgets.Image(format="png", layout=widgets.Layout(max_width="100%", height="auto"))
         self.out = widgets.Output()
         self.more = self.views_panel(widgets)
+        self.backprop = self.backprop_panel(widgets)
         for s in self.sliders:
             s.observe(self.on_slider, names="value")
         self.eta.observe(self.on_eta, names="value")
@@ -1747,7 +2156,7 @@ class Controller:
         self.buttons["reset"].on_click(lambda _: self.reset())
         if S.layout.style == "wide":  # the controls in a column beside the picture
             column = widgets.VBox(
-                [panel, self.eta, widgets.HBox(list(self.buttons.values())), self.readout, self.more]
+                [panel, self.eta, widgets.HBox(list(self.buttons.values())), self.backprop, self.readout, self.more]
                 + ([] if self.use_output else [self.out]),
                 layout=widgets.Layout(width="390px", min_width="390px"),
             )
@@ -1757,7 +2166,7 @@ class Controller:
         else:
             controls = widgets.HBox([self.eta, *self.buttons.values()])
             shown = [self.out] if self.use_output else [self.image, self.out]
-            self.widgets = [panel, controls, self.more, self.readout, *shown]
+            self.widgets = [panel, controls, self.more, self.backprop, self.readout, *shown]
 
     # ---------------------------------------------------------------- building
 
@@ -1819,6 +2228,30 @@ class Controller:
         acc.selected_index = None
         return acc
 
+    def backprop_panel(self, widgets):
+        """The steps of the backward pass: back and forward buttons, the step, the group whose case the derivation
+        follows, and the formula of the current step. Shown while the view "backprop" is on."""
+        S = self.session
+        n = len(S.backprop_stages)
+        self.bp_prev = widgets.Button(description="◀ step back")
+        self.bp_next = widgets.Button(description="next step ▶")
+        self.bp_step = widgets.IntSlider(value=S.backprop_step, min=0, max=n - 1, description="backprop step")
+        letters = [chr(65 + c) if c < 26 else str(c) for c in range(S.data.G)]
+        self.bp_case = widgets.Dropdown(
+            options=letters, value=letters[S.backprop_case], description="case of", layout=widgets.Layout(width="150px")
+        )
+        self.bp_caption = widgets.HTML()
+        self.bp_prev.on_click(lambda _: setattr(self.bp_step, "value", max(0, self.bp_step.value - 1)))
+        self.bp_next.on_click(lambda _: setattr(self.bp_step, "value", min(n - 1, self.bp_step.value + 1)))
+        self.bp_step.observe(self.on_backprop, names="value")
+        self.bp_case.observe(self.on_backprop, names="value")
+        row = widgets.HBox(
+            [self.bp_prev, self.bp_step, self.bp_next, self.bp_case], layout=widgets.Layout(flex_flow="row wrap")
+        )
+        box = widgets.VBox([row, self.bp_caption])
+        box.layout.display = None if "backprop" in S.views else "none"
+        return box
+
     # ---------------------------------------------------------------- state
 
     def values(self):
@@ -1839,6 +2272,13 @@ class Controller:
         if not self.busy:
             self.redraw()
 
+    def on_backprop(self, *_):
+        S = self.session
+        S.backprop_step = int(self.bp_step.value)
+        S.backprop_case = ord(self.bp_case.value) - 65 if len(self.bp_case.value) == 1 else int(self.bp_case.value)
+        if not self.busy:
+            self.redraw()
+
     def on_views(self, *_):
         if self.busy:
             return
@@ -1852,6 +2292,7 @@ class Controller:
         S.beta = float(self.beta.value)
         S.lookahead_steps = int(self.ahead.value)
         S.log_scale = bool(self.log_box.value)
+        self.backprop.layout.display = None if "backprop" in S.views else "none"
         self.picture = None  # the panels changed: a new figure
         self.redraw()
 
@@ -1899,6 +2340,9 @@ class Controller:
             S.fig = self.picture.fig
             png = self.picture.png()
             self.readout.value = readout_html(S.readouts(self.eta.value, w))
+            if "backprop" in S.views:
+                stage = S.backprop_stages[S.backprop_step]
+                self.bp_caption.value = f"<b>step {S.backprop_step} of {len(S.backprop_stages) - 1}</b>: {stage.text}"
             if self.use_output:
                 from IPython.display import Image, clear_output, display
 
@@ -1977,6 +2421,8 @@ class Session:
         log_scale=False,
         layout="standard",
         width=None,
+        backprop_step=0,
+        backprop_case=0,
     ):
         self.model = Model(net)
         self.data = prepare(X, y, groups, n_inputs=self.model.n_inputs, dtype=self.model.dtype, task=task)
@@ -2004,6 +2450,13 @@ class Session:
             raise ValueError("slopewalk: lookahead must be at least 1 step.")
         self.lookahead_steps = int(lookahead)
         self.log_scale = bool(log_scale)
+        n_stages = len(backprop_stages(self.model))
+        if not (isinstance(backprop_step, (int, np.integer)) and 0 <= backprop_step < n_stages):
+            raise ValueError(f"slopewalk: backprop_step must be a whole number from 0 to {n_stages - 1}.")
+        self.backprop_step = int(backprop_step)
+        self.backprop_case = self.group_index(backprop_case)
+        if self.backprop_step > 0:
+            self.views = as_views(self.views + ("backprop",))
         self.w0 = self.model.get_weights()
         start = self.model.forward(self.data.X, self.data.y)
         self.loss0 = [self.data.stats(start.loss, c)[0] for c in range(self.data.G)]
@@ -2017,6 +2470,20 @@ class Session:
     @property
     def names(self):
         return self.model.names
+
+    @property
+    def backprop_stages(self):
+        """The stages of the backward pass: forward, the output's delta, then layer by layer back to the input."""
+        return backprop_stages(self.model)
+
+    def group_index(self, v):
+        """The index of a group given by its letter ("A") or its index."""
+        G = self.data.G
+        if isinstance(v, (int, np.integer)) and not isinstance(v, bool) and 0 <= v < G:
+            return int(v)
+        if isinstance(v, str) and len(v) == 1 and 0 <= ord(v.upper()) - 65 < G:
+            return ord(v.upper()) - 65
+        raise ValueError(f"slopewalk: {v!r} is not a group; the groups are A to {chr(64 + G)} (or 0 to {G - 1}).")
 
     def weight_index(self, v):
         """The index of a weight given by its name ("w10") or its index."""
@@ -2183,6 +2650,36 @@ class Session:
         self.changed()
         return path
 
+    def record_backprop(self, path, fps=1, dpi=80):
+        """Writes every stage of the backward pass at the current weights to an animated GIF (or .mp4 with ffmpeg),
+        one frame per stage. The weights do not change. Returns path."""
+        from matplotlib.animation import FFMpegWriter, PillowWriter
+
+        path = str(path)
+        ext = os.path.splitext(path)[1].lower()
+        if ext == ".gif":
+            writer = PillowWriter(fps=fps)
+        elif ext == ".mp4":
+            if not FFMpegWriter.isAvailable():
+                raise ValueError(
+                    "slopewalk: writing .mp4 needs ffmpeg, which was not found. Use a path ending in .gif."
+                )
+            writer = FFMpegWriter(fps=fps)
+        else:
+            raise ValueError(f"slopewalk: record writes .gif files (or .mp4 with ffmpeg), not {ext or 'no extension'}.")
+        views, step = self.views, self.backprop_step
+        self.views = as_views(views + ("backprop",))
+        try:
+            picture = Picture(self, dpi=dpi)
+            with writer.saving(picture.fig, path, dpi):
+                for k in range(len(self.backprop_stages)):
+                    self.backprop_step = k
+                    picture.refresh()
+                    writer.grab_frame()
+        finally:
+            self.views, self.backprop_step = views, step
+        return path
+
     def _ipython_display_(self):
         pass  # the picture and the controls are shown by explore itself
 
@@ -2208,6 +2705,8 @@ def explore(
     log_scale=False,
     layout="standard",
     width=None,
+    backprop_step=0,
+    backprop_case=0,
 ):
     """Gradient descent by hand on `net`, with inputs X (n x d) and labels y.
 
@@ -2224,6 +2723,8 @@ def explore(
     log_scale: R on a log axis.
     layout: "standard", or "wide" for wide screens (network panels side by side, the lower panels in one row, and the
     controls beside the picture); width: the figure width in inches.
+    backprop_step: with the view "backprop", the stage of the backward pass drawn (0: the forward pass; a step above
+    0 switches the view on); backprop_case: the group whose case the derivation follows ("A" or 0 is the first).
 
     Draws one copy of the network per group (every value a mean ± standard deviation over the group), with each
     weight on its line, the units as z, activation and h, then the output and the loss with its change from the
@@ -2251,6 +2752,8 @@ def explore(
         log_scale=log_scale,
         layout=layout,
         width=width,
+        backprop_step=backprop_step,
+        backprop_case=backprop_case,
     )
     if os.environ.get("NB_STATIC") == "1":
         return still_picture(session, STATIC_MESSAGE)
