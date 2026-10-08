@@ -491,17 +491,27 @@ LABEL_SHIFTS = (0.0, 0.8, -0.8, 1.6, -1.6, 2.4, -2.4, 3.2, -3.2, 4.0, -4.0, 4.8,
 LABEL_TOLERANCE = 0.02  # a label may overlap other labels or the boxes by at most this fraction of its area
 BOTTOM_PER_ROW = 3  # panels per row below the networks
 BOTTOM_HEIGHT = 4.2  # height in inches of one row of those panels
+LAYOUTS = ("standard", "wide")
+WIDTH = {"standard": 15.0, "wide": 24.0}  # default figure width in inches
+WIDE_PER_ROW, WIDE_BOTTOM_PER_ROW = 4, 6  # the most network panels and lower panels per row of the wide layout
 
 
 class Layout:
     """Positions for a network with n_inputs inputs and the hidden layers `hidden` (a list of unit counts).
 
     task "binary" ends each panel with a, the sigmoid, p and the loss box; "regression" with the prediction and the
-    loss box.
+    loss box. style "standard": a figure 15 inches wide, two network panels per row (one for deep networks) and
+    three lower panels per row. "wide": 24 inches, up to four network panels in a row (two for deep networks) and up
+    to six lower panels in a row, for wide screens. width (inches) overrides the width of either.
     """
 
-    def __init__(self, n_inputs, hidden, task="binary"):
-        self.n_inputs, self.hidden, self.task = n_inputs, hidden, task
+    def __init__(self, n_inputs, hidden, task="binary", style="standard", width=None):
+        if style not in LAYOUTS:
+            raise ValueError(f"slopewalk: layout must be 'standard' or 'wide', not {style!r}.")
+        if width is not None and not (isinstance(width, (int, float)) and 6 <= width <= 60):
+            raise ValueError(f"slopewalk: width is the figure width in inches, between 6 and 60, not {width!r}.")
+        self.n_inputs, self.hidden, self.task, self.style = n_inputs, hidden, task, style
+        self.width = float(width) if width is not None else WIDTH[style]
         self.blocks, x = [], 1.75
         for _ in hidden:
             self.blocks.append((x, x + 0.75, x + 1.5))  # x of the z box, of the glyph and of the h box
@@ -529,23 +539,35 @@ class Layout:
         """Names and values on the lines for small networks, values only above 9 weights."""
         return n_weights <= 9
 
-    def per_row(self):
-        return 2 if self.x_loss + 1.55 <= 9 else 1
+    def narrow(self):
+        """A network narrow enough for two panels side by side in the standard figure (at most one hidden layer)."""
+        return self.x_loss + 1.55 <= 9
+
+    def per_row(self, n_panels=None):
+        """Network panels per row: 2 (or 1 for deep networks); the wide layout puts up to 4 (or 2) in a row."""
+        if self.style == "wide":
+            most = WIDE_PER_ROW if self.narrow() else 2
+            return max(1, min(most, n_panels if n_panels else most))
+        return 2 if self.narrow() else 1
 
     def rows(self, n_panels):
-        return -(-n_panels // self.per_row())
+        return -(-n_panels // self.per_row(n_panels))
+
+    def bottom_per_row(self, n_bottom=BOTTOM_PER_ROW):
+        """Lower panels per row: 3; the wide layout puts all of them in one row, up to 6."""
+        return max(BOTTOM_PER_ROW, min(WIDE_BOTTOM_PER_ROW, n_bottom)) if self.style == "wide" else BOTTOM_PER_ROW
 
     def row_height(self, with_sd=False):
         """Height of a panel row in inches: taller when a layer has more than 3 units (up to four times the usual,
         for 12 units), and by a fifth when the boxes carry a standard deviation line (groups of points)."""
         return 2.9 * min(4.0, max(1.0, max(self.hidden, default=1) / 3)) * (1.2 if with_sd else 1.0)
 
-    @staticmethod
-    def bottom_rows(n_bottom):
-        return -(-n_bottom // BOTTOM_PER_ROW)
+    def bottom_rows(self, n_bottom):
+        return -(-n_bottom // self.bottom_per_row(n_bottom))
 
     def figsize(self, n_panels, with_sd=False, n_bottom=BOTTOM_PER_ROW):
-        return (15, self.row_height(with_sd) * self.rows(n_panels) + BOTTOM_HEIGHT * self.bottom_rows(n_bottom))
+        height = self.row_height(with_sd) * self.rows(n_panels) + BOTTOM_HEIGHT * self.bottom_rows(n_bottom)
+        return (self.width, height)
 
     @staticmethod
     def table_fontsize(n_weights):
@@ -1088,11 +1110,11 @@ def draw_slope_table(ax, S, F):
     per_block = max(TABLE_ROWS, -(-len(rows) // 2))  # at most two blocks, taller ones for many weights
     blocks = [rows[i : i + per_block] for i in range(0, len(rows), per_block)]
     n_blocks = len(blocks)
-    fontsize = T.table_size if n_blocks == 1 else max(T.table_size - 2, 8)
+    block_inches = ax.get_position().width * ax.figure.get_figwidth() / n_blocks
+    short = n_blocks > 1 or block_inches < 4.5  # a narrow panel (wide layout) or two blocks: short headers
+    fontsize = T.table_size if not short else max(T.table_size - 2, 8)
     headers = (
-        ["weight", "value", "change of R for +0.1", "slope dR/dw"]
-        if n_blocks == 1
-        else ["w", "value", "R, +0.1", "slope"]
+        ["w", "value", "R, +0.1", "slope"] if short else ["weight", "value", "change of R for +0.1", "slope dR/dw"]
     )
     ax.set_title("Change of R when one weight grows by 0.1,\nand the slope dR/dw", fontsize=T.table_title_size)
     gap = 0.03
@@ -1291,7 +1313,7 @@ def draw_slice(ax, S, F):
     ax.set_xlabel(names[0])
     ax.set_ylabel(names[1])
     ax.legend(fontsize=7, loc="best")
-    title = f"R over {names[0]} and {names[1]}; arrow: direction of -grad R"
+    title = f"R over {names[0]} and {names[1]}, with the direction of -grad R"
     ax.set_title(title + (f"\n{note}" if note else ""), fontsize=10)
 
 
@@ -1530,9 +1552,10 @@ class Picture:
         self.S = S
         D, L = S.data, S.layout
         self.panels = bottom_panels(S)
-        per_row, rows = L.per_row(), L.rows(D.G)
+        per_row, rows = L.per_row(D.G), L.rows(D.G)
         with_sd = any(sel.sum() > 1 for sel in D.gsel)  # groups of points: the boxes show mean and standard deviation
         n_bottom = L.bottom_rows(len(self.panels))
+        bottom_cols = L.bottom_per_row(len(self.panels))
         size = L.figsize(D.G, with_sd, len(self.panels))
         if pyplot:
             fig = plt.figure(figsize=size)
@@ -1540,14 +1563,15 @@ class Picture:
             fig = Figure(figsize=size, dpi=dpi)
             FigureCanvasAgg(fig)
         heights = [L.row_height(with_sd)] * rows + [BOTTOM_HEIGHT] * n_bottom
-        gs = fig.add_gridspec(rows + n_bottom, BOTTOM_PER_ROW, height_ratios=heights)
+        gs = fig.add_gridspec(rows + n_bottom, bottom_cols, height_ratios=heights)
         self.case_axes = []
         for c in range(D.G):
             r, cc = divmod(c, per_row)
-            self.case_axes.append(fig.add_subplot(gs[r, :] if per_row == 1 else gs[r, :].subgridspec(1, 2)[0, cc]))
+            cell = gs[r, :] if per_row == 1 else gs[r, :].subgridspec(1, per_row)[0, cc]
+            self.case_axes.append(fig.add_subplot(cell))
         self.axes = {}
         for i, name in enumerate(self.panels):
-            r, cc = divmod(i, BOTTOM_PER_ROW)
+            r, cc = divmod(i, bottom_cols)
             extra = {"projection": "3d"} if name == "hidden" and needs_3d(S) else {}
             self.axes[name] = fig.add_subplot(gs[rows + r, cc], **extra)
         if S.title:
@@ -1721,9 +1745,19 @@ class Controller:
         self.buttons["gradient step"].on_click(lambda _: self.steps(1))
         self.buttons["10 steps"].on_click(lambda _: self.steps(10))
         self.buttons["reset"].on_click(lambda _: self.reset())
-        controls = widgets.HBox([self.eta, *self.buttons.values()])
-        shown = [self.out] if self.use_output else [self.image, self.out]
-        self.widgets = [panel, controls, self.more, self.readout, *shown]
+        if S.layout.style == "wide":  # the controls in a column beside the picture
+            column = widgets.VBox(
+                [panel, self.eta, widgets.HBox(list(self.buttons.values())), self.readout, self.more]
+                + ([] if self.use_output else [self.out]),
+                layout=widgets.Layout(width="390px", min_width="390px"),
+            )
+            right = self.out if self.use_output else self.image
+            right.layout.flex = "1 1 auto"
+            self.widgets = [widgets.HBox([column, right], layout=widgets.Layout(align_items="flex-start"))]
+        else:
+            controls = widgets.HBox([self.eta, *self.buttons.values()])
+            shown = [self.out] if self.use_output else [self.image, self.out]
+            self.widgets = [panel, controls, self.more, self.readout, *shown]
 
     # ---------------------------------------------------------------- building
 
@@ -1941,11 +1975,13 @@ class Session:
         beta=0.9,
         lookahead=30,
         log_scale=False,
+        layout="standard",
+        width=None,
     ):
         self.model = Model(net)
         self.data = prepare(X, y, groups, n_inputs=self.model.n_inputs, dtype=self.model.dtype, task=task)
         self.task = self.model.task = self.data.task
-        self.layout = Layout(self.model.n_inputs, self.model.hidden, self.task)
+        self.layout = Layout(self.model.n_inputs, self.model.hidden, self.task, style=layout, width=width)
         self.theme = theme or THEME
         self.title = title
         self.eta = check_eta(eta)
@@ -2170,6 +2206,8 @@ def explore(
     beta=0.9,
     lookahead=30,
     log_scale=False,
+    layout="standard",
+    width=None,
 ):
     """Gradient descent by hand on `net`, with inputs X (n x d) and labels y.
 
@@ -2184,6 +2222,8 @@ def explore(
     (R over one or two weights; slice_weights chooses them), "line" (R along the next step), "hidden" (the cases at
     their hidden values) and "momentum" (the next `lookahead` steps of gradient descent and of momentum beta).
     log_scale: R on a log axis.
+    layout: "standard", or "wide" for wide screens (network panels side by side, the lower panels in one row, and the
+    controls beside the picture); width: the figure width in inches.
 
     Draws one copy of the network per group (every value a mean ± standard deviation over the group), with each
     weight on its line, the units as z, activation and h, then the output and the loss with its change from the
@@ -2209,6 +2249,8 @@ def explore(
         beta=beta,
         lookahead=lookahead,
         log_scale=log_scale,
+        layout=layout,
+        width=width,
     )
     if os.environ.get("NB_STATIC") == "1":
         return still_picture(session, STATIC_MESSAGE)

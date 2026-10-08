@@ -495,11 +495,11 @@ def draw_slope_table(ax, S, F):
     per_block = max(TABLE_ROWS, -(-len(rows) // 2))  # at most two blocks, taller ones for many weights
     blocks = [rows[i : i + per_block] for i in range(0, len(rows), per_block)]
     n_blocks = len(blocks)
-    fontsize = T.table_size if n_blocks == 1 else max(T.table_size - 2, 8)
+    block_inches = ax.get_position().width * ax.figure.get_figwidth() / n_blocks
+    short = n_blocks > 1 or block_inches < 4.5  # a narrow panel (wide layout) or two blocks: short headers
+    fontsize = T.table_size if not short else max(T.table_size - 2, 8)
     headers = (
-        ["weight", "value", "change of R for +0.1", "slope dR/dw"]
-        if n_blocks == 1
-        else ["w", "value", "R, +0.1", "slope"]
+        ["w", "value", "R, +0.1", "slope"] if short else ["weight", "value", "change of R for +0.1", "slope dR/dw"]
     )
     ax.set_title("Change of R when one weight grows by 0.1,\nand the slope dR/dw", fontsize=T.table_title_size)
     gap = 0.03

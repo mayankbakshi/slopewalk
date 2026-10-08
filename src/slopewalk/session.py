@@ -73,11 +73,13 @@ class Session:
         beta=0.9,
         lookahead=30,
         log_scale=False,
+        layout="standard",
+        width=None,
     ):
         self.model = Model(net)
         self.data = prepare(X, y, groups, n_inputs=self.model.n_inputs, dtype=self.model.dtype, task=task)
         self.task = self.model.task = self.data.task
-        self.layout = Layout(self.model.n_inputs, self.model.hidden, self.task)
+        self.layout = Layout(self.model.n_inputs, self.model.hidden, self.task, style=layout, width=width)
         self.theme = theme or THEME
         self.title = title
         self.eta = check_eta(eta)
@@ -302,6 +304,8 @@ def explore(
     beta=0.9,
     lookahead=30,
     log_scale=False,
+    layout="standard",
+    width=None,
 ):
     """Gradient descent by hand on `net`, with inputs X (n x d) and labels y.
 
@@ -316,6 +320,8 @@ def explore(
     (R over one or two weights; slice_weights chooses them), "line" (R along the next step), "hidden" (the cases at
     their hidden values) and "momentum" (the next `lookahead` steps of gradient descent and of momentum beta).
     log_scale: R on a log axis.
+    layout: "standard", or "wide" for wide screens (network panels side by side, the lower panels in one row, and the
+    controls beside the picture); width: the figure width in inches.
 
     Draws one copy of the network per group (every value a mean ± standard deviation over the group), with each
     weight on its line, the units as z, activation and h, then the output and the loss with its change from the
@@ -341,6 +347,8 @@ def explore(
         beta=beta,
         lookahead=lookahead,
         log_scale=log_scale,
+        layout=layout,
+        width=width,
     )
     if os.environ.get("NB_STATIC") == "1":
         return still_picture(session, STATIC_MESSAGE)

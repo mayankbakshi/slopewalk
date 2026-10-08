@@ -38,6 +38,7 @@ Options of `explore`, all keyword-only; without them the picture is as above:
 | `slice_weights=("w10", "w11")` | the weights of the slice panel (one or two). |
 | `beta=0.9`, `lookahead=30` | momentum and the number of steps in the momentum panel. |
 | `log_scale=True` | R on a log axis. |
+| `layout="wide"`, `width=24` | for wide screens: the network panels side by side (up to four), the lower panels in one row (up to six), and the controls in a column beside the picture; `width` sets the figure width in inches. Colab shows notebooks at a fixed width, so the wide layout helps most in VS Code or JupyterLab on a large monitor. |
 
 `explore` returns a session: `step(k)` takes k gradient steps (the sliders follow), `reset()` returns to the start, `predict()` gives the first-order change of R for the next step, `lookahead()` the next steps of gradient descent and of momentum, `case_slopes()` each case's slope along every weight, `save("state.png")` writes the current picture and `record("run.gif", steps=40)` a GIF of a run. `history`, `predictions` and `path` hold R, the predicted and actual change, and the weights after each step.
 

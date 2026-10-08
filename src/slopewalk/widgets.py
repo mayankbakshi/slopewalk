@@ -111,9 +111,19 @@ class Controller:
         self.buttons["gradient step"].on_click(lambda _: self.steps(1))
         self.buttons["10 steps"].on_click(lambda _: self.steps(10))
         self.buttons["reset"].on_click(lambda _: self.reset())
-        controls = widgets.HBox([self.eta, *self.buttons.values()])
-        shown = [self.out] if self.use_output else [self.image, self.out]
-        self.widgets = [panel, controls, self.more, self.readout, *shown]
+        if S.layout.style == "wide":  # the controls in a column beside the picture
+            column = widgets.VBox(
+                [panel, self.eta, widgets.HBox(list(self.buttons.values())), self.readout, self.more]
+                + ([] if self.use_output else [self.out]),
+                layout=widgets.Layout(width="390px", min_width="390px"),
+            )
+            right = self.out if self.use_output else self.image
+            right.layout.flex = "1 1 auto"
+            self.widgets = [widgets.HBox([column, right], layout=widgets.Layout(align_items="flex-start"))]
+        else:
+            controls = widgets.HBox([self.eta, *self.buttons.values()])
+            shown = [self.out] if self.use_output else [self.image, self.out]
+            self.widgets = [panel, controls, self.more, self.readout, *shown]
 
     # ---------------------------------------------------------------- building
 

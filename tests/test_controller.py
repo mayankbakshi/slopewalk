@@ -220,3 +220,13 @@ def test_output_fallback(live, monkeypatch):
     s = explore(make("tanh3"), *xor_centres())
     assert s.controller.image not in s.controller.widgets
     assert any(isinstance(obj, IPython.display.Image) for obj in shown)
+
+
+def test_wide_layout_puts_the_controls_beside_the_picture(live):
+    s = explore(make("tanh3"), *xor_centres(), layout="wide")
+    C = s.controller
+    (row,) = C.widgets
+    column, image = row.children
+    assert isinstance(row, ipywidgets.HBox) and image is C.image and C.readout in column.children
+    assert C.eta in column.children and C.more in column.children
+    assert image.value[:8] == b"\x89PNG\r\n\x1a\n"

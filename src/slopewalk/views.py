@@ -173,7 +173,7 @@ def draw_slice(ax, S, F):
     ax.set_xlabel(names[0])
     ax.set_ylabel(names[1])
     ax.legend(fontsize=7, loc="best")
-    title = f"R over {names[0]} and {names[1]}; arrow: direction of -grad R"
+    title = f"R over {names[0]} and {names[1]}, with the direction of -grad R"
     ax.set_title(title + (f"\n{note}" if note else ""), fontsize=10)
 
 

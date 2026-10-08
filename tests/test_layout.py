@@ -136,3 +136,46 @@ def test_vectorised_placement_equals_the_original():
         new, _, _, _ = place_labels(edges, sizes, obstacles, defaults, pad=0.02)
         old = place_labels_reference(edges, sizes, obstacles, defaults, pad=0.02)
         assert np.allclose(new, old, atol=1e-12)
+
+
+def test_wide_layout_sizes(static):
+    X, y, groups = xor_centres()
+    standard = explore(make("tanh3"), X, y, groups)
+    wide = explore(make("tanh3"), X, y, groups, layout="wide")
+    assert tuple(standard.fig.get_size_inches()) == pytest.approx((15, 2 * 2.9 + 4.2))
+    assert tuple(wide.fig.get_size_inches()) == pytest.approx((24, 2.9 + 4.2))  # four panels in one row
+    tops = {round(ax.get_position().y0, 3) for ax in panels(wide.fig)}
+    assert len(tops) == 1 and len(panels(wide.fig)) == 4
+    views = explore(make("tanh3"), X, y, groups, layout="wide", views=("slice", "line", "momentum"))
+    lower = views.fig.axes[4:]
+    assert len(lower) == 6 and len({ax.get_subplotspec().rowspan.start for ax in lower}) == 1  # one row of six
+    assert explore(make("tanh3"), X, y, groups, width=18).fig.get_size_inches()[0] == 18
+    deep = explore(make("two_hidden"), X, y, groups, layout="wide")
+    assert len({round(ax.get_position().y0, 3) for ax in panels(deep.fig)}) == 2  # deep networks: two per row
+    with pytest.raises(ValueError, match="layout must be"):
+        explore(make("tanh3"), X, y, groups, layout="tall")
+    with pytest.raises(ValueError, match="width is the figure width"):
+        explore(make("tanh3"), X, y, groups, width=200)
+
+
+WIDE = {
+    "xor_wide": lambda: (make("tanh3"), *xor_centres()),
+    "relu4_wide": lambda: (make("relu4", seed=1), *xor_centres()),
+    "clusters_wide": lambda: (make("tanh3"), *xor_centres(noise=0.35)),
+}
+
+
+@pytest.mark.parametrize("name", list(WIDE))
+def test_edge_labels_do_not_overlap_in_the_wide_layout(name, static):
+    net, X, y, groups = WIDE[name]()
+    s = explore(net, X, y, groups, layout="wide")
+    for ax in panels(s.fig):
+        labels, others, glyphs = boxes_of(s.fig, ax)
+        assert len(labels) in (0, len(s.names))
+        for i, a in enumerate(labels):
+            area = (a[2] - a[0]) * (a[3] - a[1])
+            for j, b in enumerate(labels):
+                if j != i:
+                    assert overlap_area(a, b) <= 0.02 * area, (name, ax.get_title(), i, j)
+            for b in others + glyphs:
+                assert overlap_area(a, b) <= 0.05 * area, (name, ax.get_title(), i)

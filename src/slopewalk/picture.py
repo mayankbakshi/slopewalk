@@ -14,7 +14,7 @@ from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
 
 from .draw import draw_case, draw_edge_labels, draw_history, draw_input_plane, draw_slope_table
-from .layout import BOTTOM_HEIGHT, BOTTOM_PER_ROW
+from .layout import BOTTOM_HEIGHT
 from .views import VIEW_DRAWERS, VIEWS, needs_3d
 
 Frame = namedtuple("Frame", "w out R g deltas changed moving history predictions eta next_change cases lookahead")
@@ -73,9 +73,10 @@ class Picture:
         self.S = S
         D, L = S.data, S.layout
         self.panels = bottom_panels(S)
-        per_row, rows = L.per_row(), L.rows(D.G)
+        per_row, rows = L.per_row(D.G), L.rows(D.G)
         with_sd = any(sel.sum() > 1 for sel in D.gsel)  # groups of points: the boxes show mean and standard deviation
         n_bottom = L.bottom_rows(len(self.panels))
+        bottom_cols = L.bottom_per_row(len(self.panels))
         size = L.figsize(D.G, with_sd, len(self.panels))
         if pyplot:
             fig = plt.figure(figsize=size)
@@ -83,14 +84,15 @@ class Picture:
             fig = Figure(figsize=size, dpi=dpi)
             FigureCanvasAgg(fig)
         heights = [L.row_height(with_sd)] * rows + [BOTTOM_HEIGHT] * n_bottom
-        gs = fig.add_gridspec(rows + n_bottom, BOTTOM_PER_ROW, height_ratios=heights)
+        gs = fig.add_gridspec(rows + n_bottom, bottom_cols, height_ratios=heights)
         self.case_axes = []
         for c in range(D.G):
             r, cc = divmod(c, per_row)
-            self.case_axes.append(fig.add_subplot(gs[r, :] if per_row == 1 else gs[r, :].subgridspec(1, 2)[0, cc]))
+            cell = gs[r, :] if per_row == 1 else gs[r, :].subgridspec(1, per_row)[0, cc]
+            self.case_axes.append(fig.add_subplot(cell))
         self.axes = {}
         for i, name in enumerate(self.panels):
-            r, cc = divmod(i, BOTTOM_PER_ROW)
+            r, cc = divmod(i, bottom_cols)
             extra = {"projection": "3d"} if name == "hidden" and needs_3d(S) else {}
             self.axes[name] = fig.add_subplot(gs[rows + r, cc], **extra)
         if S.title:
