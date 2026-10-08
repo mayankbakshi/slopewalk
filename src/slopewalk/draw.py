@@ -510,8 +510,9 @@ def draw_slope_table(ax, S, F):
     per_block = max(TABLE_ROWS, -(-len(rows) // 2))  # at most two blocks, taller ones for many weights
     blocks = [rows[i : i + per_block] for i in range(0, len(rows), per_block)]
     n_blocks = len(blocks)
-    block_inches = ax.get_position().width * ax.figure.get_figwidth() / n_blocks
-    short = n_blocks > 1 or block_inches < 4.5  # a narrow panel (wide layout) or two blocks: short headers
+    spec = ax.get_subplotspec()  # the panel's share of the figure width, from its grid (the same for every frame)
+    share = (spec.colspan.stop - spec.colspan.start) / spec.get_gridspec().ncols if spec is not None else 1 / 3
+    short = n_blocks > 1 or ax.figure.get_figwidth() * share < 4.8  # narrow panels and two blocks: short headers
     fontsize = T.table_size if not short else max(T.table_size - 2, 8)
     headers = (
         ["w", "value", "R, +0.1", "slope"] if short else ["weight", "value", "change of R for +0.1", "slope dR/dw"]

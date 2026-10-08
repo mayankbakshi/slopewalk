@@ -39,7 +39,7 @@ Options of `explore`, all keyword-only; without them the picture is as above:
 | `slice_weights=("w10", "w11")` | the weights of the slice panel (one or two). |
 | `beta=0.9`, `lookahead=30` | momentum and the number of steps in the momentum panel. |
 | `log_scale=True` | R on a log axis. |
-| `layout="wide"`, `width=27` | for wide screens: the network panels side by side (up to four), the lower panels in one row (up to six), and the controls in a column beside the picture; `width` sets the figure width in inches. Colab shows notebooks at a fixed width, so the wide layout helps most in VS Code or JupyterLab on a large monitor. |
+| `layout="wide"`, `"standard"`, `width=27` | the default `"auto"` is wide where the sliders run in Jupyter or VS Code, and standard in Colab (whose notebooks have a fixed width) and for still pictures. Wide: the network panels side by side (up to four), the lower panels in one row (up to six), and the controls in a column beside the picture. Standard: two panels per row and the controls above the picture, with larger text on small screens. `width` sets the figure width in inches. |
 
 With the backward pass on, the widgets have buttons to step back and forth through the stages, a picker for the traced case, and a caption with the formula of the current stage. `record_backprop("backprop.gif")` writes one frame per stage.
 
@@ -59,7 +59,14 @@ With the backward pass on, the widgets have buttons to step back and forth throu
    - `hidden`: each case at its values in the last hidden layer, with the output unit's boundary (a line for two units, a plane for three);
    - `momentum`: R over the next steps of gradient descent and of momentum (each step keeps the share beta of the last one).
 
-Controls: a slider per weight (a drop-down list and one slider above 30 weights), `eta`, `gradient step` (w ← w − eta · dR/dw for every weight), `10 steps`, `reset`; a strip with R, the size of the gradient, the accuracy and the predicted and actual change of R; and a "More views" section to switch the views on and off. A slider widens its range when a step takes its weight past the end.
+Controls, in four numbered tabs, each opening with what to try:
+
+1. **By hand**: a slider per weight, grouped by unit (a drop-down list and one slider above 30 weights). A slider widens its range when a step takes its weight past the end.
+2. **Steps**: `eta`, `gradient step` (w ← w − eta · dR/dw for every weight), `10 steps` and `reset`.
+3. **Backprop**: opening the tab turns the backward pass on; `next ▶` and `◀ back` move through its stages, `trace case` chooses the case written out, and the caption gives the formula of the stage.
+4. **Views**: the extra panels, the layout (wide or standard) and their settings.
+
+Under the tabs, a status bar gives R, the size of the gradient, the accuracy, the predicted change of R for the next step and the last step's predicted and actual change, with one sentence on what the last action did (for example "You set w10 from 0.49 to 0.70: R went from 0.5680 to 0.5619, down 0.0061."). Every control has a tooltip.
 
 ## Supported networks
 

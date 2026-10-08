@@ -186,16 +186,20 @@ def test_widget_controls(monkeypatch):
     monkeypatch.setattr(IPython.display, "display", lambda *a, **k: None)
     s = explore(reference_net(40), *XOR)
     C = s.controller
-    assert C.backprop.layout.display == "none"
-    C.view_boxes["backprop"].value = True
-    assert C.backprop.layout.display is None and "backprop" in s.views
+    assert "backprop" not in s.views
+    C.tabs.selected_index = 2  # tab 3 turns the backward pass on
+    assert "backprop" in s.views and "Press next ▶" in C.message.value
     png = C.image.value
     C.bp_next.click()
     C.bp_next.click()
     assert s.backprop_step == 2 and C.image.value != png
-    assert "step 2 of 6" in C.bp_caption.value
+    assert "Stage 2 of 6" in C.bp_caption.value and "Look at the purple lines" in C.message.value
     C.bp_prev.click()
     assert s.backprop_step == 1
     C.bp_case.value = "D"
     assert s.backprop_case == 3 and any(ax.get_title(loc="left").startswith("backward pass of D") for ax in s.fig.axes)
+    C.tabs.selected_index = 0  # leaving the tab turns it off
+    assert "backprop" not in s.views and "backward pass is off" in C.message.value
+    starts_on = explore(reference_net(40), *XOR, backprop_step=3).controller
+    assert starts_on.tabs.selected_index == 2
     plt.close("all")

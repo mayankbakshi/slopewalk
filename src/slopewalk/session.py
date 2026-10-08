@@ -33,6 +33,19 @@ def check_beta(beta):
     return float(beta)
 
 
+def auto_layout():
+    """The layout of explore(layout="auto"): wide for the widgets in Jupyter or VS Code; standard in Colab (its
+    notebooks have a fixed width), for still pictures (NB_STATIC=1) and without ipywidgets."""
+    import importlib.util
+    import sys
+
+    if os.environ.get("NB_STATIC") == "1" or "google.colab" in sys.modules:
+        return "standard"
+    if importlib.util.find_spec("ipywidgets") is None:
+        return "standard"
+    return "wide"
+
+
 def as_views(views):
     """The views as a tuple in the standard order; a string may list them separated by commas."""
     if views is None:
@@ -139,6 +152,10 @@ class Session:
         if isinstance(v, str) and len(v) == 1 and 0 <= ord(v.upper()) - 65 < G:
             return ord(v.upper()) - 65
         raise ValueError(f"slopewalk: {v!r} is not a group; the groups are A to {chr(64 + G)} (or 0 to {G - 1}).")
+
+    def set_layout(self, style, width=None):
+        """Switches the layout of the picture: "standard" or "wide" (the widgets also move the controls)."""
+        self.layout = Layout(self.model.n_inputs, self.model.hidden, self.task, style=style, width=width)
 
     def weight_index(self, v):
         """The index of a weight given by its name ("w10") or its index."""
@@ -358,7 +375,7 @@ def explore(
     beta=0.9,
     lookahead=30,
     log_scale=False,
-    layout="standard",
+    layout="auto",
     width=None,
     backprop_step=0,
     backprop_case=0,
@@ -376,8 +393,10 @@ def explore(
     (R over one or two weights; slice_weights chooses them), "line" (R along the next step), "hidden" (the cases at
     their hidden values) and "momentum" (the next `lookahead` steps of gradient descent and of momentum beta).
     log_scale: R on a log axis.
-    layout: "standard", or "wide" for wide screens (network panels side by side, the lower panels in one row, and the
-    controls beside the picture); width: the figure width in inches.
+    layout: "wide" (network panels side by side, the lower panels in one row, and the controls beside the picture),
+    "standard" (two panels per row, the controls above the picture), or "auto" (the default): wide where the sliders
+    run, standard in Colab, whose notebooks have a fixed width, and for still pictures. width: the figure width in
+    inches.
     backprop_step: with the view "backprop", the stage of the backward pass drawn (0: the forward pass; a step above
     0 switches the view on); backprop_case: the group whose case the derivation follows ("A" or 0 is the first).
 
@@ -390,6 +409,8 @@ def explore(
     a still picture of the start.
     Returns a Session: step(k), reset(), save(path), record(path), weights(), history.
     """
+    if layout == "auto":
+        layout = auto_layout()
     session = Session(
         net,
         X,

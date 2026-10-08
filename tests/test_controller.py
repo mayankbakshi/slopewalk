@@ -46,20 +46,66 @@ def test_widgets_are_built(live):
     assert (sl.min, sl.max, sl.step, sl.continuous_update, sl.readout_format) == (-4, 4, 0.001, False, ".2f")
     assert C.eta.value == 0.7 and (C.eta.min, C.eta.max, C.eta.step) == (0.1, 5, 0.1)
     assert list(C.buttons) == ["gradient step", "10 steps", "reset"]
-    panel, controls, more, backprop, readout, image, out = C.widgets
-    assert backprop.layout.display == "none"  # the backward pass controls appear with its view
-    assert isinstance(panel, ipywidgets.Box) and isinstance(out, ipywidgets.Output)
-    assert list(controls.children) == [C.eta, *C.buttons.values()]
-    assert isinstance(more, ipywidgets.Accordion) and more.selected_index is None  # "More views", closed
-    assert isinstance(readout, ipywidgets.HTML) and "next step, eta 0.7" in readout.value
-    assert isinstance(image, ipywidgets.Image) and image.value[:8] == b"\x89PNG\r\n\x1a\n"
+    assert isinstance(C.tabs, ipywidgets.Tab) and C.tabs.selected_index == 0
+    assert [C.tabs.get_title(i) for i in range(4)] == ["1 · By hand", "2 · Steps", "3 · Backprop", "4 · Views"]
+    assert "Try this" in C.tabs.children[0].children[0].value and C.panel in C.tabs.children[0].children
+    assert C.eta in C.tabs.children[1].children
+    assert "Start with tab 1" in C.message.value and "next step, eta 0.7" in C.readout.value
+    assert isinstance(C.image, ipywidgets.Image) and C.image.value[:8] == b"\x89PNG\r\n\x1a\n"
+    (root,) = C.widgets  # the default layout outside Colab: the controls beside the picture
+    column, image = root.children
+    assert root.layout.flex_flow == "row" and column.layout.width == "420px"
+    assert image is C.image and C.tabs in column.children and C.status in column.children
     assert s.fig is not None and s.fig is C.picture.fig  # drawn once at the start, off pyplot
     assert s.fig not in [plt.figure(n) for n in plt.get_fignums()]
+    tooltip = getattr(C.buttons["gradient step"], "tooltip", None)
+    assert tooltip and "eta" in tooltip
+
+
+def test_standard_layout_puts_the_controls_above(live):
+    net, X, y = logistic_start()
+    C = explore(net, X, y, layout="standard").controller
+    (root,) = C.widgets
+    column, image = root.children
+    assert root.layout.flex_flow == "column" and image is C.image
+    assert list(column.children) == [C.tabs, C.status, C.out]
+
+
+def test_layout_switch(live):
+    s = explore(make("tanh3"), *xor_centres())
+    C = s.controller
+    assert C.layout_pick.value == "wide" and s.fig.get_size_inches()[0] == 27
+    C.layout_pick.value = "standard"
+    assert s.layout.style == "standard" and s.fig.get_size_inches()[0] == 15
+    assert C.root.layout.flex_flow == "column" and "Layout: standard" in C.message.value
+    C.layout_pick.value = "wide"
+    assert C.root.layout.flex_flow == "row" and s.fig.get_size_inches()[0] == 27
+
+
+def test_messages_say_what_happened(live):
+    net, X, y = logistic_start()
+    s = explore(net, X, y)
+    C = s.controller
+    C.sliders[0].value = 0.6
+    assert "You set w1 from 0.50 to 0.60: R went from 1.0032 to" in C.message.value
+    C.buttons["gradient step"].click()
+    p = s.predictions[-1]
+    assert "One gradient step with eta 1" in C.message.value
+    assert f"Predicted change {p.predicted - p.before:+.4f}, actual {p.actual - p.before:+.4f}" in C.message.value
+    C.buttons["10 steps"].click()
+    assert "10 gradient steps with eta 1" in C.message.value
+    C.buttons["reset"].click()
+    assert "Back to the start" in C.message.value and "R = 1.0032" in C.message.value
+    C.eta.value = 5.0
+    assert "eta is now 5" in C.message.value
+    C.buttons["gradient step"].click()
+    if s.history[-1] > s.history[0]:
+        assert "eta may be too large" in C.message.value
 
 
 def test_grouped_panel_headers(live):
     X, y, groups = xor_centres()
-    boxes = explore(make("tanh3"), X, y, groups).controller.widgets[0].children
+    boxes = explore(make("tanh3"), X, y, groups).controller.panel.children
     assert [b.children[0].value for b in boxes] == [
         "<b>unit 1</b>: weights for x1, x2, bias",
         "<b>unit 2</b>: weights for x1, x2, bias",
@@ -67,7 +113,7 @@ def test_grouped_panel_headers(live):
         "<b>output unit</b>: weights for h1, h2, h3, bias",
     ]
     assert [len(b.children) - 1 for b in boxes] == [3, 3, 3, 4]
-    heads = [b.children[0].value for b in explore(make("two_hidden"), X, y, groups).controller.widgets[0].children]
+    heads = [b.children[0].value for b in explore(make("two_hidden"), X, y, groups).controller.panel.children]
     assert heads[0] == "<b>layer 1, unit 1</b>: weights for x1, x2, bias"
     assert heads[3] == "<b>layer 2, unit 1</b>: weights for h1,1, h1,2, h1,3, bias"
     assert heads[-1] == "<b>output unit</b>: weights for h2,1, h2,2, bias"
@@ -77,7 +123,7 @@ def test_dropdown_above_thirty_weights(live):
     X, y, groups = xor_centres()
     C = explore(make("wide"), X, y, groups).controller
     assert len(C.sliders) == 49
-    pick, holder = C.widgets[0].children
+    pick, holder = C.panel.children
     assert isinstance(pick, ipywidgets.Dropdown) and holder.children == (C.sliders[0],)
     assert pick.options[12] == ("w13", 12)
     pick.value = 5
@@ -167,10 +213,8 @@ def test_subset_sliders_and_frozen_note(live):
     s = explore(make("tanh3"), *xor_centres(), params=["w10", "w11"])
     C = s.controller
     assert [sl.description for sl in C.sliders] == ["w10", "w11"]
-    panel = C.widgets[0]
-    boxes, note = panel.children
-    assert [b.children[0].value for b in boxes.children] == ["<b>output unit</b>: weights for h1, h2"]
-    assert "w1 to w9, w12 to w13" in note.value
+    assert [b.children[0].value for b in C.panel.children] == ["<b>output unit</b>: weights for h1, h2"]
+    assert "w1 to w9, w12 to w13" in C.frozen_note.value
     assert C.values() == s.weights() and len(C.values()) == 13
 
 
@@ -226,8 +270,8 @@ def test_output_fallback(live, monkeypatch):
 def test_wide_layout_puts_the_controls_beside_the_picture(live):
     s = explore(make("tanh3"), *xor_centres(), layout="wide")
     C = s.controller
-    (row,) = C.widgets
-    column, image = row.children
-    assert isinstance(row, ipywidgets.HBox) and image is C.image and C.readout in column.children
-    assert C.eta in column.children and C.more in column.children
+    (root,) = C.widgets
+    column, image = root.children
+    assert root.layout.flex_flow == "row" and image is C.image and C.status in column.children
+    assert C.tabs in column.children and image.layout.min_width == "0"
     assert image.value[:8] == b"\x89PNG\r\n\x1a\n"
