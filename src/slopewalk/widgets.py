@@ -201,10 +201,10 @@ class Controller:
         self.buttons["10 steps"].on_click(lambda _: self.steps(10))
         self.buttons["reset"].on_click(lambda _: self.reset())
 
-        # one box that holds the controls and the picture: side by side (wide) or one above the other (standard)
-        self.column = widgets.VBox([self.tabs, self.status] + ([] if self.use_output else [self.out]))
-        self.right = self.out if self.use_output else self.image
-        self.root = widgets.Box([self.column, self.right])
+        # one box that holds the controls and the picture; arrange() puts them in a band (wide) or a stack (standard)
+        self.band = widgets.HBox(layout=widgets.Layout(align_items="flex-start", width="100%"))
+        self.picture_box = self.out if self.use_output else self.image
+        self.root = widgets.VBox(layout=widgets.Layout(width="100%"))
         self.arrange(S.layout.style)
         self.widgets = [self.root]
         first = "Start with tab 1: drag a slider." if "backprop" not in S.views else self.stage_words()
@@ -213,17 +213,21 @@ class Controller:
     # ---------------------------------------------------------------- building
 
     def arrange(self, style):
-        """Wide: the controls in a column of 420 pixels beside the picture, which takes the rest of the row and
-        shrinks with it. Standard: the controls above the picture, both the full width."""
-        root, column, right = self.root.layout, self.column.layout, self.right.layout
+        """Wide: a band across the top with the tabs on the left and the status on the right, and the picture under
+        it at the full width. Standard: the tabs, the status and the picture one above the other."""
+        tail = [] if self.use_output else [self.out]
+        self.tabs.layout.flex, self.tabs.layout.min_width = ("1 1 auto", "0") if style == "wide" else ("", "")
+        self.status.layout.width = "380px" if style == "wide" else ""
+        self.status.layout.min_width = "380px" if style == "wide" else ""
+        self.status.layout.margin = "0 0 0 12px" if style == "wide" else ""
+        self.picture_box.layout.max_width = "100%"
+        self.picture_box.layout.width = "100%" if style == "wide" else ""
         if style == "wide":
-            root.flex_flow, root.align_items = "row", "flex-start"
-            column.width, column.min_width = "420px", "420px"
-            right.flex, right.min_width, right.max_width = "1 1 0%", "0", "100%"
+            self.band.children = [self.tabs, self.status]
+            self.root.children = [self.band, self.picture_box, *tail]
         else:
-            root.flex_flow, root.align_items = "column", "stretch"
-            column.width, column.min_width = "100%", "0"
-            right.flex, right.min_width, right.max_width = "0 0 auto", "0", "100%"
+            self.band.children = []
+            self.root.children = [self.tabs, self.status, self.picture_box, *tail]
 
     def grouped_panel(self, widgets):
         """Up to 30 sliders: one box per unit with weights that move, headed by the names of their inputs."""

@@ -52,10 +52,10 @@ def test_widgets_are_built(live):
     assert C.eta in C.tabs.children[1].children
     assert "Start with tab 1" in C.message.value and "next step, eta 0.7" in C.readout.value
     assert isinstance(C.image, ipywidgets.Image) and C.image.value[:8] == b"\x89PNG\r\n\x1a\n"
-    (root,) = C.widgets  # the default layout outside Colab: the controls beside the picture
-    column, image = root.children
-    assert root.layout.flex_flow == "row" and column.layout.width == "420px"
-    assert image is C.image and C.tabs in column.children and C.status in column.children
+    (root,) = C.widgets  # the default layout outside Colab: a band of controls above the full-width picture
+    band, image, out = root.children
+    assert list(band.children) == [C.tabs, C.status] and image is C.image and out is C.out
+    assert C.status.layout.width == "380px" and image.layout.width == "100%"
     assert s.fig is not None and s.fig is C.picture.fig  # drawn once at the start, off pyplot
     assert s.fig not in [plt.figure(n) for n in plt.get_fignums()]
     tooltip = getattr(C.buttons["gradient step"], "tooltip", None)
@@ -66,9 +66,7 @@ def test_standard_layout_puts_the_controls_above(live):
     net, X, y = logistic_start()
     C = explore(net, X, y, layout="standard").controller
     (root,) = C.widgets
-    column, image = root.children
-    assert root.layout.flex_flow == "column" and image is C.image
-    assert list(column.children) == [C.tabs, C.status, C.out]
+    assert list(root.children) == [C.tabs, C.status, C.image, C.out]
 
 
 def test_layout_switch(live):
@@ -77,9 +75,10 @@ def test_layout_switch(live):
     assert C.layout_pick.value == "wide" and s.fig.get_size_inches()[0] == 27
     C.layout_pick.value = "standard"
     assert s.layout.style == "standard" and s.fig.get_size_inches()[0] == 15
-    assert C.root.layout.flex_flow == "column" and "Layout: standard" in C.message.value
+    assert list(C.root.children)[:3] == [C.tabs, C.status, C.image] and "Layout: standard" in C.message.value
     C.layout_pick.value = "wide"
-    assert C.root.layout.flex_flow == "row" and s.fig.get_size_inches()[0] == 27
+    assert list(C.root.children)[0] is C.band and list(C.band.children) == [C.tabs, C.status]
+    assert s.fig.get_size_inches()[0] == 27
 
 
 def test_messages_say_what_happened(live):
@@ -267,11 +266,10 @@ def test_output_fallback(live, monkeypatch):
     assert any(isinstance(obj, IPython.display.Image) for obj in shown)
 
 
-def test_wide_layout_puts_the_controls_beside_the_picture(live):
+def test_wide_layout_puts_the_controls_in_a_band_above_the_picture(live):
     s = explore(make("tanh3"), *xor_centres(), layout="wide")
     C = s.controller
     (root,) = C.widgets
-    column, image = root.children
-    assert root.layout.flex_flow == "row" and image is C.image and C.status in column.children
-    assert C.tabs in column.children and image.layout.min_width == "0"
+    band, image, out = root.children
+    assert band is C.band and list(band.children) == [C.tabs, C.status] and image is C.image
     assert image.value[:8] == b"\x89PNG\r\n\x1a\n"

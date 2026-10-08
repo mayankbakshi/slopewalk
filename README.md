@@ -39,7 +39,7 @@ Options of `explore`, all keyword-only; without them the picture is as above:
 | `slice_weights=("w10", "w11")` | the weights of the slice panel (one or two). |
 | `beta=0.9`, `lookahead=30` | momentum and the number of steps in the momentum panel. |
 | `log_scale=True` | R on a log axis. |
-| `layout="wide"`, `"standard"`, `width=27` | the default `"auto"` is wide where the sliders run in Jupyter or VS Code, and standard in Colab (whose notebooks have a fixed width) and for still pictures. Wide: the network panels side by side (up to four), the lower panels in one row (up to six), and the controls in a column beside the picture. Standard: two panels per row and the controls above the picture, with larger text on small screens. `width` sets the figure width in inches. |
+| `layout="wide"`, `"standard"`, `width=27` | the default `"auto"` is wide where the sliders run in Jupyter or VS Code, and standard in Colab (whose notebooks have a fixed width) and for still pictures. Wide: a band of controls across the top (the tabs, and the status on the right), and under it the picture at the full width, with the network panels side by side (up to four) and the lower panels in one row (up to six). Standard: two panels per row and the controls above the picture, with larger text on small screens. `width` sets the figure width in inches. |
 
 With the backward pass on, the widgets have buttons to step back and forth through the stages, a picker for the traced case, and a caption with the formula of the current stage. `record_backprop("backprop.gif")` writes one frame per stage.
 
