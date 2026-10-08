@@ -51,7 +51,8 @@ def test_still_picture_for_every_architecture(name, static, capsys):
     assert "Still picture of the start" in capsys.readouterr().out
     assert len(panels(s.fig)) == 3 and len(s.fig.axes) == 3 + 3
     for ax in panels(s.fig):
-        assert len(weight_lines(ax)) == len(edge_texts(ax)) == len(s.names)
+        assert len(weight_lines(ax)) == len(s.names)
+        assert len(edge_texts(ax)) in (0, len(s.names))  # all labels, or none when they cannot be placed
     assert s.history == [s.risk(s.w0)] and s.weights() == s.w0
 
 

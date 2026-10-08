@@ -15,7 +15,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from matplotlib.patches import Rectangle
+from matplotlib.font_manager import FontProperties
+from matplotlib.patches import BoxStyle, Rectangle
 
 __version__ = "0.1.0.dev0"
 
@@ -248,6 +249,9 @@ def prepare(X, y, groups=None):
 
 BW = 0.27  # half-width of a value box; lines end this far from the centre of the box
 TABLE_ROWS = 15  # rows per column of the slope table
+LABEL_FRACTIONS = np.linspace(0.14, 0.86, 13)  # where along a line a label may sit
+LABEL_SHIFTS = (0.0, 0.8, -0.8, 1.6, -1.6, 2.4, -2.4, 3.2, -3.2, 4.0, -4.0, 4.8, -4.8)  # sideways shifts
+LABEL_TOLERANCE = 0.02  # a label may overlap other labels or the boxes by at most this fraction of its area
 
 
 class Layout:
@@ -285,12 +289,59 @@ class Layout:
     def rows(self, n_panels):
         return -(-n_panels // self.per_row())
 
-    def figsize(self, n_panels):
-        return (15, 2.9 * self.rows(n_panels) + 4.2)
+    def row_height(self, with_sd=False):
+        """Height of a panel row in inches: taller when a layer has more than 3 units (up to twice the usual),
+        and by a fifth when the boxes carry a standard deviation line (groups of points)."""
+        return 2.9 * min(2.0, max(1.0, max(self.hidden, default=1) / 3)) * (1.2 if with_sd else 1.0)
+
+    def figsize(self, n_panels, with_sd=False):
+        return (15, self.row_height(with_sd) * self.rows(n_panels) + 4.2)
 
     @staticmethod
     def table_fontsize(n_weights):
         return 9.5 if n_weights > 15 else 11
+
+
+def overlap_area(a, b):
+    """The area shared by two boxes (x0, y0, x1, y1)."""
+    w = min(a[2], b[2]) - max(a[0], b[0])
+    h = min(a[3], b[3]) - max(a[1], b[1])
+    return w * h if w > 0 and h > 0 else 0.0
+
+
+def place_labels(edges, sizes, obstacles, defaults, pad=0.0):
+    """Where each line's label goes, so that labels avoid the boxes and each other.
+
+    edges: [((x0, y0), (x1, y1)), ...]; sizes: [(width, height), ...] of the labels; obstacles: boxes
+    (x0, y0, x1, y1) to keep clear of; defaults: the preferred fraction along each edge; all in data units.
+    Greedy, edge by edge: of the fractions in LABEL_FRACTIONS, on the line or shifted to either side of it by
+    the label's height, the place with the least overlap with the obstacles and the labels placed so far wins,
+    with a slight preference for the default fraction on the line.
+    Returns (positions, boxes, worst_labels, worst_boxes): the centre of each label, its box, and the largest
+    overlap of any label with other labels and with the obstacles, as fractions of the label's own area.
+    """
+    placed, positions, worst_labels, worst_boxes = [], [], 0.0, 0.0
+    for (p0, p1), (lw, lh), t0 in zip(edges, sizes, defaults):
+        dx, dy = p1[0] - p0[0], p1[1] - p0[1]
+        length = max((dx * dx + dy * dy) ** 0.5, 1e-9)
+        nx, ny = -dy / length, dx / length  # the unit normal of the line
+        best = None
+        for t in LABEL_FRACTIONS:
+            for shift in LABEL_SHIFTS:
+                shift = shift * lh
+                cx, cy = p0[0] + t * dx + shift * nx, p0[1] + t * dy + shift * ny
+                box = (cx - lw / 2 - pad, cy - lh / 2 - pad, cx + lw / 2 + pad, cy + lh / 2 + pad)
+                with_boxes = sum(overlap_area(box, o) for o in obstacles)
+                with_labels = sum(overlap_area(box, q) for q in placed)
+                score = with_boxes + with_labels + 1e-4 * (abs(t - t0) + abs(shift))
+                if best is None or score < best[0]:
+                    best = (score, (cx, cy), box, with_labels, with_boxes)
+        _, centre, box, with_labels, with_boxes = best
+        placed.append(box)
+        positions.append(centre)
+        area = (lw + 2 * pad) * (lh + 2 * pad)
+        worst_labels, worst_boxes = max(worst_labels, with_labels / area), max(worst_boxes, with_boxes / area)
+    return positions, placed, worst_labels, worst_boxes
 
 # ------------------------ draw.py ------------------------
 
@@ -325,7 +376,10 @@ def num(m, sd, sign=True):
 
 
 def glyph(ax, xc, yc, act, m, sd, T):
-    """The activation function as a small curve; a dot at m and, for groups, a band from m - sd to m + sd."""
+    """The activation function as a small curve; a dot at m and, for groups, a band from m - sd to m + sd.
+
+    Returns the box (x0, y0, x1, y1) it occupies, including its name below.
+    """
     name, f, lim = act
     w_, h_ = 0.62, 0.5
     ax.add_patch(Rectangle((xc - w_ / 2, yc - h_ / 2), w_, h_, fc="white", ec="0.75", lw=0.8, zorder=2))
@@ -346,6 +400,85 @@ def glyph(ax, xc, yc, act, m, sd, T):
     ym = yc + 0.85 * h_ * ((f(np.clip(m, -lim, lim)) - vals.min()) / (vals.max() - vals.min()) - 0.5)
     ax.plot([fx(m)], [ym], "o", color=T.hidden, ms=4, zorder=4)
     ax.text(xc, yc - h_ / 2 - 0.04, name, fontsize=T.glyph_name_size, ha="center", va="top", color=T.curve)
+    return (xc - w_ / 2, yc - h_ / 2 - 0.16, xc + w_ / 2, yc + h_ / 2)
+
+
+def data_per_pixel(ax):
+    inv = ax.transData.inverted()
+    (x0, y0), (x1, y1) = inv.transform([(0, 0), (1, 1)])
+    return x1 - x0, y1 - y0
+
+
+def text_size(ax, renderer, text, fontsize):
+    """Width and height of a one-line text in data units of ax."""
+    if renderer is not None:
+        w, h, d = renderer.get_text_width_height_descent(text, FontProperties(size=fontsize), ismath=False)
+        h += d
+    else:  # no renderer (some backends): a rough estimate
+        px = fontsize * ax.figure.dpi / 72
+        w, h = 0.6 * px * len(text), 1.2 * px
+    sx, sy = data_per_pixel(ax)
+    return w * sx, h * sy
+
+
+def box_obstacles(ax, renderer, skip_size):
+    """The boxes of the texts drawn so far (nodes, value boxes), in data units, except texts of size skip_size."""
+    if renderer is None:
+        return []
+    inv = ax.transData.inverted()
+    boxes = []
+    for t in ax.texts:
+        patch = t.get_bbox_patch()
+        if patch is None or t.get_fontsize() == skip_size:
+            continue
+        bb = t.get_window_extent(renderer)
+        pad = (
+            (0.65 if isinstance(patch.get_boxstyle(), BoxStyle.Circle) else 0.35)
+            * t.get_fontsize()
+            * ax.figure.dpi
+            / 72
+        )
+        (x0, y0), (x1, y1) = inv.transform([(bb.x0 - pad, bb.y0 - pad), (bb.x1 + pad, bb.y1 + pad)])
+        boxes.append((x0, y0, x1, y1))
+    return boxes
+
+
+def draw_edge_labels(ax, S, edges, obstacles, w, changed):
+    """The labels on the lines: names and values for small networks, values only for larger ones, none when
+    even the values cannot be placed without overlaps (the values stay on the sliders and in the table).
+    Returns the mode used: "names", "values" or "none"."""
+    M, L, T = S.model, S.layout, S.theme
+    try:
+        renderer = ax.figure.canvas.get_renderer()
+    except AttributeError:
+        renderer = None
+    obstacles = obstacles + box_obstacles(ax, renderer, T.edge_label_size)
+    segments = [(p0, p1) for _, p0, p1, _ in edges]
+    defaults = [t0 for _, _, _, t0 in edges]
+    modes = ["names", "values"] if L.show_names(len(w)) else ["values"]
+    for mode in modes:
+        labels = [f"{M.names[k]} = {w[k]:.2f}" if mode == "names" else f"{w[k]:.2f}" for k, _, _, _ in edges]
+        sizes = [text_size(ax, renderer, s, T.edge_label_size) for s in labels]
+        positions, _, worst_labels, worst_boxes = place_labels(segments, sizes, obstacles, defaults, pad=0.02)
+        if max(worst_labels, worst_boxes) <= LABEL_TOLERANCE:
+            break
+    else:
+        return "none"
+    for (k, _, _, _), label, (cx, cy) in zip(edges, labels, positions):
+        hot = k in changed
+        ax.text(
+            cx,
+            cy,
+            label,
+            fontsize=T.edge_label_size,
+            ha="center",
+            va="center",
+            zorder=3,
+            color=T.changed if hot else (T.positive if w[k] >= 0 else T.negative_text),
+            fontweight="bold" if hot else "normal",
+            bbox=dict(boxstyle="round,pad=0.08", fc="white", ec="none", alpha=0.9),
+        )
+    return mode
 
 
 def draw_case(ax, S, out, w, c, changed):
@@ -356,7 +489,9 @@ def draw_case(ax, S, out, w, c, changed):
     mixed = bool(labs.min() != labs.max())
     col, tint = (T.mixed_colour, T.mixed_tint) if mixed else (T.class_colour[yi], T.class_tint[yi])
     arrow = dict(arrowstyle="-|>", color=T.arrow, lw=1.0, shrinkA=0, shrinkB=0)
-    show_names = L.show_names(len(w))
+    node = dict(fontsize=T.node_size, ha="center", va="center", zorder=4)
+    value = dict(fontsize=T.value_size, ha="center", va="center", zorder=5, bbox=T.value_box)
+    edges, obstacles = [], []  # edges: (k, source, target, preferred label fraction); obstacles: boxes to keep clear
     src = [(0.12, yy) for yy in L.y_inputs]
     src_x, k = 0.0, 0
     for l, layer in enumerate(M.layers):
@@ -364,89 +499,31 @@ def draw_case(ax, S, out, w, c, changed):
         tx = (L.x_a if last else L.blocks[l][0]) - BW
         tys = np.array([1.2]) if last else L.unit_ys(layer.out_features)
         bias = (src_x if l == 0 else src_x + 0.45, 2.8)
-        ax.text(
-            *bias,
-            "1",
-            fontsize=T.node_size,
-            ha="center",
-            va="center",
-            zorder=4,
-            bbox=dict(boxstyle="circle", fc="white", ec=T.node_edge),
-        )
+        ax.text(*bias, "1", bbox=dict(boxstyle="circle", fc="white", ec=T.node_edge), **node)
         sources = src + [(bias[0] + 0.1, bias[1] - 0.1)]
         ns, nt = len(sources), len(tys)
         for j, ty in enumerate(tys):
             for si, (sx, sy) in enumerate(sources):
-                hot = k in changed
-                t = L.label_fraction(si, j, ns, nt)
-                ax.plot(
-                    [sx, tx],
-                    [sy, ty],
-                    color=T.changed if hot else (T.positive if w[k] >= 0 else T.negative),
-                    lw=min(0.6 + 1.3 * abs(w[k]), 7),
-                    zorder=1,
-                    solid_capstyle="round",
-                )
-                ax.text(
-                    sx + t * (tx - sx),
-                    sy + t * (ty - sy),
-                    f"{M.names[k]} = {w[k]:.2f}" if show_names else f"{w[k]:.2f}",
-                    fontsize=T.edge_label_size,
-                    ha="center",
-                    va="center",
-                    zorder=3,
-                    color=T.changed if hot else (T.positive if w[k] >= 0 else T.negative_text),
-                    fontweight="bold" if hot else "normal",
-                    bbox=dict(boxstyle="round,pad=0.08", fc="white", ec="none", alpha=0.9),
-                )
+                edges.append((k, (sx, sy), (tx, ty), L.label_fraction(si, j, ns, nt)))
                 k += 1
         if not last:
             XZ, XG, XH = L.blocks[l]
             (zm, zs), (hm, hs) = D.stats(out.hidden[l][0], c), D.stats(out.hidden[l][1], c)
             for j, ty in enumerate(tys):
                 nm = M.unit_name(l, j)
-                ax.text(
-                    XZ,
-                    ty,
-                    f"z{nm}\n" + num(zm[j], zs[j]),
-                    fontsize=T.value_size,
-                    ha="center",
-                    va="center",
-                    zorder=5,
-                    bbox=T.value_box,
-                )
+                ax.text(XZ, ty, f"z{nm}\n" + num(zm[j], zs[j]), **value)
                 if layer.act:
                     ax.annotate("", xy=(XG - 0.31, ty), xytext=(XZ + BW, ty), arrowprops=arrow)
-                    glyph(ax, XG, ty, layer.act, zm[j], zs[j], T)
+                    obstacles.append(glyph(ax, XG, ty, layer.act, zm[j], zs[j], T))
                     ax.annotate("", xy=(XH - BW, ty), xytext=(XG + 0.31, ty), arrowprops=arrow)
                 else:
                     ax.annotate("", xy=(XH - BW, ty), xytext=(XZ + BW, ty), arrowprops=arrow)
-                ax.text(
-                    XH,
-                    ty,
-                    f"h{nm}\n" + num(hm[j], hs[j]),
-                    fontsize=T.value_size,
-                    ha="center",
-                    va="center",
-                    zorder=5,
-                    color=T.hidden,
-                    bbox=T.value_box,
-                )
+                ax.text(XH, ty, f"h{nm}\n" + num(hm[j], hs[j]), color=T.hidden, **value)
             src = [(XH + BW, ty) for ty in tys]
             src_x = XH
     xm, xs = D.stats(D.X.numpy(), c)
     for i, yy in enumerate(L.y_inputs):
-        ax.text(
-            0,
-            yy,
-            f"x{i + 1}",
-            fontsize=T.node_size,
-            ha="center",
-            va="center",
-            zorder=4,
-            color=col,
-            bbox=dict(boxstyle="circle", fc=tint, ec=col),
-        )
+        ax.text(0, yy, f"x{i + 1}", color=col, bbox=dict(boxstyle="circle", fc=tint, ec=col), **node)
         ax.text(
             -0.24,
             yy,
@@ -462,7 +539,7 @@ def draw_case(ax, S, out, w, c, changed):
         L.x_a, 1.2, "a\n" + num(am, as_), fontsize=T.node_size, ha="center", va="center", zorder=5, bbox=T.value_box
     )
     ax.annotate("", xy=(L.x_sigmoid - 0.31, 1.2), xytext=(L.x_a + BW, 1.2), arrowprops=arrow)
-    glyph(ax, L.x_sigmoid, 1.2, SIGMOID, am, as_, T)
+    obstacles.append(glyph(ax, L.x_sigmoid, 1.2, SIGMOID, am, as_, T))
     ax.annotate("", xy=(L.x_p - BW, 1.2), xytext=(L.x_sigmoid + 0.31, 1.2), arrowprops=arrow)
     ax.text(
         L.x_p,
@@ -496,6 +573,17 @@ def draw_case(ax, S, out, w, c, changed):
     ax.set_xlim(*L.xlim)
     ax.set_ylim(*L.ylim)
     ax.axis("off")
+    for k, (sx, sy), (tx, ty), _ in edges:
+        hot = k in changed
+        ax.plot(
+            [sx, tx],
+            [sy, ty],
+            color=T.changed if hot else (T.positive if w[k] >= 0 else T.negative),
+            lw=min(0.6 + 1.3 * abs(w[k]), 7),
+            zorder=1,
+            solid_capstyle="round",
+        )
+    return draw_edge_labels(ax, S, edges, obstacles, w, changed)
 
 
 def draw_input_plane(ax, S):
@@ -538,7 +626,7 @@ def draw_history(ax, history, R, T):
 
 
 def draw_slope_table(ax, S, w):
-    """A table with one row per weight: the change of R when that weight alone grows by 0.1, and the slope dR/dw.
+    """A table with one row per weight: its value, the change of R when it alone grows by 0.1, and the slope dR/dw.
 
     The row with the steepest slope is highlighted. Above 15 rows the table continues in a second block to the right.
     """
@@ -550,12 +638,16 @@ def draw_slope_table(ax, S, w):
         wk = list(w)
         wk[k] += 0.1
         deltas.append(S.risk(wk) - R0)
-    rows = [[S.model.names[k], f"{deltas[k]:+.4f}", f"{g[k]:+.3f}"] for k in range(len(w))]
+    rows = [[S.model.names[k], f"{w[k]:+.2f}", f"{deltas[k]:+.4f}", f"{g[k]:+.3f}"] for k in range(len(w))]
     steepest = int(np.argmax(np.abs(g)))
     blocks = [rows[i : i + TABLE_ROWS] for i in range(0, len(rows), TABLE_ROWS)]
     n_blocks = len(blocks)
     fontsize = T.table_size if n_blocks == 1 else max(T.table_size - 2, 8)
-    headers = ["weight", "change of R for +0.1", "slope dR/dw"] if n_blocks == 1 else ["w", "R for +0.1", "slope"]
+    headers = (
+        ["weight", "value", "change of R for +0.1", "slope dR/dw"]
+        if n_blocks == 1
+        else ["w", "value", "R, +0.1", "slope"]
+    )
     ax.set_title("Change of R when one weight grows by 0.1,\nand the slope dR/dw", fontsize=T.table_title_size)
     gap = 0.03
     width = (1 - gap * (n_blocks - 1)) / n_blocks
@@ -564,7 +656,7 @@ def draw_slope_table(ax, S, w):
         tbl = ax.table(
             cellText=block,
             colLabels=headers,
-            colWidths=[0.22, 0.44, 0.34],
+            colWidths=[0.17, 0.21, 0.36, 0.26],
             cellLoc="right",
             colLoc="center",
             bbox=[b * (width + gap), 1 - height, width, height],
@@ -591,8 +683,9 @@ def draw_figure(S, w, history):
     changed = {k for k in range(len(w)) if abs(w[k] - S.w0[k]) > 1e-9}
     out = M.forward(D.X, D.y, w)
     per_row, rows = L.per_row(), L.rows(D.G)
-    fig = plt.figure(figsize=L.figsize(D.G))
-    gs = fig.add_gridspec(rows + 1, 3, height_ratios=[1] * rows + [1.45])
+    with_sd = any(sel.sum() > 1 for sel in D.gsel)  # groups of points: the boxes show mean and standard deviation
+    fig = plt.figure(figsize=L.figsize(D.G, with_sd))
+    gs = fig.add_gridspec(rows + 1, 3, height_ratios=[L.row_height(with_sd)] * rows + [4.2])
     for c in range(D.G):
         r, cc = divmod(c, per_row)
         ax = fig.add_subplot(gs[r, :] if per_row == 1 else gs[r, :].subgridspec(1, 2)[0, cc])
