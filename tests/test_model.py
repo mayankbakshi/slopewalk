@@ -26,9 +26,10 @@ def test_parse_supported(name):
 @pytest.mark.parametrize(
     "net, fragment",
     [
-        (nn.Sequential(nn.Linear(2, 1), nn.Sigmoid()), "must end with nn.Linear(..., 1)"),
-        (nn.Sequential(nn.Linear(2, 3), nn.Tanh(), nn.Linear(3, 2)), "must end with nn.Linear(..., 1)"),
-        (nn.Sequential(), "must end with nn.Linear(..., 1)"),
+        (nn.Sequential(nn.Linear(2, 1), nn.Sigmoid()), "must end with nn.Linear, without an activation"),
+        (nn.Sequential(nn.Linear(2, 3), nn.Softmax(dim=1)), "unsupported layer Softmax"),
+        (nn.Sequential(), "must end with nn.Linear, without an activation"),
+        (nn.Sequential(nn.Linear(2, 3), nn.Tanh(), nn.Linear(3, 7)), "up to 6 classes"),
         (nn.Sequential(nn.Tanh(), nn.Linear(2, 1)), "unsupported layer Tanh()"),
         (nn.Sequential(nn.Linear(2, 3), nn.Tanh(), nn.Tanh(), nn.Linear(3, 1)), "unsupported layer Tanh()"),
         (nn.Sequential(nn.Linear(2, 3), nn.Dropout(0.1), nn.Linear(3, 1)), "unsupported layer Dropout"),

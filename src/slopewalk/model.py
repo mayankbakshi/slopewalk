@@ -21,12 +21,14 @@ ACTIVATIONS = {
 }
 SIGMOID = ACTIVATIONS[nn.Sigmoid]
 SUPPORTED = "nn.Linear with nn.Tanh, nn.ReLU or nn.Sigmoid between them"
-TASKS = ("binary", "regression")
+TASKS = ("binary", "multiclass", "regression")
+MAX_CLASSES = 6  # one colour per class in the picture
 BATCH_CELLS = 400_000  # risk_batch handles at most this many (weight vector, point) pairs at once
 
 Weight = namedtuple("Weight", "name layer unit input value")
-# hidden: [(z, h), ...] per hidden layer; a: the score (binary) or the prediction (regression); p: sigmoid(a) for
-# binary, None for regression; loss: per point
+# hidden: [(z, h), ...] per hidden layer; a: the score (binary), the scores of the classes (multiclass, n x K) or the
+# prediction (regression); p: sigmoid(a) for binary, softmax(a) for multiclass (n x K), None for regression; loss:
+# per point
 Values = namedtuple("Values", "hidden a p loss")
 
 
@@ -61,15 +63,41 @@ def parse_layers(net):
             continue
         else:
             raise ValueError(f"slopewalk: unsupported layer {m}. Use {SUPPORTED}.")
-    if not layers or layers[-1].out_features != 1 or layers[-1].act is not None:
+    if not layers or layers[-1].act is not None:
         raise ValueError(
-            "slopewalk: the network must end with nn.Linear(..., 1) (the score of class 1, or the prediction for "
-            "task='regression'), without an activation."
+            "slopewalk: the network must end with nn.Linear, without an activation: nn.Linear(..., 1) for the score "
+            "of class 1 (or the prediction for task='regression'), nn.Linear(..., K) for the scores of K classes."
+        )
+    if layers[-1].out_features > MAX_CLASSES:
+        k = layers[-1].out_features
+        raise ValueError(
+            f"slopewalk: the network ends with nn.Linear(..., {k}), the scores of {k} classes; slopewalk draws up to "
+            f"{MAX_CLASSES} classes, one colour each."
         )
     for L in layers:
         if L.linear.bias is None:
             raise ValueError(f"slopewalk: {L.linear} has no bias. Use nn.Linear with bias=True.")
     return layers
+
+
+def check_task(task, n_outputs):
+    """The task for a network with n_outputs outputs: as given, or (None) multiclass for several outputs and binary
+    for one. Raises ValueError when the task and the outputs do not fit together."""
+    if task not in (None,) + TASKS:
+        raise ValueError(f"slopewalk: task must be 'binary', 'multiclass' or 'regression', not {task!r}.")
+    if task is None:
+        return "multiclass" if n_outputs > 1 else "binary"
+    if task == "multiclass" and n_outputs == 1:
+        raise ValueError(
+            "slopewalk: task='multiclass' needs one output per class: end the network with nn.Linear(..., K) for K "
+            "classes."
+        )
+    if task != "multiclass" and n_outputs > 1:
+        raise ValueError(
+            f"slopewalk: the network has {n_outputs} outputs, one score per class, which is task='multiclass'. For "
+            f"task='{task}', end it with nn.Linear(..., 1)."
+        )
+    return task
 
 
 class Model:
@@ -78,16 +106,17 @@ class Model:
     The weights are one list in the order of their names: layer by layer, unit by unit, each unit's incoming weights
     in the order of its inputs, then its bias. For nn.Sequential(nn.Linear(2, 3), nn.Tanh(), nn.Linear(3, 1)) this
     gives w1 to w3 (unit 1), w4 to w6, w7 to w9, w10 to w12 (output weights) and w13 (output bias).
-    task: "binary" (R is the log loss, as F.binary_cross_entropy_with_logits) or "regression" (R is the mean
-    squared error, as F.mse_loss).
+    task: "binary" (one output, the score of class 1; R is the log loss, as F.binary_cross_entropy_with_logits),
+    "multiclass" (K outputs, the scores of the classes 0 to K-1; R is the cross-entropy, as F.cross_entropy) or
+    "regression" (one output, the prediction; R is the mean squared error, as F.mse_loss). None: multiclass for a
+    network with several outputs, else binary.
     """
 
-    def __init__(self, net, task="binary"):
-        if task not in TASKS:
-            raise ValueError(f"slopewalk: task must be 'binary' or 'regression', not {task!r}.")
+    def __init__(self, net, task=None):
         self.net = net
-        self.task = task
         self.layers = parse_layers(net)
+        self.n_outputs = self.layers[-1].out_features
+        self.task = check_task(task, self.n_outputs)
         self.linears = [L.linear for L in self.layers]
         tensors = [t for L in self.linears for t in (L.weight, L.bias)]
         if any(t.device.type != "cpu" for t in tensors):
@@ -120,7 +149,7 @@ class Model:
 
     def unit_title(self, layer, j):
         if layer == len(self.layers) - 1:
-            return "output unit"
+            return "output unit" if self.n_outputs == 1 else f"output unit, class {j}"
         return f"unit {j + 1}" if len(self.hidden) == 1 else f"layer {layer + 1}, unit {j + 1}"
 
     def input_labels(self, layer):
@@ -196,10 +225,17 @@ class Model:
     # ---------------------------------------------------------------- loss, values, R and slopes
 
     def loss(self, a, y, reduction="mean"):
-        """The loss of the task: log loss on the score a (binary) or squared error of the prediction a (regression)."""
+        """The loss of the task: log loss on the score a (binary), cross-entropy on the scores a (n x K, multiclass;
+        the labels y are the classes) or squared error of the prediction a (regression)."""
         if self.task == "regression":
             return F.mse_loss(a, y, reduction=reduction)
+        if self.task == "multiclass":
+            return F.cross_entropy(a, y.long(), reduction=reduction)
         return F.binary_cross_entropy_with_logits(a, y, reduction=reduction)
+
+    def scores(self, t):
+        """The network's output t (n x outputs) as the loss takes it: n x K for multiclass, else n numbers."""
+        return t if self.task == "multiclass" else t.reshape(-1)
 
     def forward(self, X, y, w=None):
         """Values at w (default: the current weights): (z, h) per hidden layer, then a, p and the loss, per point."""
@@ -212,17 +248,23 @@ class Model:
                 z = L.linear(t)
                 t = L.module(z) if L.module is not None else z
                 hidden.append((z.numpy(), t.numpy()))
-            a = self.layers[-1].linear(t).squeeze(1)
-            p = torch.sigmoid(a).numpy() if self.task == "binary" else None
+            a = self.scores(self.layers[-1].linear(t))
+            if self.task == "binary":
+                p = torch.sigmoid(a).numpy()
+            elif self.task == "multiclass":
+                p = torch.softmax(a, dim=1).numpy()
+            else:
+                p = None
             loss = self.loss(a, y, reduction="none")
         return Values(hidden, a.numpy(), p, loss.numpy())
 
     def risk(self, X, y, w=None):
-        """R: the average loss over all points (log loss for binary, squared error for regression)."""
+        """R: the average loss over all points (log loss for binary, cross-entropy for multiclass, squared error for
+        regression)."""
         if w is not None:
             self.set_weights(w)
         with torch.no_grad():
-            return float(self.loss(self.net(X).reshape(-1), y))
+            return float(self.loss(self.scores(self.net(X)), y))
 
     def slopes(self, X, y, w=None):
         """dR/dw for every weight, from R.backward(), in the order of the names.
@@ -237,7 +279,7 @@ class Model:
             p.requires_grad_(True)
         try:
             with torch.enable_grad():
-                R = self.loss(self.net(X).reshape(-1), y)
+                R = self.loss(self.scores(self.net(X)), y)
                 grads = torch.autograd.grad(R, params)
         finally:
             for p, flag in zip(params, flags):
@@ -271,7 +313,10 @@ class Model:
                     z = torch.einsum("gni,goi->gno", t, block[:, :, :m]) + block[:, None, :, m]
                     t = L.module(z) if L.module is not None else z
                     k += o * (m + 1)
-                losses = self.loss(t.reshape(G, n), y.expand(G, n), reduction="none")
+                if self.task == "multiclass":  # one row of K scores per (weight vector, point), in that order
+                    losses = self.loss(t.reshape(G * n, -1), y.repeat(G), reduction="none").reshape(G, n)
+                else:
+                    losses = self.loss(t.reshape(G, n), y.expand(G, n), reduction="none")
                 out.append(losses.mean(1))
         return torch.cat(out).numpy().astype(float)
 
@@ -295,7 +340,7 @@ class Model:
                     z.requires_grad_(True)
                 zs.append(z)
                 h = L.module(z) if L.module is not None else z
-            losses = self.loss(h.reshape(-1), y, reduction="none")
+            losses = self.loss(self.scores(h), y, reduction="none")
             deltas = torch.autograd.grad(losses.sum(), zs)
         n = X.shape[0]
         blocks = []
@@ -305,12 +350,17 @@ class Model:
         return torch.cat(blocks, dim=1).detach().numpy().astype(float)
 
     def accuracy(self, X, y, w=None):
-        """The share of cases on the correct side of the boundary (binary only)."""
+        """The share of cases classified correctly: on the correct side of the boundary (binary), or with the
+        largest score for their own class (multiclass)."""
         if w is not None:
             self.set_weights(w)
         with torch.no_grad():
-            a = self.net(X).reshape(-1)
-        return float(((a >= 0).to(y.dtype) == y).to(torch.float64).mean())
+            out = self.net(X)
+        if self.task == "multiclass":
+            right = out.argmax(1) == y.long()
+        else:
+            right = (out.reshape(-1) >= 0).to(y.dtype) == y
+        return float(right.to(torch.float64).mean())
 
 
 def weight_table(net):

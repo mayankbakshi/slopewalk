@@ -16,11 +16,27 @@ NETS = {
     "one_input": lambda: nn.Sequential(nn.Linear(1, 2), nn.Tanh(), nn.Linear(2, 1)),
     "wide": lambda: nn.Sequential(nn.Linear(2, 12), nn.Tanh(), nn.Linear(12, 1)),  # 49 weights: the drop-down panel
 }
+MULTICLASS = {  # networks with one output per class
+    "three_classes": lambda: nn.Sequential(nn.Linear(2, 3), nn.Tanh(), nn.Linear(3, 3)),
+    "softmax_only": lambda: nn.Sequential(nn.Linear(2, 4)),
+    "two_hidden_classes": lambda: nn.Sequential(
+        nn.Linear(2, 3), nn.ReLU(), nn.Linear(3, 2), nn.Tanh(), nn.Linear(2, 3)
+    ),
+    "two_outputs": lambda: nn.Sequential(nn.Linear(2, 2), nn.Sigmoid(), nn.Linear(2, 2)),
+}
 
 
 def make(name, seed=0):
     torch.manual_seed(seed)
-    return NETS[name]()
+    return {**NETS, **MULTICLASS}[name]()
+
+
+def class_points(net, n=9, seed=3):
+    """n random points with the right number of inputs, and random labels 0 to K-1 for a network with K outputs."""
+    g = torch.Generator().manual_seed(seed)
+    X = torch.randn(n, linears(net)[0].in_features, generator=g)
+    k = linears(net)[-1].out_features
+    return X, torch.randint(0, k, (n,), generator=g).float()
 
 
 def linears(net):
@@ -71,7 +87,7 @@ def case_slope_by_offset(model, X, y, k):
             source = h[:, i : i + 1] if i >= 0 else torch.ones(n, 1, dtype=model.dtype)
             z = z + (t[:, None] * source) * unit
         h = L.module(z) if L.module is not None else z
-    losses = model.loss(h.reshape(-1), y, reduction="none")
+    losses = model.loss(model.scores(h), y, reduction="none")
     (g,) = torch.autograd.grad(losses.sum(), t)
     return g.numpy()
 

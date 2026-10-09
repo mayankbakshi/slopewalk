@@ -45,12 +45,14 @@ ACTIVATIONS = {
 }
 SIGMOID = ACTIVATIONS[nn.Sigmoid]
 SUPPORTED = "nn.Linear with nn.Tanh, nn.ReLU or nn.Sigmoid between them"
-TASKS = ("binary", "regression")
+TASKS = ("binary", "multiclass", "regression")
+MAX_CLASSES = 6  # one colour per class in the picture
 BATCH_CELLS = 400_000  # risk_batch handles at most this many (weight vector, point) pairs at once
 
 Weight = namedtuple("Weight", "name layer unit input value")
-# hidden: [(z, h), ...] per hidden layer; a: the score (binary) or the prediction (regression); p: sigmoid(a) for
-# binary, None for regression; loss: per point
+# hidden: [(z, h), ...] per hidden layer; a: the score (binary), the scores of the classes (multiclass, n x K) or the
+# prediction (regression); p: sigmoid(a) for binary, softmax(a) for multiclass (n x K), None for regression; loss:
+# per point
 Values = namedtuple("Values", "hidden a p loss")
 
 
@@ -85,15 +87,41 @@ def parse_layers(net):
             continue
         else:
             raise ValueError(f"slopewalk: unsupported layer {m}. Use {SUPPORTED}.")
-    if not layers or layers[-1].out_features != 1 or layers[-1].act is not None:
+    if not layers or layers[-1].act is not None:
         raise ValueError(
-            "slopewalk: the network must end with nn.Linear(..., 1) (the score of class 1, or the prediction for "
-            "task='regression'), without an activation."
+            "slopewalk: the network must end with nn.Linear, without an activation: nn.Linear(..., 1) for the score "
+            "of class 1 (or the prediction for task='regression'), nn.Linear(..., K) for the scores of K classes."
+        )
+    if layers[-1].out_features > MAX_CLASSES:
+        k = layers[-1].out_features
+        raise ValueError(
+            f"slopewalk: the network ends with nn.Linear(..., {k}), the scores of {k} classes; slopewalk draws up to "
+            f"{MAX_CLASSES} classes, one colour each."
         )
     for L in layers:
         if L.linear.bias is None:
             raise ValueError(f"slopewalk: {L.linear} has no bias. Use nn.Linear with bias=True.")
     return layers
+
+
+def check_task(task, n_outputs):
+    """The task for a network with n_outputs outputs: as given, or (None) multiclass for several outputs and binary
+    for one. Raises ValueError when the task and the outputs do not fit together."""
+    if task not in (None,) + TASKS:
+        raise ValueError(f"slopewalk: task must be 'binary', 'multiclass' or 'regression', not {task!r}.")
+    if task is None:
+        return "multiclass" if n_outputs > 1 else "binary"
+    if task == "multiclass" and n_outputs == 1:
+        raise ValueError(
+            "slopewalk: task='multiclass' needs one output per class: end the network with nn.Linear(..., K) for K "
+            "classes."
+        )
+    if task != "multiclass" and n_outputs > 1:
+        raise ValueError(
+            f"slopewalk: the network has {n_outputs} outputs, one score per class, which is task='multiclass'. For "
+            f"task='{task}', end it with nn.Linear(..., 1)."
+        )
+    return task
 
 
 class Model:
@@ -102,16 +130,17 @@ class Model:
     The weights are one list in the order of their names: layer by layer, unit by unit, each unit's incoming weights
     in the order of its inputs, then its bias. For nn.Sequential(nn.Linear(2, 3), nn.Tanh(), nn.Linear(3, 1)) this
     gives w1 to w3 (unit 1), w4 to w6, w7 to w9, w10 to w12 (output weights) and w13 (output bias).
-    task: "binary" (R is the log loss, as F.binary_cross_entropy_with_logits) or "regression" (R is the mean
-    squared error, as F.mse_loss).
+    task: "binary" (one output, the score of class 1; R is the log loss, as F.binary_cross_entropy_with_logits),
+    "multiclass" (K outputs, the scores of the classes 0 to K-1; R is the cross-entropy, as F.cross_entropy) or
+    "regression" (one output, the prediction; R is the mean squared error, as F.mse_loss). None: multiclass for a
+    network with several outputs, else binary.
     """
 
-    def __init__(self, net, task="binary"):
-        if task not in TASKS:
-            raise ValueError(f"slopewalk: task must be 'binary' or 'regression', not {task!r}.")
+    def __init__(self, net, task=None):
         self.net = net
-        self.task = task
         self.layers = parse_layers(net)
+        self.n_outputs = self.layers[-1].out_features
+        self.task = check_task(task, self.n_outputs)
         self.linears = [L.linear for L in self.layers]
         tensors = [t for L in self.linears for t in (L.weight, L.bias)]
         if any(t.device.type != "cpu" for t in tensors):
@@ -144,7 +173,7 @@ class Model:
 
     def unit_title(self, layer, j):
         if layer == len(self.layers) - 1:
-            return "output unit"
+            return "output unit" if self.n_outputs == 1 else f"output unit, class {j}"
         return f"unit {j + 1}" if len(self.hidden) == 1 else f"layer {layer + 1}, unit {j + 1}"
 
     def input_labels(self, layer):
@@ -220,10 +249,17 @@ class Model:
     # ---------------------------------------------------------------- loss, values, R and slopes
 
     def loss(self, a, y, reduction="mean"):
-        """The loss of the task: log loss on the score a (binary) or squared error of the prediction a (regression)."""
+        """The loss of the task: log loss on the score a (binary), cross-entropy on the scores a (n x K, multiclass;
+        the labels y are the classes) or squared error of the prediction a (regression)."""
         if self.task == "regression":
             return F.mse_loss(a, y, reduction=reduction)
+        if self.task == "multiclass":
+            return F.cross_entropy(a, y.long(), reduction=reduction)
         return F.binary_cross_entropy_with_logits(a, y, reduction=reduction)
+
+    def scores(self, t):
+        """The network's output t (n x outputs) as the loss takes it: n x K for multiclass, else n numbers."""
+        return t if self.task == "multiclass" else t.reshape(-1)
 
     def forward(self, X, y, w=None):
         """Values at w (default: the current weights): (z, h) per hidden layer, then a, p and the loss, per point."""
@@ -236,17 +272,23 @@ class Model:
                 z = L.linear(t)
                 t = L.module(z) if L.module is not None else z
                 hidden.append((z.numpy(), t.numpy()))
-            a = self.layers[-1].linear(t).squeeze(1)
-            p = torch.sigmoid(a).numpy() if self.task == "binary" else None
+            a = self.scores(self.layers[-1].linear(t))
+            if self.task == "binary":
+                p = torch.sigmoid(a).numpy()
+            elif self.task == "multiclass":
+                p = torch.softmax(a, dim=1).numpy()
+            else:
+                p = None
             loss = self.loss(a, y, reduction="none")
         return Values(hidden, a.numpy(), p, loss.numpy())
 
     def risk(self, X, y, w=None):
-        """R: the average loss over all points (log loss for binary, squared error for regression)."""
+        """R: the average loss over all points (log loss for binary, cross-entropy for multiclass, squared error for
+        regression)."""
         if w is not None:
             self.set_weights(w)
         with torch.no_grad():
-            return float(self.loss(self.net(X).reshape(-1), y))
+            return float(self.loss(self.scores(self.net(X)), y))
 
     def slopes(self, X, y, w=None):
         """dR/dw for every weight, from R.backward(), in the order of the names.
@@ -261,7 +303,7 @@ class Model:
             p.requires_grad_(True)
         try:
             with torch.enable_grad():
-                R = self.loss(self.net(X).reshape(-1), y)
+                R = self.loss(self.scores(self.net(X)), y)
                 grads = torch.autograd.grad(R, params)
         finally:
             for p, flag in zip(params, flags):
@@ -295,7 +337,10 @@ class Model:
                     z = torch.einsum("gni,goi->gno", t, block[:, :, :m]) + block[:, None, :, m]
                     t = L.module(z) if L.module is not None else z
                     k += o * (m + 1)
-                losses = self.loss(t.reshape(G, n), y.expand(G, n), reduction="none")
+                if self.task == "multiclass":  # one row of K scores per (weight vector, point), in that order
+                    losses = self.loss(t.reshape(G * n, -1), y.repeat(G), reduction="none").reshape(G, n)
+                else:
+                    losses = self.loss(t.reshape(G, n), y.expand(G, n), reduction="none")
                 out.append(losses.mean(1))
         return torch.cat(out).numpy().astype(float)
 
@@ -319,7 +364,7 @@ class Model:
                     z.requires_grad_(True)
                 zs.append(z)
                 h = L.module(z) if L.module is not None else z
-            losses = self.loss(h.reshape(-1), y, reduction="none")
+            losses = self.loss(self.scores(h), y, reduction="none")
             deltas = torch.autograd.grad(losses.sum(), zs)
         n = X.shape[0]
         blocks = []
@@ -329,12 +374,17 @@ class Model:
         return torch.cat(blocks, dim=1).detach().numpy().astype(float)
 
     def accuracy(self, X, y, w=None):
-        """The share of cases on the correct side of the boundary (binary only)."""
+        """The share of cases classified correctly: on the correct side of the boundary (binary), or with the
+        largest score for their own class (multiclass)."""
         if w is not None:
             self.set_weights(w)
         with torch.no_grad():
-            a = self.net(X).reshape(-1)
-        return float(((a >= 0).to(y.dtype) == y).to(torch.float64).mean())
+            out = self.net(X)
+        if self.task == "multiclass":
+            right = out.argmax(1) == y.long()
+        else:
+            right = (out.reshape(-1) >= 0).to(y.dtype) == y
+        return float(right.to(torch.float64).mean())
 
 
 def weight_table(net):
@@ -353,8 +403,7 @@ def clusters(centers, labels, noise=0.0, n_per=50, seed=0):
     deviation noise. Returns X (n x d), y (n) and groups (n): the number of the centre of each point."""
     if len(centers) != len(labels):
         raise ValueError(
-            f"slopewalk: {len(centers)} centres but {len(labels)} labels; give one label (0 or 1) per centre, "
-            "in the same order."
+            f"slopewalk: {len(centers)} centres but {len(labels)} labels; give one label per centre, in the same order."
         )
     C = torch.tensor(centers, dtype=torch.float32)
     Y = torch.tensor(labels, dtype=torch.float32)
@@ -386,10 +435,12 @@ def sine_points(n=16, noise=0.1, seed=0):
 
 
 class Data:
-    """The points of one explore call: X (n x d), y (n), groups (n), and which points belong to each group."""
+    """The points of one explore call: X (n x d), y (n), groups (n), and which points belong to each group.
+    n_classes: 2 for binary, K for multiclass (the labels 0 to K-1), None for regression."""
 
-    def __init__(self, X, y, groups, task="binary"):
+    def __init__(self, X, y, groups, task="binary", n_classes=None):
         self.X, self.y, self.groups, self.task = X, y, groups, task
+        self.n_classes = n_classes if n_classes is not None else (2 if task == "binary" else None)
         self.n, self.d = X.shape
         self.gids = sorted(set(groups.tolist()))
         self.G = len(self.gids)
@@ -424,29 +475,43 @@ def check_finite(a, name):
         )
 
 
-def infer_task(y, task):
-    """The task: as given, or binary when every label is 0 or 1. Raises ValueError rather than guess."""
-    binary = bool(np.isin(y, (0.0, 1.0)).all())
-    if task not in (None, "binary", "regression"):
-        raise ValueError(f"slopewalk: task must be 'binary' or 'regression', not {task!r}.")
+def infer_task(y, task, n_outputs=1):
+    """The task: as given, or from the network's outputs and the labels. Raises ValueError rather than guess.
+    Several outputs: multiclass, with whole-number labels from 0 to K-1. One output: binary when every label is 0 or
+    1; regression only when asked for."""
+    task = check_task(task, n_outputs)
     if task == "regression":
         return task
-    if not binary:
-        other = y[~np.isin(y, (0.0, 1.0))][0]
+    if task == "multiclass":
+        bad = y[(y != np.round(y)) | (y < 0) | (y >= n_outputs)]
+        if len(bad):
+            raise ValueError(
+                f"slopewalk: y has the label {bad[0]:g}, but the network has {n_outputs} outputs, one per class: the "
+                f"labels must be whole numbers from 0 to {n_outputs - 1}."
+            )
+        return task
+    others = y[~np.isin(y, (0.0, 1.0))]
+    if len(others):
+        if ((y == np.round(y)) & (y >= 0)).all():
+            k = int(y.max()) + 1
+            hint = f"for {k} classes, end the network with nn.Linear(..., {k}) and use the labels 0 to {k - 1}"
+        else:
+            hint = "for K classes, end the network with nn.Linear(..., K) and use the labels 0 to K-1"
         raise ValueError(
-            f"slopewalk: y has values other than 0 and 1 (for example {other:g}). For classification the labels must "
-            "be 0 or 1; for a numerical target pass task='regression'."
+            f"slopewalk: y has values other than 0 and 1 (for example {others[0]:g}). With one output the labels "
+            f"must be 0 or 1; {hint}; for a numerical target pass task='regression'."
         )
     return "binary"
 
 
-def prepare(X, y, groups=None, n_inputs=None, dtype=torch.float32, task=None):
+def prepare(X, y, groups=None, n_inputs=None, dtype=torch.float32, task=None, n_outputs=1):
     """The checked tensors of an explore call, as a Data object.
 
     X: n points with n_inputs numbers each (a list of points, an array or a tensor). A flat X is one point, except for
-    a network with one input, where it is n points. y: n labels (0 or 1) or targets (task='regression').
-    groups None: one group per point up to 8 points; more points: one group per class (binary), or for regression
-    four groups of neighbouring points along x1 (one input) or a single group (several inputs).
+    a network with one input, where it is n points. y: n labels (0 or 1; 0 to K-1 for a network with K outputs) or
+    targets (task='regression'). groups None: one group per point up to 8 points; more points: one group per class
+    (classification), or for regression four groups of neighbouring points along x1 (one input) or a single group
+    (several inputs).
     """
     Xa = as_numbers(X, "X")
     if Xa.ndim == 0:
@@ -473,11 +538,11 @@ def prepare(X, y, groups=None, n_inputs=None, dtype=torch.float32, task=None):
         raise ValueError(f"slopewalk: y has {ya.shape[0]} values for {n} points; give one label per point.")
     check_finite(Xa, "X")
     check_finite(ya, "y")
-    task = infer_task(ya, task)
+    task = infer_task(ya, task, n_outputs)
     if groups is None:
         if n <= 8:
             ga = np.arange(n)
-        elif task == "binary":
+        elif task in ("binary", "multiclass"):
             ga = ya.astype(np.int64)
         elif d == 1:
             order = np.argsort(Xa[:, 0], kind="stable")
@@ -494,7 +559,8 @@ def prepare(X, y, groups=None, n_inputs=None, dtype=torch.float32, task=None):
         ga = g.astype(np.int64)
     Xt = torch.as_tensor(np.ascontiguousarray(Xa), dtype=dtype)  # reversed or sliced arrays need a copy
     yt = torch.as_tensor(np.ascontiguousarray(ya), dtype=dtype)
-    return Data(Xt, yt, torch.as_tensor(np.ascontiguousarray(ga), dtype=torch.int64), task)
+    n_classes = n_outputs if task == "multiclass" else None
+    return Data(Xt, yt, torch.as_tensor(np.ascontiguousarray(ga), dtype=torch.int64), task, n_classes)
 
 # ------------------------ layout.py ------------------------
 
@@ -3136,7 +3202,8 @@ class Session:
         backprop_case=0,
     ):
         self.model = Model(net)
-        self.data = prepare(X, y, groups, n_inputs=self.model.n_inputs, dtype=self.model.dtype, task=task)
+        M = self.model
+        self.data = prepare(X, y, groups, n_inputs=M.n_inputs, dtype=M.dtype, task=task, n_outputs=M.n_outputs)
         self.task = self.model.task = self.data.task
         self.layout = Layout(self.model.n_inputs, self.model.hidden, self.task, style=layout, width=width)
         self.base_theme, self.theme_name = THEMES["light"], "light"

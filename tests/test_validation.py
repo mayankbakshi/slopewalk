@@ -58,7 +58,7 @@ def test_binary_task_with_other_labels():
 @pytest.mark.parametrize(
     "kwargs, fragment",
     [
-        (dict(task="classify"), "task must be 'binary' or 'regression'"),
+        (dict(task="classify"), "task must be 'binary', 'multiclass' or 'regression'"),
         (dict(eta=0), "eta must be a positive number"),
         (dict(eta=math.nan), "eta must be a positive number"),
         (dict(beta=1.0), "beta"),

@@ -94,7 +94,8 @@ class Session:
         backprop_case=0,
     ):
         self.model = Model(net)
-        self.data = prepare(X, y, groups, n_inputs=self.model.n_inputs, dtype=self.model.dtype, task=task)
+        M = self.model
+        self.data = prepare(X, y, groups, n_inputs=M.n_inputs, dtype=M.dtype, task=task, n_outputs=M.n_outputs)
         self.task = self.model.task = self.data.task
         self.layout = Layout(self.model.n_inputs, self.model.hidden, self.task, style=layout, width=width)
         self.base_theme, self.theme_name = THEMES["light"], "light"

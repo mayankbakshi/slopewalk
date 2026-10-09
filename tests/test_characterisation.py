@@ -231,8 +231,7 @@ def test_layers_skips_identity_and_reads_the_activation():
 @pytest.mark.parametrize(
     "net, fragment",
     [
-        (nn.Sequential(nn.Linear(2, 1), nn.Sigmoid()), "end with nn.Linear(..., 1)"),
-        (nn.Sequential(nn.Linear(2, 3), nn.Tanh(), nn.Linear(3, 2)), "end with nn.Linear(..., 1)"),
+        (nn.Sequential(nn.Linear(2, 1), nn.Sigmoid()), "end with nn.Linear, without an activation"),
         (nn.Sequential(nn.Linear(2, 3), nn.Dropout(0.1), nn.Linear(3, 1)), "unsupported layer"),
         (nn.Sequential(nn.Linear(2, 3), nn.Tanh(), nn.Tanh(), nn.Linear(3, 1)), "unsupported layer"),
         (nn.Sequential(nn.Tanh(), nn.Linear(2, 1)), "unsupported layer"),

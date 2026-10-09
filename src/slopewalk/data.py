@@ -3,6 +3,8 @@
 import numpy as np
 import torch
 
+from .model import check_task
+
 XOR_CENTRES = [(-1, 1), (1, 1), (-1, -1), (1, -1)]  # A, B, C, D: top left, top right, bottom left, bottom right
 XOR_LABELS = [1, 0, 0, 1]
 REGRESSION_GROUPS = 4  # regression with more than 8 points: this many groups of neighbouring points along x1
@@ -13,8 +15,7 @@ def clusters(centers, labels, noise=0.0, n_per=50, seed=0):
     deviation noise. Returns X (n x d), y (n) and groups (n): the number of the centre of each point."""
     if len(centers) != len(labels):
         raise ValueError(
-            f"slopewalk: {len(centers)} centres but {len(labels)} labels; give one label (0 or 1) per centre, "
-            "in the same order."
+            f"slopewalk: {len(centers)} centres but {len(labels)} labels; give one label per centre, in the same order."
         )
     C = torch.tensor(centers, dtype=torch.float32)
     Y = torch.tensor(labels, dtype=torch.float32)
@@ -46,10 +47,12 @@ def sine_points(n=16, noise=0.1, seed=0):
 
 
 class Data:
-    """The points of one explore call: X (n x d), y (n), groups (n), and which points belong to each group."""
+    """The points of one explore call: X (n x d), y (n), groups (n), and which points belong to each group.
+    n_classes: 2 for binary, K for multiclass (the labels 0 to K-1), None for regression."""
 
-    def __init__(self, X, y, groups, task="binary"):
+    def __init__(self, X, y, groups, task="binary", n_classes=None):
         self.X, self.y, self.groups, self.task = X, y, groups, task
+        self.n_classes = n_classes if n_classes is not None else (2 if task == "binary" else None)
         self.n, self.d = X.shape
         self.gids = sorted(set(groups.tolist()))
         self.G = len(self.gids)
@@ -84,29 +87,43 @@ def check_finite(a, name):
         )
 
 
-def infer_task(y, task):
-    """The task: as given, or binary when every label is 0 or 1. Raises ValueError rather than guess."""
-    binary = bool(np.isin(y, (0.0, 1.0)).all())
-    if task not in (None, "binary", "regression"):
-        raise ValueError(f"slopewalk: task must be 'binary' or 'regression', not {task!r}.")
+def infer_task(y, task, n_outputs=1):
+    """The task: as given, or from the network's outputs and the labels. Raises ValueError rather than guess.
+    Several outputs: multiclass, with whole-number labels from 0 to K-1. One output: binary when every label is 0 or
+    1; regression only when asked for."""
+    task = check_task(task, n_outputs)
     if task == "regression":
         return task
-    if not binary:
-        other = y[~np.isin(y, (0.0, 1.0))][0]
+    if task == "multiclass":
+        bad = y[(y != np.round(y)) | (y < 0) | (y >= n_outputs)]
+        if len(bad):
+            raise ValueError(
+                f"slopewalk: y has the label {bad[0]:g}, but the network has {n_outputs} outputs, one per class: the "
+                f"labels must be whole numbers from 0 to {n_outputs - 1}."
+            )
+        return task
+    others = y[~np.isin(y, (0.0, 1.0))]
+    if len(others):
+        if ((y == np.round(y)) & (y >= 0)).all():
+            k = int(y.max()) + 1
+            hint = f"for {k} classes, end the network with nn.Linear(..., {k}) and use the labels 0 to {k - 1}"
+        else:
+            hint = "for K classes, end the network with nn.Linear(..., K) and use the labels 0 to K-1"
         raise ValueError(
-            f"slopewalk: y has values other than 0 and 1 (for example {other:g}). For classification the labels must "
-            "be 0 or 1; for a numerical target pass task='regression'."
+            f"slopewalk: y has values other than 0 and 1 (for example {others[0]:g}). With one output the labels "
+            f"must be 0 or 1; {hint}; for a numerical target pass task='regression'."
         )
     return "binary"
 
 
-def prepare(X, y, groups=None, n_inputs=None, dtype=torch.float32, task=None):
+def prepare(X, y, groups=None, n_inputs=None, dtype=torch.float32, task=None, n_outputs=1):
     """The checked tensors of an explore call, as a Data object.
 
     X: n points with n_inputs numbers each (a list of points, an array or a tensor). A flat X is one point, except for
-    a network with one input, where it is n points. y: n labels (0 or 1) or targets (task='regression').
-    groups None: one group per point up to 8 points; more points: one group per class (binary), or for regression
-    four groups of neighbouring points along x1 (one input) or a single group (several inputs).
+    a network with one input, where it is n points. y: n labels (0 or 1; 0 to K-1 for a network with K outputs) or
+    targets (task='regression'). groups None: one group per point up to 8 points; more points: one group per class
+    (classification), or for regression four groups of neighbouring points along x1 (one input) or a single group
+    (several inputs).
     """
     Xa = as_numbers(X, "X")
     if Xa.ndim == 0:
@@ -133,11 +150,11 @@ def prepare(X, y, groups=None, n_inputs=None, dtype=torch.float32, task=None):
         raise ValueError(f"slopewalk: y has {ya.shape[0]} values for {n} points; give one label per point.")
     check_finite(Xa, "X")
     check_finite(ya, "y")
-    task = infer_task(ya, task)
+    task = infer_task(ya, task, n_outputs)
     if groups is None:
         if n <= 8:
             ga = np.arange(n)
-        elif task == "binary":
+        elif task in ("binary", "multiclass"):
             ga = ya.astype(np.int64)
         elif d == 1:
             order = np.argsort(Xa[:, 0], kind="stable")
@@ -154,4 +171,5 @@ def prepare(X, y, groups=None, n_inputs=None, dtype=torch.float32, task=None):
         ga = g.astype(np.int64)
     Xt = torch.as_tensor(np.ascontiguousarray(Xa), dtype=dtype)  # reversed or sliced arrays need a copy
     yt = torch.as_tensor(np.ascontiguousarray(ya), dtype=dtype)
-    return Data(Xt, yt, torch.as_tensor(np.ascontiguousarray(ga), dtype=torch.int64), task)
+    n_classes = n_outputs if task == "multiclass" else None
+    return Data(Xt, yt, torch.as_tensor(np.ascontiguousarray(ga), dtype=torch.int64), task, n_classes)
