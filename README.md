@@ -41,7 +41,7 @@ Options of `explore`, all keyword-only; without them the picture is as above:
 | `log_scale=True` | R on a log axis. |
 | `layout="wide"`, `"standard"`, `width=27` | the default `"auto"` is wide where the sliders run in Jupyter or VS Code, and standard in Colab (whose notebooks have a fixed width) and for still pictures. Wide: the picture at the full width, with the network panels side by side (up to four) and the lower panels in one row (up to six), each as wide as suits it. Standard: two network panels and three lower panels per row, with larger text on small screens. `width` sets the figure width in inches. |
 
-With the backward pass on, the widgets have buttons to step back and forth through the stages, a picker for the traced case, and a caption with the formula of the current stage. `record_backprop("backprop.gif")` writes one frame per stage.
+With the backward pass on, the widgets have buttons to step back and forth through the stages and a picker for the traced case; the title of the backward-pass panel gives the formula of the current stage. `record_backprop("backprop.gif")` writes one frame per stage.
 
 `explore` returns a session: `step(k)` takes k gradient steps (the sliders follow), `step_back()` undoes the last one (and any slider move made after it), `reset()` returns to the start, `predict()` gives the first-order change of R for the next step, `lookahead()` the next steps of gradient descent and of momentum, `case_slopes()` each case's slope along every weight, `save("state.png")` writes the current picture and `record("run.gif", steps=40)` a GIF of a run. `history`, `predictions` and `path` hold R, the predicted and actual change, and the weights after each step.
 
@@ -63,7 +63,7 @@ Under the picture, the status shows R and the change of R in the last step in la
 
 Under the status are the controls: one line on what to do, a row with `eta`, `gradient step` (w ← w − eta · dR/dw for every weight), `10 steps`, `back one step` and `reset`, and a slider per weight in a column per unit (a drop-down list and one slider above 30 weights; a slider widens its range when a step takes its weight past the end). Sliders apply when they are released. The buttons are disabled while the picture is drawn, so that clicks do not pile up. Every control has a tooltip. Last comes the layout of the picture, wide or standard. Text in the controls takes the colours of the notebook's theme, light or dark. Tabs appear only for what the call asks for:
 
-1. **Backprop**, when `views` includes `"backprop"` (or `backprop_step` is above 0): `previous stage` and `next stage` move through the stages, `trace case` chooses the case written out, and the caption gives the formula of the stage.
+1. **Backprop**, when `views` includes `"backprop"` (or `backprop_step` is above 0): `previous stage` and `next stage` move through the stages (each stops at its end), and `trace case` chooses the case written out. The formula of the stage is in the title of the backward-pass panel.
 2. **Views**, when other views are asked for: a checkbox per extra panel, with their settings.
 
 Changing tabs leaves the picture as it is.
