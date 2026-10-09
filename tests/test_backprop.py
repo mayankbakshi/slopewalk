@@ -260,3 +260,30 @@ def test_names_once_in_the_backpropagation_view(static):
     plain = explore(make("logistic"), *XOR)  # outside the backpropagation view every panel keeps its names
     assert all(any(t.get_text().startswith("a\n") for t in ax.texts) for ax in network_panels(plain.fig))
     plt.close("all")
+
+
+def test_each_stage_fades_what_it_does_not_use(static):
+    """Through tanh: z, the curves, h, dl/dh and the new deltas stay; a and delta a fade. Slopes of the output weights:
+    the h boxes and delta a stay, x and z fade, and the lines of the first layer are thin and faint. The forward pass
+    fades nothing."""
+    s = explore(reference_net(40), *XOR, views="backprop", backprop_step=4)
+    ax = network_panels(s.fig)[0]
+
+    def alpha(start):
+        texts = [t for t in ax.texts if t.get_text().startswith(start)]
+        assert texts, start
+        return {t.get_alpha() for t in texts}
+
+    T = s.theme
+    assert alpha("z1") == {None} and alpha("h1") == {None} and alpha("δ1") == {None} and alpha("∂ℓ/∂h1") == {None}
+    assert alpha("a\n") == {T.faded_alpha} and alpha("δa") == {T.faded_alpha}
+    s.backprop_step = 2
+    ax = network_panels(s.draw())[0]
+    assert alpha("h1") == {None} and alpha("δa") == {None} and alpha("z1") == {T.faded_alpha}
+    lines = [ln for ln in ax.lines if ln.get_zorder() == 1]
+    first = s.model.layer_indices(0)
+    assert all(lines[k].get_alpha() == T.faded_line_alpha and lines[k].get_linewidth() == T.line_width for k in first)
+    assert all(lines[k].get_alpha() == 1.0 for k in s.model.layer_indices(1))
+    s.backprop_step = 0
+    ax = network_panels(s.draw())[0]
+    assert all(t.get_alpha() is None for t in ax.texts)

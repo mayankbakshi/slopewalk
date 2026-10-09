@@ -811,6 +811,7 @@ class Theme:
     landscape_low = "#59636E"  # R over two weights: low R in this colour, high R in paper
     spine = "#8C959F"  # the frames of the panels below the networks
     control_button, control_selected = "#EEF1F4", "#C4CBD3"  # the controls: buttons, and the chosen toggle button
+    faded_alpha, faded_line_alpha = 0.3, 0.12  # what a stage of the backward pass does not use: boxes, and lines
 
     def plane_colormap(self):
         """p for class 1 over the input plane: class 0 colour, paper at p = 0.5, class 1 colour."""
@@ -987,6 +988,32 @@ def group_style(S, c):
     return T.class_colour[yi], T.class_tint[yi], False, yi
 
 
+@contextmanager
+def tagging(ax, key):
+    """Tags the texts, patches and lines drawn in the block with what they show, for example ("z", 0) for the z boxes
+    of the first layer, so that fade() can find them."""
+    seen = {id(a) for a in [*ax.texts, *ax.patches, *ax.lines]}
+    yield
+    for a in [*ax.texts, *ax.patches, *ax.lines]:
+        if id(a) not in seen:
+            a.slopewalk_key = key
+
+
+def fade(ax, keep, T):
+    """Fades what a network panel shows but the current stage of the backward pass does not use: every tagged text,
+    box and curve whose tag is not in keep (None: nothing fades)."""
+    if keep is None:
+        return
+    for a in [*ax.texts, *ax.patches, *ax.lines]:
+        key = getattr(a, "slopewalk_key", None)
+        if key is None or key in keep:
+            continue
+        a.set_alpha(T.faded_alpha)
+        patch = a.get_bbox_patch() if hasattr(a, "get_bbox_patch") else None
+        if patch is not None:
+            patch.set_alpha(T.faded_alpha)
+
+
 def weight_colour(T, k, w):
     """The colour of a weight's line: its sign. Blue is kept for class 0; a weight moved by hand is marked by its
     label instead (its name, in bold)."""
@@ -1097,7 +1124,9 @@ def draw_case(ax, S, F, c, styles=None):
     """One copy of the network for group c: the lines with their weights, the units, the output and the loss.
 
     The labels on the lines are drawn afterwards by draw_edge_labels, once the figure's layout is fixed.
-    styles: {k: (colour or None, alpha)} overrides the lines' look (the backward pass). Returns (edges, obstacles).
+    styles: {k: (colour or None, alpha, width or None)} overrides the lines' look (the backward pass). The boxes are
+    tagged with what they show (see tagging), so that the backward pass can fade those its stage does not use.
+    Returns (edges, obstacles).
     """
     M, D, L, T = S.model, S.data, S.layout, S.theme
     out, w = F.out, F.w
@@ -1116,7 +1145,8 @@ def draw_case(ax, S, F, c, styles=None):
         tx = (L.x_a if last else L.blocks[l][0]) - BW
         tys = L.unit_ys(layer.out_features)  # one output unit sits at 1.2, the middle
         bias = (src_x if l == 0 else src_x + 0.45, 2.8)
-        ax.text(*bias, "1", bbox=dict(boxstyle="circle", fc=T.node_fill, ec=T.node_edge), **node)
+        with tagging(ax, ("bias", l)):
+            ax.text(*bias, "1", bbox=dict(boxstyle="circle", fc=T.node_fill, ec=T.node_edge), **node)
         sources = src + [(bias[0] + 0.1, bias[1] - 0.1)]
         ns, nt = len(sources), len(tys)
         for j, ty in enumerate(tys):
@@ -1129,29 +1159,33 @@ def draw_case(ax, S, F, c, styles=None):
             (zm, zs), (hm, hs) = D.stats(out.hidden[l][0], c), D.stats(out.hidden[l][1], c)
             for j, ty in enumerate(tys):
                 nm = M.unit_name(l, j)
-                ax.text(XZ, ty, tag(f"z{nm}") + num(zm[j], zs[j]), **value)
-                if layer.act:
-                    ax.annotate("", xy=(XG - 0.31, ty), xytext=(XZ + BW, ty), arrowprops=arrow)
-                    obstacles.append(glyph(ax, XG, ty, layer.act, zm[j], zs[j], T, height=glyph_height))
-                    ax.annotate("", xy=(XH - BW, ty), xytext=(XG + 0.31, ty), arrowprops=arrow)
-                else:
-                    ax.annotate("", xy=(XH - BW, ty), xytext=(XZ + BW, ty), arrowprops=arrow)
-                ax.text(XH, ty, tag(f"h{nm}") + num(hm[j], hs[j]), **h_value)
+                with tagging(ax, ("z", l)):
+                    ax.text(XZ, ty, tag(f"z{nm}") + num(zm[j], zs[j]), **value)
+                with tagging(ax, ("act", l)):
+                    if layer.act:
+                        ax.annotate("", xy=(XG - 0.31, ty), xytext=(XZ + BW, ty), arrowprops=arrow)
+                        obstacles.append(glyph(ax, XG, ty, layer.act, zm[j], zs[j], T, height=glyph_height))
+                        ax.annotate("", xy=(XH - BW, ty), xytext=(XG + 0.31, ty), arrowprops=arrow)
+                    else:
+                        ax.annotate("", xy=(XH - BW, ty), xytext=(XZ + BW, ty), arrowprops=arrow)
+                with tagging(ax, ("h", l)):
+                    ax.text(XH, ty, tag(f"h{nm}") + num(hm[j], hs[j]), **h_value)
             src = [(XH + BW, ty) for ty in tys]
             src_x = XH
     xm, xs = D.stats(D.X.numpy(), c)
-    for i, yy in enumerate(L.y_inputs):
-        ax.text(0, yy, f"x{i + 1}", bbox=dict(boxstyle="circle", fc=tint, ec=col), **node)
-        ax.text(
-            L.x_input_value,
-            yy,
-            num(xm[i], xs[i]),
-            fontsize=T.node_size,
-            ha="right",
-            va="center",
-            color=T.ink,
-            bbox=dict(boxstyle="round,pad=0.25", fc=tint, ec=col, lw=0.8),
-        )
+    with tagging(ax, ("x",)):
+        for i, yy in enumerate(L.y_inputs):
+            ax.text(0, yy, f"x{i + 1}", bbox=dict(boxstyle="circle", fc=tint, ec=col), **node)
+            ax.text(
+                L.x_input_value,
+                yy,
+                num(xm[i], xs[i]),
+                fontsize=T.node_size,
+                ha="right",
+                va="center",
+                color=T.ink,
+                bbox=dict(boxstyle="round,pad=0.25", fc=tint, ec=col, lw=0.8),
+            )
     (am, as_), (lm, _) = D.stats(out.a, c), D.stats(out.loss, c)
     npts = int(D.gsel[c].sum())
     where = "(" + ", ".join(f"{v:.1f}" for v in xm) + ")"
@@ -1162,45 +1196,46 @@ def draw_case(ax, S, F, c, styles=None):
         title = draw_classes(ax, S, F, c, tag, obstacles, arrow, (lead, change, loss_box))
     elif D.task == "regression":
         box_a = dict(fontsize=T.node_size, ha="center", va="center", zorder=5, bbox=T.value_box, color=T.ink)
-        ax.text(L.x_a, 1.2, tag("ŷ") + num(am, as_), **box_a)
+        with tagging(ax, ("a",)):
+            ax.text(L.x_a, 1.2, tag("ŷ") + num(am, as_), **box_a)
         ax.annotate("", xy=(L.x_loss - 0.42 * L.text_scale, 1.2), xytext=(L.x_a + BW, 1.2), arrowprops=arrow)
         ym, ys = D.stats(D.y.numpy(), c)
         ytxt = f"y = {ym:+.2f}" if npts == 1 else f"y {ym:+.2f}\n±{ys:.2f}"
-        ax.text(
-            L.x_loss,
-            1.2,
-            f"{ytxt}\nloss {lm:.3f}\n{change}",
-            fontsize=T.node_size,
-            ha="center",
-            va="center",
-            color=T.ink,
-            bbox=loss_box,
-        )
+        with tagging(ax, ("loss",)):
+            ax.text(
+                L.x_loss,
+                1.2,
+                f"{ytxt}\nloss {lm:.3f}\n{change}",
+                fontsize=T.node_size,
+                ha="center",
+                va="center",
+                color=T.ink,
+                bbox=loss_box,
+            )
         title = f"{lead}, y = {ym:+.2f}:  loss {lm:.3f}"
     else:
         pm, ps = D.stats(out.p, c)
         box_a = dict(fontsize=T.node_size, ha="center", va="center", zorder=5, bbox=T.value_box, color=T.ink)
-        ax.text(L.x_a, 1.2, tag("a") + num(am, as_), **box_a)
-        ax.annotate("", xy=(L.x_sigmoid - 0.31, 1.2), xytext=(L.x_a + BW, 1.2), arrowprops=arrow)
-        obstacles.append(glyph(ax, L.x_sigmoid, 1.2, SIGMOID, am, as_, T))
-        ax.annotate("", xy=(L.x_p - BW, 1.2), xytext=(L.x_sigmoid + 0.31, 1.2), arrowprops=arrow)
-        ax.text(
-            L.x_p,
-            1.2,
-            tag("p") + num(pm, ps, sign=False),
-            **box_a,
-        )
+        with tagging(ax, ("a",)):
+            ax.text(L.x_a, 1.2, tag("a") + num(am, as_), **box_a)
+        with tagging(ax, ("out_act",)):
+            ax.annotate("", xy=(L.x_sigmoid - 0.31, 1.2), xytext=(L.x_a + BW, 1.2), arrowprops=arrow)
+            obstacles.append(glyph(ax, L.x_sigmoid, 1.2, SIGMOID, am, as_, T))
+            ax.annotate("", xy=(L.x_p - BW, 1.2), xytext=(L.x_sigmoid + 0.31, 1.2), arrowprops=arrow)
+        with tagging(ax, ("p",)):
+            ax.text(L.x_p, 1.2, tag("p") + num(pm, ps, sign=False), **box_a)
         ytxt = "y mixed" if mixed else f"y = {yi}"
-        ax.text(
-            L.x_loss,
-            1.2,
-            f"{ytxt}\nloss {lm:.3f}\n{change}",
-            fontsize=T.node_size,
-            ha="center",
-            va="center",
-            color=T.ink,
-            bbox=loss_box,
-        )
+        with tagging(ax, ("loss",)):
+            ax.text(
+                L.x_loss,
+                1.2,
+                f"{ytxt}\nloss {lm:.3f}\n{change}",
+                fontsize=T.node_size,
+                ha="center",
+                va="center",
+                color=T.ink,
+                bbox=loss_box,
+            )
         what = "classes mixed" if mixed else f"class {yi}"
         title = f"{lead}, {what}:  loss {lm:.3f}"
     ax.set_title(title, fontsize=T.title_size, color=col)
@@ -1210,14 +1245,16 @@ def draw_case(ax, S, F, c, styles=None):
     for k, (sx, sy), (tx, ty), _ in edges:
         frozen = k not in F.moving
         colour, alpha = weight_colour(T, k, w), T.frozen_alpha if frozen else 1.0
+        width = min(T.line_width + T.line_slope * abs(w[k]), T.line_max)
         if styles is not None:
             colour = styles[k][0] or weight_colour(T, k, w)
             alpha = styles[k][1] * (T.frozen_alpha if frozen else 1.0)
+            width = styles[k][2] or width
         ax.plot(
             [sx, tx],
             [sy, ty],
             color=colour,
-            lw=min(T.line_width + T.line_slope * abs(w[k]), T.line_max),
+            lw=width,
             alpha=alpha,
             zorder=1,
             solid_capstyle="round",
@@ -1237,37 +1274,42 @@ def draw_classes(ax, S, F, c, tag, obstacles, arrow, parts):
     box = dict(fontsize=T.node_size, ha="center", va="center", zorder=5, bbox=T.value_box, color=T.ink)
     half = 0.31  # the softmax box: as wide as a glyph, as tall as the scores
     lo, hi = tys[-1] - 0.25, tys[0] + 0.25
-    ax.add_patch(Rectangle((L.x_sigmoid - half, lo), 2 * half, hi - lo, fc=T.glyph_fill, ec=T.glyph_edge, lw=0.8))
-    ax.text(
-        L.x_sigmoid,
-        (lo + hi) / 2,
-        "softmax",
-        rotation=90,
-        fontsize=T.glyph_name_size,
-        ha="center",
-        va="center",
-        color=T.curve,
-        zorder=3,
-    )
+    with tagging(ax, ("out_act",)):
+        ax.add_patch(Rectangle((L.x_sigmoid - half, lo), 2 * half, hi - lo, fc=T.glyph_fill, ec=T.glyph_edge, lw=0.8))
+        ax.text(
+            L.x_sigmoid,
+            (lo + hi) / 2,
+            "softmax",
+            rotation=90,
+            fontsize=T.glyph_name_size,
+            ha="center",
+            va="center",
+            color=T.curve,
+            zorder=3,
+        )
     obstacles.append((L.x_sigmoid - half, lo, L.x_sigmoid + half, hi))
     for k, ty in enumerate(tys):
-        ax.text(L.x_a, ty, tag(f"a{k}") + num(am[k], as_[k]), **box)
-        ax.annotate("", xy=(L.x_sigmoid - half, ty), xytext=(L.x_a + BW, ty), arrowprops=arrow)
-        ax.annotate("", xy=(L.x_p - BW, ty), xytext=(L.x_sigmoid + half, ty), arrowprops=arrow)
+        with tagging(ax, ("a",)):
+            ax.text(L.x_a, ty, tag(f"a{k}") + num(am[k], as_[k]), **box)
+        with tagging(ax, ("out_act",)):
+            ax.annotate("", xy=(L.x_sigmoid - half, ty), xytext=(L.x_a + BW, ty), arrowprops=arrow)
+            ax.annotate("", xy=(L.x_p - BW, ty), xytext=(L.x_sigmoid + half, ty), arrowprops=arrow)
         own = not mixed and k == yi
         style = dict(box, bbox=dict(T.value_box, fc=tint, ec=col, lw=1.6)) if own else box
-        ax.text(L.x_p, ty, tag(f"p{k}") + num(pm[k], ps[k], sign=False), **style)
+        with tagging(ax, ("p",)):
+            ax.text(L.x_p, ty, tag(f"p{k}") + num(pm[k], ps[k], sign=False), **style)
     ytxt = "y mixed" if mixed else f"y = {yi}"
-    ax.text(
-        L.x_loss,
-        1.2,
-        f"{ytxt}\nloss {lm:.3f}\n{change}",
-        fontsize=T.node_size,
-        ha="center",
-        va="center",
-        color=T.ink,
-        bbox=loss_box,
-    )
+    with tagging(ax, ("loss",)):
+        ax.text(
+            L.x_loss,
+            1.2,
+            f"{ytxt}\nloss {lm:.3f}\n{change}",
+            fontsize=T.node_size,
+            ha="center",
+            va="center",
+            color=T.ink,
+            bbox=loss_box,
+        )
     what = "classes mixed" if mixed else f"class {yi}"
     return f"{lead}, {what}:  loss {lm:.3f}"
 
@@ -2224,23 +2266,53 @@ def stage_index(S):
 
 
 def line_styles(S, F):
-    """Colour and opacity of each weight's line at the current stage, or None for the usual drawing."""
+    """Colour, opacity and width of each weight's line at the current stage, or None for the usual drawing. The
+    lines the stage does not use are thin and faint, in the weight's own colour."""
     st = F.stage
     if st is None or st.kind == "forward":
         return None
     M, T = S.model, S.theme
-    styles = {k: (None, 0.25) for k in range(M.n_weights)}  # faint, in the weight's own colour
+    styles = {k: (None, T.faded_line_alpha, T.line_width) for k in range(M.n_weights)}
     if st.kind == "weights":
         for k in M.layer_indices(st.layer):
-            styles[k] = (T.backprop_colour, 1.0)
+            styles[k] = (T.backprop_colour, 1.0, None)
     elif st.kind == "average":
         for k in styles:
-            styles[k] = (T.backprop_colour, 1.0)
+            styles[k] = (T.backprop_colour, 1.0, None)
     elif st.kind == "to_h":
         for k in M.layer_indices(st.layer + 1):
             if M.where[k][2] >= 0:  # not the bias
-                styles[k] = (None, 1.0)
+                styles[k] = (None, 1.0, None)
     return styles
+
+
+def focus(S, F):
+    """The boxes the current stage works with, as the tags of draw_case and overlay; the others are faded. None at
+    the forward pass and outside the backward pass.
+
+    output: a, p and y give δa. Slopes of layer l: δ of its units times their inputs (x, or the h before). Back to h:
+    the δ of the next units and the weights to them give ∂ℓ/∂h. Through the activation: z, its curve and ∂ℓ/∂h give δ.
+    Average: the slopes on the lines, no box."""
+    st = F.stage
+    if st is None or st.kind == "forward":
+        return None
+    last = len(S.model.layers) - 1
+
+    def units(l):  # where the δ of layer l is drawn: under its z boxes, or under a for the output
+        return {("a",), ("δa",)} if l == last else {("z", l), ("δ", l)}
+
+    if st.kind == "output":
+        return {("a",), ("out_act",), ("p",), ("loss",), ("δa",)}
+    if st.kind == "weights":
+        l = st.layer
+        return units(l) | ({("x",)} if l == 0 else {("h", l - 1)}) | {("bias", l)}
+    if st.kind == "to_h":
+        l = st.layer
+        return units(l + 1) | {("h", l), ("dh", l)}
+    if st.kind == "delta":
+        l = st.layer
+        return {("z", l), ("act", l), ("h", l), ("dh", l), ("δ", l)}
+    return set()
 
 
 def shared_labels(F):
@@ -2324,21 +2396,23 @@ def overlay(ax, S, F, c, edges):
     tag = (lambda name: f"{name}\n") if c == 0 else (lambda name: "")  # the names once, in panel A
     for s in reached:
         if s.kind == "output":  # under each score: one box, or one per class
-            for k, ty in enumerate(L.unit_ys(M.n_outputs)):
-                m, sd = D.stats(bp.delta[-1][:, k], c)
-                box(ax, L.x_a, ty, tag("δa" if M.n_outputs == 1 else f"δa{k}") + num(m, sd), T)
+            with tagging(ax, ("δa",)):
+                for k, ty in enumerate(L.unit_ys(M.n_outputs)):
+                    m, sd = D.stats(bp.delta[-1][:, k], c)
+                    box(ax, L.x_a, ty, tag("δa" if M.n_outputs == 1 else f"δa{k}") + num(m, sd), T)
         elif s.kind in ("to_h", "delta"):
             l = s.layer
             XZ, XG, XH = L.blocks[l]
             tys = L.unit_ys(M.layers[l].out_features)
             values = bp.dh[l] if s.kind == "to_h" else bp.delta[l]
-            for j, ty in enumerate(tys):
-                m, sd = D.stats(values[:, j], c)
-                nm = M.unit_name(l, j)
-                if s.kind == "to_h":
-                    box(ax, XH, ty, tag(f"∂ℓ/∂h{nm}") + num(m, sd), T)
-                else:
-                    box(ax, XZ, ty, tag(f"δ{nm}") + num(m, sd), T)
+            with tagging(ax, ("dh", l) if s.kind == "to_h" else ("δ", l)):
+                for j, ty in enumerate(tys):
+                    m, sd = D.stats(values[:, j], c)
+                    nm = M.unit_name(l, j)
+                    if s.kind == "to_h":
+                        box(ax, XH, ty, tag(f"∂ℓ/∂h{nm}") + num(m, sd), T)
+                    else:
+                        box(ax, XZ, ty, tag(f"δ{nm}") + num(m, sd), T)
     if st.kind == "delta" and M.layers[st.layer].act:
         l = st.layer
         XZ, XG, XH = L.blocks[l]
@@ -2640,8 +2714,10 @@ class Picture:
                 ax.clear()
         styles = line_styles(S, F)
         parts = [draw_case(ax, S, F, c, styles) for c, ax in enumerate(self.case_axes)]
+        keep = focus(S, F)  # the backward pass fades what its stage does not use
         for c, (ax, (edges, _)) in enumerate(zip(self.case_axes, parts)):
             overlay(ax, S, F, c, edges)
+            fade(ax, keep, S.theme)
         draw_input_plane(self.axes["plane"], S, F)
         draw_history(self.axes["history"], S, F)
         draw_slope_table(self.axes["table"], S, F)

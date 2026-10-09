@@ -13,7 +13,16 @@ import numpy as np
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
 
-from .backprop import backward_pass, draw_derivation, label_spec, line_styles, overlay, shared_labels, stage_index
+from .backprop import (
+    backward_pass,
+    draw_derivation,
+    focus,
+    label_spec,
+    line_styles,
+    overlay,
+    shared_labels,
+    stage_index,
+)
 from .draw import (
     draw_case,
     draw_edge_labels,
@@ -21,6 +30,7 @@ from .draw import (
     draw_input_plane,
     draw_shared_note,
     draw_slope_table,
+    fade,
     style_panel,
 )
 from .layout import BOTTOM_HEIGHT, NET_GAP, PANEL_GAP
@@ -133,8 +143,10 @@ class Picture:
                 ax.clear()
         styles = line_styles(S, F)
         parts = [draw_case(ax, S, F, c, styles) for c, ax in enumerate(self.case_axes)]
+        keep = focus(S, F)  # the backward pass fades what its stage does not use
         for c, (ax, (edges, _)) in enumerate(zip(self.case_axes, parts)):
             overlay(ax, S, F, c, edges)
+            fade(ax, keep, S.theme)
         draw_input_plane(self.axes["plane"], S, F)
         draw_history(self.axes["history"], S, F)
         draw_slope_table(self.axes["table"], S, F)

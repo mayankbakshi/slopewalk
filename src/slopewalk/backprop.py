@@ -14,7 +14,7 @@ import torch
 import torch.nn as nn
 from matplotlib.font_manager import FontProperties
 
-from .draw import get_renderer, letter, num, width_share
+from .draw import get_renderer, letter, num, tagging, width_share
 from .layout import PANEL_GAP
 
 Stage = namedtuple("Stage", "kind layer text")  # kind: forward, output, weights, to_h, delta, average
@@ -138,23 +138,53 @@ def stage_index(S):
 
 
 def line_styles(S, F):
-    """Colour and opacity of each weight's line at the current stage, or None for the usual drawing."""
+    """Colour, opacity and width of each weight's line at the current stage, or None for the usual drawing. The
+    lines the stage does not use are thin and faint, in the weight's own colour."""
     st = F.stage
     if st is None or st.kind == "forward":
         return None
     M, T = S.model, S.theme
-    styles = {k: (None, 0.25) for k in range(M.n_weights)}  # faint, in the weight's own colour
+    styles = {k: (None, T.faded_line_alpha, T.line_width) for k in range(M.n_weights)}
     if st.kind == "weights":
         for k in M.layer_indices(st.layer):
-            styles[k] = (T.backprop_colour, 1.0)
+            styles[k] = (T.backprop_colour, 1.0, None)
     elif st.kind == "average":
         for k in styles:
-            styles[k] = (T.backprop_colour, 1.0)
+            styles[k] = (T.backprop_colour, 1.0, None)
     elif st.kind == "to_h":
         for k in M.layer_indices(st.layer + 1):
             if M.where[k][2] >= 0:  # not the bias
-                styles[k] = (None, 1.0)
+                styles[k] = (None, 1.0, None)
     return styles
+
+
+def focus(S, F):
+    """The boxes the current stage works with, as the tags of draw_case and overlay; the others are faded. None at
+    the forward pass and outside the backward pass.
+
+    output: a, p and y give δa. Slopes of layer l: δ of its units times their inputs (x, or the h before). Back to h:
+    the δ of the next units and the weights to them give ∂ℓ/∂h. Through the activation: z, its curve and ∂ℓ/∂h give δ.
+    Average: the slopes on the lines, no box."""
+    st = F.stage
+    if st is None or st.kind == "forward":
+        return None
+    last = len(S.model.layers) - 1
+
+    def units(l):  # where the δ of layer l is drawn: under its z boxes, or under a for the output
+        return {("a",), ("δa",)} if l == last else {("z", l), ("δ", l)}
+
+    if st.kind == "output":
+        return {("a",), ("out_act",), ("p",), ("loss",), ("δa",)}
+    if st.kind == "weights":
+        l = st.layer
+        return units(l) | ({("x",)} if l == 0 else {("h", l - 1)}) | {("bias", l)}
+    if st.kind == "to_h":
+        l = st.layer
+        return units(l + 1) | {("h", l), ("dh", l)}
+    if st.kind == "delta":
+        l = st.layer
+        return {("z", l), ("act", l), ("h", l), ("dh", l), ("δ", l)}
+    return set()
 
 
 def shared_labels(F):
@@ -238,21 +268,23 @@ def overlay(ax, S, F, c, edges):
     tag = (lambda name: f"{name}\n") if c == 0 else (lambda name: "")  # the names once, in panel A
     for s in reached:
         if s.kind == "output":  # under each score: one box, or one per class
-            for k, ty in enumerate(L.unit_ys(M.n_outputs)):
-                m, sd = D.stats(bp.delta[-1][:, k], c)
-                box(ax, L.x_a, ty, tag("δa" if M.n_outputs == 1 else f"δa{k}") + num(m, sd), T)
+            with tagging(ax, ("δa",)):
+                for k, ty in enumerate(L.unit_ys(M.n_outputs)):
+                    m, sd = D.stats(bp.delta[-1][:, k], c)
+                    box(ax, L.x_a, ty, tag("δa" if M.n_outputs == 1 else f"δa{k}") + num(m, sd), T)
         elif s.kind in ("to_h", "delta"):
             l = s.layer
             XZ, XG, XH = L.blocks[l]
             tys = L.unit_ys(M.layers[l].out_features)
             values = bp.dh[l] if s.kind == "to_h" else bp.delta[l]
-            for j, ty in enumerate(tys):
-                m, sd = D.stats(values[:, j], c)
-                nm = M.unit_name(l, j)
-                if s.kind == "to_h":
-                    box(ax, XH, ty, tag(f"∂ℓ/∂h{nm}") + num(m, sd), T)
-                else:
-                    box(ax, XZ, ty, tag(f"δ{nm}") + num(m, sd), T)
+            with tagging(ax, ("dh", l) if s.kind == "to_h" else ("δ", l)):
+                for j, ty in enumerate(tys):
+                    m, sd = D.stats(values[:, j], c)
+                    nm = M.unit_name(l, j)
+                    if s.kind == "to_h":
+                        box(ax, XH, ty, tag(f"∂ℓ/∂h{nm}") + num(m, sd), T)
+                    else:
+                        box(ax, XZ, ty, tag(f"δ{nm}") + num(m, sd), T)
     if st.kind == "delta" and M.layers[st.layer].act:
         l = st.layer
         XZ, XG, XH = L.blocks[l]
