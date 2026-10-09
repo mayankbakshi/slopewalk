@@ -57,3 +57,10 @@ def test_stats_mean_and_population_sd():
     assert m == pytest.approx(3.0) and sd == pytest.approx(np.std([1.0, 2.0, 6.0]))  # ddof 0
     m1, sd1 = D.stats(arr, 1)
     assert m1 == 5.0 and sd1 == 0.0
+
+
+def test_clusters_needs_a_label_per_centre():
+    with pytest.raises(ValueError, match="5 centres but 4 labels; give one label"):
+        clusters([(-1, 1), (1, 1), (-1, -1), (1, -1), (0, 0)], [1, 0, 0, 1])
+    X, y, groups = clusters([(-1, 1), (1, 1), (-1, -1), (1, -1), (0, 0)], [1, 0, 0, 1, 0], noise=0.35, n_per=10)
+    assert X.shape == (50, 2) and y.shape == (50,) and int(groups.max()) == 4

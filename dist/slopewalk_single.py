@@ -351,6 +351,11 @@ REGRESSION_GROUPS = 4  # regression with more than 8 points: this many groups of
 def clusters(centers, labels, noise=0.0, n_per=50, seed=0):
     """Points for explore: the centres themselves (noise = 0), or n_per points around each centre, with standard
     deviation noise. Returns X (n x d), y (n) and groups (n): the number of the centre of each point."""
+    if len(centers) != len(labels):
+        raise ValueError(
+            f"slopewalk: {len(centers)} centres but {len(labels)} labels; give one label (0 or 1) per centre, "
+            "in the same order."
+        )
     C = torch.tensor(centers, dtype=torch.float32)
     Y = torch.tensor(labels, dtype=torch.float32)
     if noise > 0:
