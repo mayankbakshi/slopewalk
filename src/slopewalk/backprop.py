@@ -332,11 +332,13 @@ def derivation_lines(S, F, i):
                     d = bp.delta[l + 1][i, 0]
                     product = f"{Wn[0, j]:+.3f} × {factor(d)} = {bp.dh[l][i, j]:+.3f}"
                     out.append((s_idx, f"∂ℓ/∂h{nm} = {M.names[k]} × δ{unit} = {product}"))
-                else:
-                    terms = " + ".join(
-                        f"{Wn[q, j]:+.2f} × {factor(bp.delta[l + 1][i, q])}" for q in range(nxt.out_features)
-                    )
-                    out.append((s_idx, f"∂ℓ/∂h{nm} = {terms} = {bp.dh[l][i, j]:+.3f}"))
+                else:  # a sum over the next units, two terms to a line so that the lines fit their column
+                    terms = [f"{Wn[q, j]:+.2f} × {factor(bp.delta[l + 1][i, q])}" for q in range(nxt.out_features)]
+                    parts = [" + ".join(terms[q : q + 2]) for q in range(0, len(terms), 2)]
+                    parts[0] = f"∂ℓ/∂h{nm} = {parts[0]}"
+                    parts[1:] = [f"      + {part}" for part in parts[1:]]
+                    parts[-1] += f" = {bp.dh[l][i, j]:+.3f}"
+                    out += [(s_idx, part) for part in parts]
         elif st.kind == "delta":
             l = st.layer
             act = act_name(S.model, l)

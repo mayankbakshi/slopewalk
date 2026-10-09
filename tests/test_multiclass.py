@@ -327,3 +327,23 @@ def test_controls(monkeypatch):
     assert "Under each score ak, the purple box is δak = pk - yk" in C.message.value
     C.buttons["gradient step"].click()
     assert len(s.history) == 2 and s.history[1] < s.history[0]
+
+
+@pytest.mark.parametrize("style", ["wide", "standard"])
+def test_worked_example_lines_fit_their_column(style, static):
+    """Sums over three or more next units go two terms to a line, so that every line of the Worked example stays in
+    its column (the owner's wide call with the slice beside it)."""
+    from slopewalk import explore
+
+    s = explore(make("three_classes"), *five_centres(), layout=style, views=("backprop", "slice"), backprop_step=3)
+    fig = s.fig
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    ax = [a for a in fig.axes if any(t.get_text() == "Worked example" for t in a.texts)][0]
+    panel = ax.get_window_extent(renderer)
+    texts = [t for t in ax.texts if t.get_text() != "Worked example" and not t.get_text().startswith(":")]
+    assert any(t.get_text().startswith("      + ") for t in texts)  # a continued sum
+    for t in texts:
+        box = t.get_window_extent(renderer)
+        first = box.x0 < panel.x0 + 0.5 * panel.width - 1
+        assert box.x1 <= panel.x0 + (0.5 if first else 1.0) * panel.width + 1, t.get_text()
