@@ -39,7 +39,7 @@ Options of `explore`, all keyword-only; without them the picture is as above:
 | `slice_weights=("w10", "w11")` | the weights of the slice panel (one or two). |
 | `beta=0.9`, `lookahead=30` | momentum and the number of steps in the momentum panel. |
 | `log_scale=True` | R on a log axis. |
-| `layout="wide"`, `"standard"`, `width=27` | the default `"auto"` is wide where the sliders run in Jupyter or VS Code, and standard in Colab (whose notebooks have a fixed width) and for still pictures. Wide: a band of controls across the top (the tabs, and the status on the right), and under it the picture at the full width, with the network panels side by side (up to four) and the lower panels in one row (up to six). Standard: two panels per row and the controls above the picture, with larger text on small screens. `width` sets the figure width in inches. |
+| `layout="wide"`, `"standard"`, `width=27` | the default `"auto"` is wide where the sliders run in Jupyter or VS Code, and standard in Colab (whose notebooks have a fixed width) and for still pictures. Wide: the picture at the full width, with the network panels side by side (up to four) and the lower panels in one row (up to six), each as wide as suits it. Standard: two network panels and three lower panels per row, with larger text on small screens. `width` sets the figure width in inches. |
 
 With the backward pass on, the widgets have buttons to step back and forth through the stages, a picker for the traced case, and a caption with the formula of the current stage. `record_backprop("backprop.gif")` writes one frame per stage.
 
@@ -59,12 +59,14 @@ With the backward pass on, the widgets have buttons to step back and forth throu
    - `hidden`: each case at its values in the last hidden layer, with the output unit's boundary (a line for two units, a plane for three);
    - `momentum`: R over the next steps of gradient descent and of momentum (each step keeps the share beta of the last one).
 
-Controls: one panel opening with what to try, a slider per weight grouped by unit (a drop-down list and one slider above 30 weights; a slider widens its range when a step takes its weight past the end), `eta`, `gradient step` (w ← w − eta · dR/dw for every weight), `10 steps` and `reset`. Tabs appear only for what the call asks for:
+Under the picture, a status line gives R, the size of the gradient, the accuracy, the predicted change of R for the next step and the last step's predicted and actual change, with one sentence on what the last action did (for example "w10 changed from 0.49 to 0.70: R went from 0.5680 to 0.5619, down 0.0061.").
 
-1. **Backprop**, when `views` includes `"backprop"` (or `backprop_step` is above 0): `next ▶` and `◀ back` move through the stages, `trace case` chooses the case written out, and the caption gives the formula of the stage. Leaving the tab turns the backward pass off; coming back turns it on.
+Under the status line are the controls: one line on what to do, a row with `eta`, `gradient step` (w ← w − eta · dR/dw for every weight), `10 steps`, `reset` and the layout switch, and a slider per weight in a column per unit (a drop-down list and one slider above 30 weights; a slider widens its range when a step takes its weight past the end). Every control has a tooltip. Tabs appear only for what the call asks for:
+
+1. **Backprop**, when `views` includes `"backprop"` (or `backprop_step` is above 0): `previous stage` and `next stage` move through the stages, `trace case` chooses the case written out, and the caption gives the formula of the stage.
 2. **Views**, when other views are asked for: a checkbox per extra panel, with their settings.
 
-Beside or under the controls, a status bar gives R, the size of the gradient, the accuracy, the predicted change of R for the next step and the last step's predicted and actual change, with one sentence on what the last action did (for example "You set w10 from 0.49 to 0.70: R went from 0.5680 to 0.5619, down 0.0061."). Every control has a tooltip, and a switch changes between the wide and the standard layout.
+Changing tabs leaves the picture as it is.
 
 ## Supported networks
 

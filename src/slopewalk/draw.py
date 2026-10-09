@@ -495,6 +495,17 @@ def draw_history(ax, S, F):
 # ---------------------------------------------------------------- the slope table
 
 
+def width_share(ax):
+    """The panel's share of the width of its row, from the width ratios of its grid: the same for every frame,
+    before and after the layout."""
+    spec = ax.get_subplotspec()
+    if spec is None:
+        return 1 / 3
+    grid = spec.get_gridspec()
+    ratios = list(grid.get_width_ratios() or [1] * grid.ncols)
+    return sum(ratios[spec.colspan.start : spec.colspan.stop]) / sum(ratios)
+
+
 def draw_slope_table(ax, S, F):
     """A table with one row per weight: its value, the change of R when it alone grows by 0.1, and the slope dR/dw.
 
@@ -510,8 +521,7 @@ def draw_slope_table(ax, S, F):
     per_block = max(TABLE_ROWS, -(-len(rows) // 2))  # at most two blocks, taller ones for many weights
     blocks = [rows[i : i + per_block] for i in range(0, len(rows), per_block)]
     n_blocks = len(blocks)
-    spec = ax.get_subplotspec()  # the panel's share of the figure width, from its grid (the same for every frame)
-    share = (spec.colspan.stop - spec.colspan.start) / spec.get_gridspec().ncols if spec is not None else 1 / 3
+    share = width_share(ax)
     short = n_blocks > 1 or ax.figure.get_figwidth() * share < 4.8  # narrow panels and two blocks: short headers
     fontsize = T.table_size if not short else max(T.table_size - 2, 8)
     headers = (

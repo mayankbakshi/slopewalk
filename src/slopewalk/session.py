@@ -393,10 +393,9 @@ def explore(
     (R over one or two weights; slice_weights chooses them), "line" (R along the next step), "hidden" (the cases at
     their hidden values) and "momentum" (the next `lookahead` steps of gradient descent and of momentum beta).
     log_scale: R on a log axis.
-    layout: "wide" (network panels side by side, the lower panels in one row, and the controls beside the picture),
-    "standard" (two panels per row, the controls above the picture), or "auto" (the default): wide where the sliders
-    run, standard in Colab, whose notebooks have a fixed width, and for still pictures. width: the figure width in
-    inches.
+    layout: "wide" (network panels side by side and the lower panels in one row), "standard" (two network panels per
+    row), or "auto" (the default): wide where the sliders run, standard in Colab, whose notebooks have a fixed width,
+    and for still pictures. The controls are under the picture in both. width: the figure width in inches.
     backprop_step: with the view "backprop", the stage of the backward pass drawn (0: the forward pass; a step above
     0 switches the view on); backprop_case: the group whose case the derivation follows ("A" or 0 is the first).
 

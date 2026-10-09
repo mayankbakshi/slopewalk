@@ -47,27 +47,30 @@ def test_widgets_are_built(live):
     assert C.eta.value == 0.7 and (C.eta.min, C.eta.max, C.eta.step) == (0.1, 5, 0.1)
     assert list(C.buttons) == ["gradient step", "10 steps", "reset"]
     assert C.tabs is None  # no tabs unless the call asks for the backward pass or for extra views
-    assert (
-        "Try this" in C.controls.children[0].value and C.panel in C.controls.children and C.eta in C.controls.children
-    )
-    assert "Start here" in C.message.value and "next step, eta 0.7" in C.readout.value
-    assert C.layout_pick in C.status.children
+    hint, row, panel, frozen = C.controls.children
+    assert "Press gradient step" in hint.value and panel is C.panel and frozen is C.frozen_note
+    assert list(row.children) == [C.eta, *C.buttons.values(), C.layout_box]  # eta, the steps and the layout in a row
+    assert C.layout_pick in C.layout_box.children
+    assert "At the start: R = 1.0032." in C.message.value and "next step, eta 0.7" in C.readout.value
     assert isinstance(C.image, ipywidgets.Image) and C.image.value[:8] == b"\x89PNG\r\n\x1a\n"
-    (root,) = C.widgets  # the default layout outside Colab: a band of controls above the full-width picture
-    band, image, out = root.children
-    assert list(band.children) == [C.controls, C.status] and image is C.image and out is C.out
-    assert C.status.layout.width == "380px" and image.layout.width == "100%"
+    (root,) = C.widgets  # the picture first, then the status line, then the controls
+    assert list(root.children) == [C.image, C.status, C.controls, C.out]
+    assert list(C.status.children) == [C.readout, C.message]
+    assert C.image.layout.width == "100%"  # the default layout outside Colab is wide: the picture at the full width
+    for html in (C.message.value, C.readout.value, hint.value):
+        assert "border-left" not in html and "border-radius" not in html and "Try this" not in html
     assert s.fig is not None and s.fig is C.picture.fig  # drawn once at the start, off pyplot
     assert s.fig not in [plt.figure(n) for n in plt.get_fignums()]
     tooltip = getattr(C.buttons["gradient step"], "tooltip", None)
     assert tooltip and "eta" in tooltip
 
 
-def test_standard_layout_puts_the_controls_above(live):
+def test_standard_layout_has_the_same_order(live):
     net, X, y = logistic_start()
     C = explore(net, X, y, layout="standard").controller
     (root,) = C.widgets
-    assert list(root.children) == [C.controls, C.status, C.image, C.out]
+    assert list(root.children) == [C.image, C.status, C.controls, C.out]
+    assert C.image.layout.width == ""  # the picture keeps its own width
 
 
 def test_layout_switch(live):
@@ -76,10 +79,11 @@ def test_layout_switch(live):
     assert C.layout_pick.value == "wide" and s.fig.get_size_inches()[0] == 27
     C.layout_pick.value = "standard"
     assert s.layout.style == "standard" and s.fig.get_size_inches()[0] == 15
-    assert list(C.root.children)[:3] == [C.controls, C.status, C.image] and "Layout: standard" in C.message.value
+    assert list(C.root.children) == [C.image, C.status, C.controls, C.out] and "Layout standard" in C.message.value
+    assert C.image.layout.width == ""
     C.layout_pick.value = "wide"
-    assert list(C.root.children)[0] is C.band and list(C.band.children) == [C.controls, C.status]
-    assert s.fig.get_size_inches()[0] == 27
+    assert s.fig.get_size_inches()[0] == 27 and C.image.layout.width == "100%"
+    assert list(C.root.children) == [C.image, C.status, C.controls, C.out]
 
 
 def test_messages_say_what_happened(live):
@@ -87,7 +91,7 @@ def test_messages_say_what_happened(live):
     s = explore(net, X, y)
     C = s.controller
     C.sliders[0].value = 0.6
-    assert "You set w1 from 0.50 to 0.60: R went from 1.0032 to" in C.message.value
+    assert "w1 changed from 0.50 to 0.60: R went from 1.0032 to" in C.message.value
     C.buttons["gradient step"].click()
     p = s.predictions[-1]
     assert "One gradient step with eta 1" in C.message.value
@@ -244,11 +248,12 @@ def test_tabs_appear_only_when_asked_for(live):
     assert explore(make("tanh3"), X, y, groups).controller.tabs is None
     titles = lambda C: [C.tabs.get_title(i) for i in range(len(C.tabs.children))]  # noqa: E731
     C = explore(make("tanh3"), X, y, groups, views="backprop").controller
-    assert titles(C) == ["1 · Weights and steps", "2 · Backprop"] and C.tabs.selected_index == 1
+    assert titles(C) == ["Weights and steps", "Backprop"] and C.tabs.selected_index == 1
     C = explore(make("tanh3"), X, y, groups, views="slice").controller
-    assert titles(C) == ["1 · Weights and steps", "2 · Views"] and C.tabs.selected_index == 0
+    assert titles(C) == ["Weights and steps", "Views"] and C.tabs.selected_index == 0
     C = explore(make("tanh3"), X, y, groups, views=("backprop", "line"), case_slopes="w10").controller
-    assert titles(C) == ["1 · Weights and steps", "2 · Backprop", "3 · Views"]
+    assert titles(C) == ["Weights and steps", "Backprop", "Views"]
+    assert list(C.root.children) == [C.image, C.status, C.tabs, C.out]  # the tabs under the picture
     assert C.view_boxes["line"].value and C.view_boxes["cases"].value and not C.view_boxes["slice"].value
 
 
@@ -280,10 +285,10 @@ def test_output_fallback(live, monkeypatch):
     assert any(isinstance(obj, IPython.display.Image) for obj in shown)
 
 
-def test_wide_layout_puts_the_controls_in_a_band_above_the_picture(live):
-    s = explore(make("tanh3"), *xor_centres(), layout="wide")
+def test_changing_tabs_leaves_the_picture_as_it_is(live):
+    s = explore(make("tanh3"), *xor_centres(), views=("backprop", "slice"), backprop_step=2)
     C = s.controller
-    (root,) = C.widgets
-    band, image, out = root.children
-    assert band is C.band and list(band.children) == [C.controls, C.status] and image is C.image
-    assert image.value[:8] == b"\x89PNG\r\n\x1a\n"
+    fig, png, views = s.fig, C.image.value, s.views
+    for tab in (0, 2, 1, 0):
+        C.tabs.selected_index = tab
+        assert s.fig is fig and C.image.value == png and s.views == views and s.backprop_step == 2

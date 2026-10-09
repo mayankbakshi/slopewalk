@@ -499,6 +499,21 @@ BOTTOM_HEIGHT = 4.2  # height in inches of one row of those panels
 LAYOUTS = ("standard", "wide")
 WIDTH = {"standard": 15.0, "wide": 27.0}  # default figure width in inches
 WIDE_PER_ROW, WIDE_BOTTOM_PER_ROW = 4, 6  # the most network panels and lower panels per row of the wide layout
+NET_GAP, PANEL_GAP = 0.5, 0.8  # inches between network panels, and between the panels below them
+# the wide layout gives each lower panel a base width in inches that suits it (for a row 4.2 inches tall), and the
+# width left over in its row goes to the panels that can use it, in these proportions
+WIDE_BASE = {
+    "plane": 4.6,
+    "hidden": 4.6,
+    "slice": 4.8,
+    "table": 5.0,
+    "history": 5.0,
+    "line": 5.0,
+    "cases": 5.0,
+    "momentum": 5.0,
+    "backprop": 9.0,
+}
+WIDE_STRETCH = {"history": 3.0, "table": 0.5, "line": 1.0, "cases": 1.0, "momentum": 1.0, "backprop": 1.0}
 
 
 class Layout:
@@ -507,7 +522,8 @@ class Layout:
     task "binary" ends each panel with a, the sigmoid, p and the loss box; "regression" with the prediction and the
     loss box. style "standard": a figure 15 inches wide, two network panels per row (one for deep networks) and
     three lower panels per row. "wide": 27 inches, up to four network panels in a row (two for deep networks) and up
-    to six lower panels in a row, for wide screens. width (inches) overrides the width of either.
+    to six lower panels in a row, each as wide as suits it, for wide screens. width (inches) overrides the width of
+    either. The network panels keep their size and spacing whatever panels are below them.
     """
 
     def __init__(self, n_inputs, hidden, task="binary", style="standard", width=None):
@@ -558,10 +574,6 @@ class Layout:
     def rows(self, n_panels):
         return -(-n_panels // self.per_row(n_panels))
 
-    def bottom_per_row(self, n_bottom=BOTTOM_PER_ROW):
-        """Lower panels per row: 3; the wide layout puts all of them in one row, up to 6."""
-        return max(BOTTOM_PER_ROW, min(WIDE_BOTTOM_PER_ROW, n_bottom)) if self.style == "wide" else BOTTOM_PER_ROW
-
     def row_height(self, with_sd=False, backprop=False):
         """Height of a panel row in inches: taller when a layer has more than 3 units (up to four times the usual,
         for 12 units), by a fifth when the boxes carry a standard deviation line (groups of points), and by 40% when
@@ -569,12 +581,47 @@ class Layout:
         units = min(4.0, max(1.0, max(self.hidden, default=1) / 3))
         return 2.9 * units * (1.2 if with_sd else 1.0) * (1.4 if backprop else 1.0)
 
-    def bottom_rows(self, n_bottom):
-        return -(-n_bottom // self.bottom_per_row(n_bottom))
+    def lower_rows(self, panels, n_weights=0):
+        """The rows of the panels below the networks: lists of (panel, width), with widths in inches that add up to
+        the width of the figure.
 
-    def figsize(self, n_panels, with_sd=False, n_bottom=BOTTOM_PER_ROW, backprop=False):
-        height = self.row_height(with_sd, backprop) * self.rows(n_panels) + BOTTOM_HEIGHT * self.bottom_rows(n_bottom)
-        return (self.width, height)
+        standard: three columns of equal width; the derivation of the backward pass takes a whole row, and the spare
+        columns of a short last row stay empty (panel None). wide: up to six columns in a row (the derivation counts
+        two), the rows about equally full and every row filled: each panel gets its base width, and the width left
+        over goes to the panels that can use it (mostly R over the steps).
+        """
+        wide = self.style == "wide"
+        spans = [(2 if wide else BOTTOM_PER_ROW) if p == "backprop" else 1 for p in panels]
+        cap = -(-sum(spans) // -(-sum(spans) // WIDE_BOTTOM_PER_ROW)) if wide else BOTTOM_PER_ROW
+        rows, row, used = [], [], 0
+        for name, span in zip(panels, spans):
+            if row and used + span > cap:
+                rows.append(row)
+                row, used = [], 0
+            row.append((name, span))
+            used += span
+        rows.append(row)
+        if not wide:
+            third = self.width / BOTTOM_PER_ROW
+            return [[(n, third * k) for n, k in r] + [(None, third)] * (cap - sum(k for _, k in r)) for r in rows]
+        return [self.fill([n for n, _ in r], n_weights) for r in rows]
+
+    def fill(self, names, n_weights=0):
+        """Widths for one row of the wide layout: base widths, and the rest of the row shared by WIDE_STRETCH."""
+        base = [WIDE_BASE[n] for n in names]
+        if "table" in names and n_weights > TABLE_ROWS:
+            base[names.index("table")] = 7.5  # two blocks of rows side by side
+        spare = self.width - sum(base)
+        if spare <= 0:
+            return [(n, b * self.width / sum(base)) for n, b in zip(names, base)]
+        stretch = [WIDE_STRETCH.get(n, 0.0) for n in names]
+        if sum(stretch) == 0:
+            stretch = [1.0] * len(names)
+        return [(n, b + spare * k / sum(stretch)) for n, b, k in zip(names, base, stretch)]
+
+    def wspace(self, n, gap):
+        """The wspace of a row of n panels with gaps of `gap` inches (wspace is a fraction of the mean panel width)."""
+        return 0.0 if n < 2 else n * gap / max(self.width - 0.6 - (n - 1) * gap, 1.0)
 
     @staticmethod
     def table_fontsize(n_weights):
@@ -1117,6 +1164,17 @@ def draw_history(ax, S, F):
 # ---------------------------------------------------------------- the slope table
 
 
+def width_share(ax):
+    """The panel's share of the width of its row, from the width ratios of its grid: the same for every frame,
+    before and after the layout."""
+    spec = ax.get_subplotspec()
+    if spec is None:
+        return 1 / 3
+    grid = spec.get_gridspec()
+    ratios = list(grid.get_width_ratios() or [1] * grid.ncols)
+    return sum(ratios[spec.colspan.start : spec.colspan.stop]) / sum(ratios)
+
+
 def draw_slope_table(ax, S, F):
     """A table with one row per weight: its value, the change of R when it alone grows by 0.1, and the slope dR/dw.
 
@@ -1132,8 +1190,7 @@ def draw_slope_table(ax, S, F):
     per_block = max(TABLE_ROWS, -(-len(rows) // 2))  # at most two blocks, taller ones for many weights
     blocks = [rows[i : i + per_block] for i in range(0, len(rows), per_block)]
     n_blocks = len(blocks)
-    spec = ax.get_subplotspec()  # the panel's share of the figure width, from its grid (the same for every frame)
-    share = (spec.colspan.stop - spec.colspan.start) / spec.get_gridspec().ncols if spec is not None else 1 / 3
+    share = width_share(ax)
     short = n_blocks > 1 or ax.figure.get_figwidth() * share < 4.8  # narrow panels and two blocks: short headers
     fontsize = T.table_size if not short else max(T.table_size - 2, 8)
     headers = (
@@ -1923,26 +1980,6 @@ def bottom_panels(S):
     return ["plane", "history", "table"] + [v for v in VIEWS if v in S.views]
 
 
-def bottom_slots(S, panels):
-    """(row, column, columns spanned) of each lower panel, and the number of columns. The derivation of the backward
-    pass is text: it takes a whole row (two columns of the wide layout); the other panels take one column each."""
-    L = S.layout
-    span = {name: 1 for name in panels}
-    if "backprop" in span:
-        span["backprop"] = 2 if L.style == "wide" else BOTTOM_PER_ROW
-    cols = L.bottom_per_row(sum(span.values()))
-    slots, r, c = {}, 0, 0
-    for name in panels:
-        width = min(span[name], cols)
-        if c + width > cols:
-            r, c = r + 1, 0
-        slots[name] = (r, c, width)
-        c += width
-        if c >= cols:
-            r, c = r + 1, 0
-    return slots, cols
-
-
 class Picture:
     """The figure of a session for its current views. refresh(w) draws it at the weights w.
 
@@ -1957,8 +1994,8 @@ class Picture:
         per_row, rows = L.per_row(D.G), L.rows(D.G)
         with_sd = any(sel.sum() > 1 for sel in D.gsel)  # groups of points: the boxes show mean and standard deviation
         backprop = "backprop" in S.views  # taller rows: room for the backward boxes under the units
-        slots, bottom_cols = bottom_slots(S, self.panels)
-        n_bottom = max(r for r, _, _ in slots.values()) + 1
+        lower = L.lower_rows(self.panels, S.model.n_weights)
+        n_bottom = len(lower)
         size = (L.width, L.row_height(with_sd, backprop) * rows + BOTTOM_HEIGHT * n_bottom)
         if pyplot:
             fig = plt.figure(figsize=size)
@@ -1966,17 +2003,22 @@ class Picture:
             fig = Figure(figsize=size, dpi=dpi)
             FigureCanvasAgg(fig)
         heights = [L.row_height(with_sd, backprop)] * rows + [BOTTOM_HEIGHT] * n_bottom
-        gs = fig.add_gridspec(rows + n_bottom, bottom_cols, height_ratios=heights)
+        gs = fig.add_gridspec(rows + n_bottom, 1, height_ratios=heights)  # every row has its own grid and spacing
         self.case_axes = []
-        for c in range(D.G):
-            r, cc = divmod(c, per_row)
-            cell = gs[r, :] if per_row == 1 else gs[r, :].subgridspec(1, per_row)[0, cc]
-            self.case_axes.append(fig.add_subplot(cell))
+        for r in range(rows):
+            if per_row == 1:
+                self.case_axes.append(fig.add_subplot(gs[r, 0]))
+            else:
+                cells = gs[r, 0].subgridspec(1, per_row, wspace=L.wspace(per_row, NET_GAP))
+                self.case_axes += [fig.add_subplot(cells[0, c]) for c in range(min(per_row, D.G - r * per_row))]
         self.axes = {}
-        for name in self.panels:
-            r, cc, span = slots[name]
-            extra = {"projection": "3d"} if name == "hidden" and needs_3d(S) else {}
-            self.axes[name] = fig.add_subplot(gs[rows + r, cc : cc + span], **extra)
+        for r, row in enumerate(lower):
+            widths = [w for _, w in row]
+            cells = gs[rows + r, 0].subgridspec(1, len(row), width_ratios=widths, wspace=L.wspace(len(row), PANEL_GAP))
+            for c, (name, _) in enumerate(row):
+                if name is not None:
+                    extra = {"projection": "3d"} if name == "hidden" and needs_3d(S) else {}
+                    self.axes[name] = fig.add_subplot(cells[0, c], **extra)
         if S.title:
             fig.suptitle(S.title, fontsize=S.theme.suptitle_size)
         self.fig = fig
@@ -2060,28 +2102,28 @@ VIEW_LABELS = {
 }
 VIEW_HELP = {
     "cases": "every case's slope along one weight; their average is the slope in the table",
-    "slice": "contours of R over two weights, with the path of your steps",
+    "slice": "contours of R over two weights, with the path of the steps",
     "line": "R along the next step, next to its first-order prediction",
     "hidden": "the cases at their hidden values, with the output unit's boundary",
-    "momentum": "the next steps of gradient descent and of momentum, side by side",
+    "momentum": "the next steps of gradient descent and of momentum",
 }
 LOOK = {  # where to look in the picture at each stage of the backward pass
-    "forward": "The picture shows the forward pass. Press next ▶ to start at the output.",
-    "output": "Look under a: the purple box is δa = p - y of each case.",
-    "weights": "Look at the purple lines: each number is δ of the unit times the input of its line.",
-    "to_h": "Look at the purple arrows: δ travels back along the weights to each h.",
-    "delta": "Look at the purple tangents on the curves: their slope multiplies ∂ℓ/∂h to give δ.",
-    "average": "The average of these slopes over the cases is the slope column of the table: what R.backward() gives.",
+    "forward": "The picture shows the forward pass. Press next stage to start at the output.",
+    "output": "Under a, the purple box is δa = p - y of each case.",
+    "weights": "On the purple lines, each number is δ of the unit times the input of its line.",
+    "to_h": "The purple arrows carry δ back along the weights to each h.",
+    "delta": "The purple tangents on the curves: their slope multiplies ∂ℓ/∂h to give δ.",
+    "average": "The average of these slopes over the cases is the slope column of the table, what R.backward() gives.",
 }
-GUIDES = {
-    "core": "<b>Try this.</b> Drag one slider: it changes that weight in the network itself, and the picture "
-    "follows. Which weight lowers R most for the same change? The slope column of the table answers before you "
-    "try. Then press <b>gradient step</b>: every weight moves against its slope, by eta times the slope.",
-    "backprop": "<b>Try this.</b> Press <b>next ▶</b> to see how the slopes are computed, from the output back to "
-    "the first layer. Purple boxes hold the backward values; the panel under the picture writes out the numbers "
-    "for one case. Choose the case with <b>trace case</b>.",
-    "views": "<b>More pictures.</b> Tick a box to add a panel under the network. Untick it to remove it.",
+HINTS = {
+    "core": "Press gradient step to move every weight against its slope, by eta times the slope. Drag a slider to "
+    "change one weight by hand: each column holds the weights into one unit.",
+    "backprop": "Step through the backward pass, from the output back to the first layer. The panel under the picture "
+    "writes out the numbers for the case chosen in trace case.",
+    "views": "Tick a box to add a panel under the network.",
 }
+HINT_STYLE = "font-size:13px;color:#555;margin:2px 0 6px 0"
+SLIDER_STYLE = {"description_width": "40px"}
 
 
 def slider_range(v, lo=-4.0, hi=4.0):
@@ -2107,35 +2149,27 @@ def name_ranges(names):
 
 
 def readout_html(r):
-    """The readout strip: one small card per number; an increase of R in the last step is shown in red."""
-
-    def card(label, value, colour="#222"):
-        return (
-            '<div style="border:1px solid #DDD;border-radius:6px;padding:3px 10px;margin:2px 6px 2px 0;'
-            f'background:#FAFAFA"><div style="font-size:11px;color:#666">{label}</div>'
-            f'<div style="font-size:15px;font-family:monospace;color:{colour}">{value}</div></div>'
-        )
-
-    cards = [card("R", f"{r['R']:.4f}"), card("size of the gradient", f"{r['grad_norm']:.4f}")]
+    """The numbers of the status line, as a plain table: a row of labels over a row of values."""
+    cells = [("R", f"{r['R']:.4f}", "#222"), ("size of the gradient", f"{r['grad_norm']:.4f}", "#222")]
     if r["accuracy"] is not None:
-        cards.append(card("accuracy", f"{r['accuracy']:.3f}"))
-    cards.append(card(f"next step, eta {r['eta']:g}: predicted change of R", f"{r['next_change']:+.4f}"))
+        cells.append(("accuracy", f"{r['accuracy']:.3f}", "#222"))
+    cells.append((f"next step, eta {r['eta']:g}: predicted change of R", f"{r['next_change']:+.4f}", "#222"))
     if r["last"] is not None:
         predicted, actual = r["last"]
         colour = "#B00020" if actual > 0 else "#1B6E3A"
-        cards.append(card("last step: predicted, actual change", f"{predicted:+.4f}, {actual:+.4f}", colour))
-    return '<div style="display:flex;flex-wrap:wrap">' + "".join(cards) + "</div>"
+        cells.append(("last step: predicted, actual change", f"{predicted:+.4f}, {actual:+.4f}", colour))
+    pad = "padding:1px 28px 1px 0;text-align:left"
+    head = "".join(f'<td style="{pad};color:#666">{label}</td>' for label, _, _ in cells)
+    vals = "".join(f'<td style="{pad};font-family:monospace;color:{c}">{v}</td>' for _, v, c in cells)
+    return f'<table style="border-collapse:collapse;font-size:13px"><tr>{head}</tr><tr>{vals}</tr></table>'
 
 
 def message_html(text):
-    return f'<div style="font-size:14px;padding:4px 2px;color:#222">{text}</div>'
+    return f'<div style="font-size:14px;color:#222;margin:6px 0 2px 0;min-height:1.4em">{text}</div>'
 
 
-def guide_html(text):
-    return (
-        '<div style="font-size:13px;line-height:1.4;background:#F4F8FF;border-left:4px solid #3B6FD8;'
-        f'padding:6px 10px;margin:2px 0 8px 0">{text}</div>'
-    )
+def text_html(text):
+    return f'<div style="{HINT_STYLE}">{text}</div>'
 
 
 def tip(widget, text):
@@ -2178,14 +2212,13 @@ class Controller:
                 description=S.names[k],
                 readout_format=".2f",
                 continuous_update=False,
-                layout=widgets.Layout(width="230px"),
+                style=SLIDER_STYLE,
+                layout=widgets.Layout(width="250px"),
             )
             self.sliders.append(tip(slider, f"{S.names[k]}: drag to change this weight in the network"))
         self.panel = self.grouped_panel(widgets) if len(self.sliders) <= 30 else self.dropdown_panel(widgets)
         frozen = [n for k, n in enumerate(S.names) if k not in set(self.index)]
-        self.frozen_note = widgets.HTML(
-            f"<i>fixed (drawn lighter, no slider): {name_ranges(frozen)}</i>" if frozen else ""
-        )
+        self.frozen_note = widgets.HTML(text_html(f"Fixed, drawn lighter: {name_ranges(frozen)}.") if frozen else "")
 
         small = S.eta < 0.1
         self.eta = widgets.FloatSlider(
@@ -2195,6 +2228,8 @@ class Controller:
             step=0.01 if small else 0.1,
             description="eta",
             readout_format=".2f" if small else ".1f",
+            style=SLIDER_STYLE,
+            layout=widgets.Layout(width="320px"),
         )
         tip(self.eta, "eta, the step size: a gradient step moves each weight by eta times its slope")
         self.buttons = {name: widgets.Button(description=name) for name in ("gradient step", "10 steps", "reset")}
@@ -2202,31 +2237,28 @@ class Controller:
         tip(self.buttons["gradient step"], "every weight moves against its slope: w <- w - eta x dR/dw")
         tip(self.buttons["10 steps"], "ten gradient steps in a row")
         tip(self.buttons["reset"], "back to the weights the cell started from")
+        self.layout_pick = tip(
+            widgets.ToggleButtons(options=["wide", "standard"], value=S.layout.style, style={"button_width": "80px"}),
+            "wide: all networks in one row; standard: two per row, with larger text on small screens",
+        )
+        self.layout_pick.observe(self.on_layout, names="value")
+        self.layout_box = widgets.HBox(
+            [widgets.Label("layout", layout=widgets.Layout(margin="0 8px 0 0")), self.layout_pick],
+            layout=widgets.Layout(align_items="center", margin="0 0 0 40px"),
+        )
 
         self.message = widgets.HTML()
         self.readout = widgets.HTML()
         self.image = widgets.Image(format="png", layout=widgets.Layout(max_width="100%", height="auto"))
         self.out = widgets.Output()
-        self.layout_pick = tip(
-            widgets.ToggleButtons(
-                options=["wide", "standard"], value=S.layout.style, description="layout", style={"button_width": "80px"}
-            ),
-            "wide: the controls in a band above a wide picture; standard: the controls above a narrower picture "
-            "with larger text, for small screens",
-        )
-        self.layout_pick.observe(self.on_layout, names="value")
-        self.status = widgets.VBox([self.message, self.readout, self.layout_pick])
+        self.status = widgets.VBox([self.readout, self.message], layout=widgets.Layout(margin="4px 0 8px 0"))
 
-        core = widgets.VBox(
-            [
-                widgets.HTML(guide_html(GUIDES["core"])),
-                self.panel,
-                self.frozen_note,
-                self.eta,
-                widgets.HBox(list(self.buttons.values()), layout=widgets.Layout(flex_flow="row wrap")),
-            ]
+        steps_row = widgets.HBox(
+            [self.eta, *self.buttons.values(), self.layout_box],
+            layout=widgets.Layout(align_items="center", flex_flow="row wrap", margin="0 0 10px 0"),
         )
-        # tabs only for what the call asked for: the backward pass, and the extra views
+        core = widgets.VBox([widgets.HTML(text_html(HINTS["core"])), steps_row, self.panel, self.frozen_note])
+        # tabs only for what the call asked for; the backward pass stays on while its tab exists
         self.kinds, panels = ["core"], {"core": core}
         if "backprop" in S.views:
             self.kinds.append("backprop")
@@ -2240,9 +2272,8 @@ class Controller:
         else:
             self.tabs = widgets.Tab(children=[panels[k] for k in self.kinds])
             for i, kind in enumerate(self.kinds):
-                self.tabs.set_title(i, f"{i + 1} · {TITLES[kind]}")
+                self.tabs.set_title(i, TITLES[kind])
             self.tabs.selected_index = self.kinds.index("backprop") if "backprop" in S.views else 0
-            self.tabs.observe(self.on_tab, names="selected_index")
             self.controls = self.tabs
 
         for s in self.sliders:
@@ -2252,38 +2283,25 @@ class Controller:
         self.buttons["10 steps"].on_click(lambda _: self.steps(10))
         self.buttons["reset"].on_click(lambda _: self.reset())
 
-        # one box that holds the controls and the picture; arrange() puts them in a band (wide) or a stack (standard)
-        self.band = widgets.HBox(layout=widgets.Layout(align_items="flex-start", width="100%"))
+        # the picture first, then the status line, then the controls
         self.picture_box = self.out if self.use_output else self.image
-        self.root = widgets.VBox(layout=widgets.Layout(width="100%"))
+        tail = [] if self.use_output else [self.out]
+        self.root = widgets.VBox([self.picture_box, self.status, self.controls, *tail])
+        self.root.layout.width = "100%"
         self.arrange(S.layout.style)
         self.widgets = [self.root]
-        first = (
-            "Start here: drag a slider, or press gradient step." if "backprop" not in S.views else self.stage_words()
-        )
-        self.say(first)
+        self.say(f"At the start: R = {S.history[0]:.4f}." if "backprop" not in S.views else self.stage_words())
 
     # ---------------------------------------------------------------- building
 
     def arrange(self, style):
-        """Wide: a band across the top with the tabs on the left and the status on the right, and the picture under
-        it at the full width. Standard: the tabs, the status and the picture one above the other."""
-        tail = [] if self.use_output else [self.out]
-        self.controls.layout.flex, self.controls.layout.min_width = ("1 1 auto", "0") if style == "wide" else ("", "")
-        self.status.layout.width = "380px" if style == "wide" else ""
-        self.status.layout.min_width = "380px" if style == "wide" else ""
-        self.status.layout.margin = "0 0 0 12px" if style == "wide" else ""
+        """The picture takes the full width in the wide layout; in the standard one it keeps its own width."""
         self.picture_box.layout.max_width = "100%"
         self.picture_box.layout.width = "100%" if style == "wide" else ""
-        if style == "wide":
-            self.band.children = [self.controls, self.status]
-            self.root.children = [self.band, self.picture_box, *tail]
-        else:
-            self.band.children = []
-            self.root.children = [self.controls, self.status, self.picture_box, *tail]
 
     def grouped_panel(self, widgets):
-        """Up to 30 sliders: one box per unit with weights that move, headed by the names of their inputs."""
+        """Up to 30 sliders: one column per unit with weights that move, headed by the unit and its inputs; the
+        columns line up in a grid."""
         S = self.session
         M = S.model
         moving = set(self.index)
@@ -2297,7 +2315,10 @@ class Controller:
                     head = widgets.HTML(f"<b>{M.unit_title(layer, j)}</b>: weights for {names}")
                     boxes.append(widgets.VBox([head] + [self.sliders[self.index.index(q)] for q in ks]))
                 k += L.in_features + 1
-        return widgets.Box(boxes, layout=widgets.Layout(flex_flow="row wrap"))
+        return widgets.GridBox(
+            boxes,
+            layout=widgets.Layout(grid_template_columns="repeat(auto-fill, minmax(270px, 1fr))", grid_gap="2px 16px"),
+        )
 
     def dropdown_panel(self, widgets):
         """More than 30 sliders: choose one weight, then move it."""
@@ -2309,14 +2330,16 @@ class Controller:
         return widgets.HBox([pick, holder])
 
     def backprop_tab(self, widgets):
-        """Back and next buttons, the stage, the case the derivation follows, and the formula of the stage."""
+        """Previous and next stage, the stage, the case the derivation follows, and the formula of the stage."""
         S = self.session
         n = len(S.backprop_stages)
-        self.bp_prev = tip(widgets.Button(description="◀ back"), "the stage before")
+        self.bp_prev = tip(widgets.Button(description="previous stage"), "the stage before")
         self.bp_next = tip(
-            widgets.Button(description="next ▶", button_style="primary"), "the next stage, one layer back"
+            widgets.Button(description="next stage", button_style="primary"), "the next stage, one layer back"
         )
-        self.bp_step = widgets.IntSlider(value=S.backprop_step, min=0, max=n - 1, description="stage")
+        self.bp_step = widgets.IntSlider(
+            value=S.backprop_step, min=0, max=n - 1, description="stage", style=SLIDER_STYLE
+        )
         tip(self.bp_step, "0 is the forward pass; the last stage is the average over the cases")
         letters = [chr(65 + c) if c < 26 else str(c) for c in range(S.data.G)]
         self.bp_case = widgets.Dropdown(
@@ -2331,8 +2354,11 @@ class Controller:
         self.bp_next.on_click(lambda _: setattr(self.bp_step, "value", min(n - 1, self.bp_step.value + 1)))
         self.bp_step.observe(self.on_backprop, names="value")
         self.bp_case.observe(self.on_backprop, names="value")
-        buttons = widgets.HBox([self.bp_prev, self.bp_next, self.bp_case], layout=widgets.Layout(flex_flow="row wrap"))
-        return widgets.VBox([widgets.HTML(guide_html(GUIDES["backprop"])), buttons, self.bp_step, self.bp_caption])
+        row = widgets.HBox(
+            [self.bp_prev, self.bp_next, self.bp_step, self.bp_case],
+            layout=widgets.Layout(align_items="center", flex_flow="row wrap"),
+        )
+        return widgets.VBox([widgets.HTML(text_html(HINTS["backprop"])), row, self.bp_caption])
 
     def views_tab(self, widgets):
         """A checkbox per extra panel with a line on what it shows, and the settings of the panels."""
@@ -2347,8 +2373,10 @@ class Controller:
             widgets.HBox([box, widgets.HTML(f'<span style="color:#666;font-size:12px">{VIEW_HELP[v]}</span>')])
             for v, box in self.view_boxes.items()
         ]
-        self.case_pick = widgets.Dropdown(options=names, value=names[S.case_weight], description="case slopes of")
-        tip(self.case_pick, "the weight of the panel 'each case's slope'")
+        self.case_pick = tip(
+            widgets.Dropdown(options=names, value=names[S.case_weight], description="case slopes of"),
+            "the weight of the panel 'each case's slope'",
+        )
         a = S.slice_weights[0]
         b = S.slice_weights[1] if len(S.slice_weights) > 1 else None
         self.slice_pick = [
@@ -2372,18 +2400,11 @@ class Controller:
         )
         for w in [*self.view_boxes.values(), self.case_pick, *self.slice_pick, self.beta, self.ahead, self.log_box]:
             w.observe(self.on_views, names="value")
-        return widgets.VBox(
-            [
-                widgets.HTML(guide_html(GUIDES["views"])),
-                *rows,
-                self.log_box,
-                widgets.HTML("<b>Settings</b>"),
-                self.case_pick,
-                *self.slice_pick,
-                self.beta,
-                self.ahead,
-            ]
+        settings = widgets.GridBox(
+            [self.case_pick, *self.slice_pick, self.beta, self.ahead],
+            layout=widgets.Layout(grid_template_columns="repeat(auto-fill, minmax(300px, 1fr))", grid_gap="2px 16px"),
         )
+        return widgets.VBox([widgets.HTML(text_html(HINTS["views"])), *rows, self.log_box, settings])
 
     # ---------------------------------------------------------------- state
 
@@ -2409,19 +2430,16 @@ class Controller:
         self.session.model.set_weights(self.values())
         self.redraw()
         if change is not None and before is not None:
-            name = change["owner"].description
-            self.say(
-                f"You set {name} from {change['old']:.2f} to {change['new']:.2f}: {change_words(before, self.last_R)}."
-            )
+            name, old, new = change["owner"].description, change["old"], change["new"]
+            self.say(f"{name} changed from {old:.2f} to {new:.2f}: {change_words(before, self.last_R)}.")
 
     def on_eta(self, change):
         self.session.eta = float(change["new"])
         if not self.busy:
             self.redraw()
-            r = self.session.readouts(self.session.eta)
-            self.say(
-                f"eta is now {self.session.eta:g}: the next step should change R by about {r['next_change']:+.4f}."
-            )
+            eta = self.session.eta
+            r = self.session.readouts(eta)
+            self.say(f"eta is now {eta:g}: the next step should change R by about {r['next_change']:+.4f}.")
 
     def on_backprop(self, *_):
         S = self.session
@@ -2431,26 +2449,15 @@ class Controller:
             self.redraw()
             self.say(self.stage_words())
 
-    def on_tab(self, change):
-        """The Backprop tab turns the backward pass on; leaving it turns it off."""
-        S = self.session
-        on = self.kinds[change["new"]] == "backprop"
-        if on == ("backprop" in S.views):
-            return
-        S.views = tuple(v for v in VIEWS if (v == "backprop" and on) or (v != "backprop" and v in S.views))
-        self.picture = None
-        self.redraw()
-        self.say(self.stage_words() if on else "The backward pass is off. The Backprop tab turns it on again.")
-
     def on_layout(self, change):
-        """Switches between the wide and the standard layout: a new figure and a new arrangement."""
+        """Switches between the wide and the standard layout: a new figure."""
         S = self.session
         S.set_layout(change["new"])
         self.arrange(change["new"])
         self.picture = None
         self.redraw()
-        where = "beside" if change["new"] == "wide" else "above"
-        self.say(f"Layout: {change['new']}, with the controls {where} the picture.")
+        where = "all networks in one row" if change["new"] == "wide" else "two networks per row, larger text"
+        self.say(f"Layout {change['new']}: {where}.")
 
     def on_views(self, *_):
         if self.busy:
@@ -2530,13 +2537,10 @@ class Controller:
             self.last_R = self.picture.frame.R
             png = self.picture.png()
             self.readout.value = readout_html(S.readouts(self.eta.value, w))
-            n = len(S.backprop_stages) - 1
-            stage = S.backprop_stages[S.backprop_step]
             if "backprop" in self.kinds:
-                self.bp_caption.value = (
-                    f'<div style="font-size:14px;padding:4px 0"><b>Stage {S.backprop_step} of {n}.</b> '
-                    f"{stage.text}</div>"
-                )
+                n = len(S.backprop_stages) - 1
+                text = S.backprop_stages[S.backprop_step].text
+                self.bp_caption.value = text_html(f"Stage {S.backprop_step} of {n}. {text[:1].upper()}{text[1:]}.")
             if self.use_output:
                 from IPython.display import Image, clear_output, display
 
@@ -2932,10 +2936,9 @@ def explore(
     (R over one or two weights; slice_weights chooses them), "line" (R along the next step), "hidden" (the cases at
     their hidden values) and "momentum" (the next `lookahead` steps of gradient descent and of momentum beta).
     log_scale: R on a log axis.
-    layout: "wide" (network panels side by side, the lower panels in one row, and the controls beside the picture),
-    "standard" (two panels per row, the controls above the picture), or "auto" (the default): wide where the sliders
-    run, standard in Colab, whose notebooks have a fixed width, and for still pictures. width: the figure width in
-    inches.
+    layout: "wide" (network panels side by side and the lower panels in one row), "standard" (two network panels per
+    row), or "auto" (the default): wide where the sliders run, standard in Colab, whose notebooks have a fixed width,
+    and for still pictures. The controls are under the picture in both. width: the figure width in inches.
     backprop_step: with the view "backprop", the stage of the backward pass drawn (0: the forward pass; a step above
     0 switches the view on); backprop_case: the group whose case the derivation follows ("A" or 0 is the first).
 

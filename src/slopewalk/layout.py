@@ -12,6 +12,21 @@ BOTTOM_HEIGHT = 4.2  # height in inches of one row of those panels
 LAYOUTS = ("standard", "wide")
 WIDTH = {"standard": 15.0, "wide": 27.0}  # default figure width in inches
 WIDE_PER_ROW, WIDE_BOTTOM_PER_ROW = 4, 6  # the most network panels and lower panels per row of the wide layout
+NET_GAP, PANEL_GAP = 0.5, 0.8  # inches between network panels, and between the panels below them
+# the wide layout gives each lower panel a base width in inches that suits it (for a row 4.2 inches tall), and the
+# width left over in its row goes to the panels that can use it, in these proportions
+WIDE_BASE = {
+    "plane": 4.6,
+    "hidden": 4.6,
+    "slice": 4.8,
+    "table": 5.0,
+    "history": 5.0,
+    "line": 5.0,
+    "cases": 5.0,
+    "momentum": 5.0,
+    "backprop": 9.0,
+}
+WIDE_STRETCH = {"history": 3.0, "table": 0.5, "line": 1.0, "cases": 1.0, "momentum": 1.0, "backprop": 1.0}
 
 
 class Layout:
@@ -20,7 +35,8 @@ class Layout:
     task "binary" ends each panel with a, the sigmoid, p and the loss box; "regression" with the prediction and the
     loss box. style "standard": a figure 15 inches wide, two network panels per row (one for deep networks) and
     three lower panels per row. "wide": 27 inches, up to four network panels in a row (two for deep networks) and up
-    to six lower panels in a row, for wide screens. width (inches) overrides the width of either.
+    to six lower panels in a row, each as wide as suits it, for wide screens. width (inches) overrides the width of
+    either. The network panels keep their size and spacing whatever panels are below them.
     """
 
     def __init__(self, n_inputs, hidden, task="binary", style="standard", width=None):
@@ -71,10 +87,6 @@ class Layout:
     def rows(self, n_panels):
         return -(-n_panels // self.per_row(n_panels))
 
-    def bottom_per_row(self, n_bottom=BOTTOM_PER_ROW):
-        """Lower panels per row: 3; the wide layout puts all of them in one row, up to 6."""
-        return max(BOTTOM_PER_ROW, min(WIDE_BOTTOM_PER_ROW, n_bottom)) if self.style == "wide" else BOTTOM_PER_ROW
-
     def row_height(self, with_sd=False, backprop=False):
         """Height of a panel row in inches: taller when a layer has more than 3 units (up to four times the usual,
         for 12 units), by a fifth when the boxes carry a standard deviation line (groups of points), and by 40% when
@@ -82,12 +94,47 @@ class Layout:
         units = min(4.0, max(1.0, max(self.hidden, default=1) / 3))
         return 2.9 * units * (1.2 if with_sd else 1.0) * (1.4 if backprop else 1.0)
 
-    def bottom_rows(self, n_bottom):
-        return -(-n_bottom // self.bottom_per_row(n_bottom))
+    def lower_rows(self, panels, n_weights=0):
+        """The rows of the panels below the networks: lists of (panel, width), with widths in inches that add up to
+        the width of the figure.
 
-    def figsize(self, n_panels, with_sd=False, n_bottom=BOTTOM_PER_ROW, backprop=False):
-        height = self.row_height(with_sd, backprop) * self.rows(n_panels) + BOTTOM_HEIGHT * self.bottom_rows(n_bottom)
-        return (self.width, height)
+        standard: three columns of equal width; the derivation of the backward pass takes a whole row, and the spare
+        columns of a short last row stay empty (panel None). wide: up to six columns in a row (the derivation counts
+        two), the rows about equally full and every row filled: each panel gets its base width, and the width left
+        over goes to the panels that can use it (mostly R over the steps).
+        """
+        wide = self.style == "wide"
+        spans = [(2 if wide else BOTTOM_PER_ROW) if p == "backprop" else 1 for p in panels]
+        cap = -(-sum(spans) // -(-sum(spans) // WIDE_BOTTOM_PER_ROW)) if wide else BOTTOM_PER_ROW
+        rows, row, used = [], [], 0
+        for name, span in zip(panels, spans):
+            if row and used + span > cap:
+                rows.append(row)
+                row, used = [], 0
+            row.append((name, span))
+            used += span
+        rows.append(row)
+        if not wide:
+            third = self.width / BOTTOM_PER_ROW
+            return [[(n, third * k) for n, k in r] + [(None, third)] * (cap - sum(k for _, k in r)) for r in rows]
+        return [self.fill([n for n, _ in r], n_weights) for r in rows]
+
+    def fill(self, names, n_weights=0):
+        """Widths for one row of the wide layout: base widths, and the rest of the row shared by WIDE_STRETCH."""
+        base = [WIDE_BASE[n] for n in names]
+        if "table" in names and n_weights > TABLE_ROWS:
+            base[names.index("table")] = 7.5  # two blocks of rows side by side
+        spare = self.width - sum(base)
+        if spare <= 0:
+            return [(n, b * self.width / sum(base)) for n, b in zip(names, base)]
+        stretch = [WIDE_STRETCH.get(n, 0.0) for n in names]
+        if sum(stretch) == 0:
+            stretch = [1.0] * len(names)
+        return [(n, b + spare * k / sum(stretch)) for n, b, k in zip(names, base, stretch)]
+
+    def wspace(self, n, gap):
+        """The wspace of a row of n panels with gaps of `gap` inches (wspace is a fraction of the mean panel width)."""
+        return 0.0 if n < 2 else n * gap / max(self.width - 0.6 - (n - 1) * gap, 1.0)
 
     @staticmethod
     def table_fontsize(n_weights):

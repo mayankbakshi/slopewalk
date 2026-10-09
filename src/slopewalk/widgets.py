@@ -1,9 +1,7 @@
-"""The controls of explore, arranged so that a student can follow them without instructions.
-
-One panel with what to try, a slider per weight, eta and the step buttons. Tabs appear only for what the explore
-call asks for: "Backprop" (the backward pass stage by stage) when views include "backprop", and "Views" (extra
-panels) when other views are asked for. A status bar gives the key numbers and one sentence about the last action.
-Every control has a tooltip. Needs ipywidgets.
+"""The controls of explore. The picture comes first; under it a status line (the key numbers and one sentence on the
+last action), then the controls: the sliders grouped by unit, and one row with eta, the step buttons and the layout.
+Tabs appear only for what the explore call asks for: "Backprop" when the views include "backprop", "Views" when
+other views are asked for. Changing tabs leaves the picture as it is. Needs ipywidgets.
 """
 
 import math
@@ -23,28 +21,28 @@ VIEW_LABELS = {
 }
 VIEW_HELP = {
     "cases": "every case's slope along one weight; their average is the slope in the table",
-    "slice": "contours of R over two weights, with the path of your steps",
+    "slice": "contours of R over two weights, with the path of the steps",
     "line": "R along the next step, next to its first-order prediction",
     "hidden": "the cases at their hidden values, with the output unit's boundary",
-    "momentum": "the next steps of gradient descent and of momentum, side by side",
+    "momentum": "the next steps of gradient descent and of momentum",
 }
 LOOK = {  # where to look in the picture at each stage of the backward pass
-    "forward": "The picture shows the forward pass. Press next ▶ to start at the output.",
-    "output": "Look under a: the purple box is δa = p - y of each case.",
-    "weights": "Look at the purple lines: each number is δ of the unit times the input of its line.",
-    "to_h": "Look at the purple arrows: δ travels back along the weights to each h.",
-    "delta": "Look at the purple tangents on the curves: their slope multiplies ∂ℓ/∂h to give δ.",
-    "average": "The average of these slopes over the cases is the slope column of the table: what R.backward() gives.",
+    "forward": "The picture shows the forward pass. Press next stage to start at the output.",
+    "output": "Under a, the purple box is δa = p - y of each case.",
+    "weights": "On the purple lines, each number is δ of the unit times the input of its line.",
+    "to_h": "The purple arrows carry δ back along the weights to each h.",
+    "delta": "The purple tangents on the curves: their slope multiplies ∂ℓ/∂h to give δ.",
+    "average": "The average of these slopes over the cases is the slope column of the table, what R.backward() gives.",
 }
-GUIDES = {
-    "core": "<b>Try this.</b> Drag one slider: it changes that weight in the network itself, and the picture "
-    "follows. Which weight lowers R most for the same change? The slope column of the table answers before you "
-    "try. Then press <b>gradient step</b>: every weight moves against its slope, by eta times the slope.",
-    "backprop": "<b>Try this.</b> Press <b>next ▶</b> to see how the slopes are computed, from the output back to "
-    "the first layer. Purple boxes hold the backward values; the panel under the picture writes out the numbers "
-    "for one case. Choose the case with <b>trace case</b>.",
-    "views": "<b>More pictures.</b> Tick a box to add a panel under the network. Untick it to remove it.",
+HINTS = {
+    "core": "Press gradient step to move every weight against its slope, by eta times the slope. Drag a slider to "
+    "change one weight by hand: each column holds the weights into one unit.",
+    "backprop": "Step through the backward pass, from the output back to the first layer. The panel under the picture "
+    "writes out the numbers for the case chosen in trace case.",
+    "views": "Tick a box to add a panel under the network.",
 }
+HINT_STYLE = "font-size:13px;color:#555;margin:2px 0 6px 0"
+SLIDER_STYLE = {"description_width": "40px"}
 
 
 def slider_range(v, lo=-4.0, hi=4.0):
@@ -70,35 +68,27 @@ def name_ranges(names):
 
 
 def readout_html(r):
-    """The readout strip: one small card per number; an increase of R in the last step is shown in red."""
-
-    def card(label, value, colour="#222"):
-        return (
-            '<div style="border:1px solid #DDD;border-radius:6px;padding:3px 10px;margin:2px 6px 2px 0;'
-            f'background:#FAFAFA"><div style="font-size:11px;color:#666">{label}</div>'
-            f'<div style="font-size:15px;font-family:monospace;color:{colour}">{value}</div></div>'
-        )
-
-    cards = [card("R", f"{r['R']:.4f}"), card("size of the gradient", f"{r['grad_norm']:.4f}")]
+    """The numbers of the status line, as a plain table: a row of labels over a row of values."""
+    cells = [("R", f"{r['R']:.4f}", "#222"), ("size of the gradient", f"{r['grad_norm']:.4f}", "#222")]
     if r["accuracy"] is not None:
-        cards.append(card("accuracy", f"{r['accuracy']:.3f}"))
-    cards.append(card(f"next step, eta {r['eta']:g}: predicted change of R", f"{r['next_change']:+.4f}"))
+        cells.append(("accuracy", f"{r['accuracy']:.3f}", "#222"))
+    cells.append((f"next step, eta {r['eta']:g}: predicted change of R", f"{r['next_change']:+.4f}", "#222"))
     if r["last"] is not None:
         predicted, actual = r["last"]
         colour = "#B00020" if actual > 0 else "#1B6E3A"
-        cards.append(card("last step: predicted, actual change", f"{predicted:+.4f}, {actual:+.4f}", colour))
-    return '<div style="display:flex;flex-wrap:wrap">' + "".join(cards) + "</div>"
+        cells.append(("last step: predicted, actual change", f"{predicted:+.4f}, {actual:+.4f}", colour))
+    pad = "padding:1px 28px 1px 0;text-align:left"
+    head = "".join(f'<td style="{pad};color:#666">{label}</td>' for label, _, _ in cells)
+    vals = "".join(f'<td style="{pad};font-family:monospace;color:{c}">{v}</td>' for _, v, c in cells)
+    return f'<table style="border-collapse:collapse;font-size:13px"><tr>{head}</tr><tr>{vals}</tr></table>'
 
 
 def message_html(text):
-    return f'<div style="font-size:14px;padding:4px 2px;color:#222">{text}</div>'
+    return f'<div style="font-size:14px;color:#222;margin:6px 0 2px 0;min-height:1.4em">{text}</div>'
 
 
-def guide_html(text):
-    return (
-        '<div style="font-size:13px;line-height:1.4;background:#F4F8FF;border-left:4px solid #3B6FD8;'
-        f'padding:6px 10px;margin:2px 0 8px 0">{text}</div>'
-    )
+def text_html(text):
+    return f'<div style="{HINT_STYLE}">{text}</div>'
 
 
 def tip(widget, text):
@@ -141,14 +131,13 @@ class Controller:
                 description=S.names[k],
                 readout_format=".2f",
                 continuous_update=False,
-                layout=widgets.Layout(width="230px"),
+                style=SLIDER_STYLE,
+                layout=widgets.Layout(width="250px"),
             )
             self.sliders.append(tip(slider, f"{S.names[k]}: drag to change this weight in the network"))
         self.panel = self.grouped_panel(widgets) if len(self.sliders) <= 30 else self.dropdown_panel(widgets)
         frozen = [n for k, n in enumerate(S.names) if k not in set(self.index)]
-        self.frozen_note = widgets.HTML(
-            f"<i>fixed (drawn lighter, no slider): {name_ranges(frozen)}</i>" if frozen else ""
-        )
+        self.frozen_note = widgets.HTML(text_html(f"Fixed, drawn lighter: {name_ranges(frozen)}.") if frozen else "")
 
         small = S.eta < 0.1
         self.eta = widgets.FloatSlider(
@@ -158,6 +147,8 @@ class Controller:
             step=0.01 if small else 0.1,
             description="eta",
             readout_format=".2f" if small else ".1f",
+            style=SLIDER_STYLE,
+            layout=widgets.Layout(width="320px"),
         )
         tip(self.eta, "eta, the step size: a gradient step moves each weight by eta times its slope")
         self.buttons = {name: widgets.Button(description=name) for name in ("gradient step", "10 steps", "reset")}
@@ -165,31 +156,28 @@ class Controller:
         tip(self.buttons["gradient step"], "every weight moves against its slope: w <- w - eta x dR/dw")
         tip(self.buttons["10 steps"], "ten gradient steps in a row")
         tip(self.buttons["reset"], "back to the weights the cell started from")
+        self.layout_pick = tip(
+            widgets.ToggleButtons(options=["wide", "standard"], value=S.layout.style, style={"button_width": "80px"}),
+            "wide: all networks in one row; standard: two per row, with larger text on small screens",
+        )
+        self.layout_pick.observe(self.on_layout, names="value")
+        self.layout_box = widgets.HBox(
+            [widgets.Label("layout", layout=widgets.Layout(margin="0 8px 0 0")), self.layout_pick],
+            layout=widgets.Layout(align_items="center", margin="0 0 0 40px"),
+        )
 
         self.message = widgets.HTML()
         self.readout = widgets.HTML()
         self.image = widgets.Image(format="png", layout=widgets.Layout(max_width="100%", height="auto"))
         self.out = widgets.Output()
-        self.layout_pick = tip(
-            widgets.ToggleButtons(
-                options=["wide", "standard"], value=S.layout.style, description="layout", style={"button_width": "80px"}
-            ),
-            "wide: the controls in a band above a wide picture; standard: the controls above a narrower picture "
-            "with larger text, for small screens",
-        )
-        self.layout_pick.observe(self.on_layout, names="value")
-        self.status = widgets.VBox([self.message, self.readout, self.layout_pick])
+        self.status = widgets.VBox([self.readout, self.message], layout=widgets.Layout(margin="4px 0 8px 0"))
 
-        core = widgets.VBox(
-            [
-                widgets.HTML(guide_html(GUIDES["core"])),
-                self.panel,
-                self.frozen_note,
-                self.eta,
-                widgets.HBox(list(self.buttons.values()), layout=widgets.Layout(flex_flow="row wrap")),
-            ]
+        steps_row = widgets.HBox(
+            [self.eta, *self.buttons.values(), self.layout_box],
+            layout=widgets.Layout(align_items="center", flex_flow="row wrap", margin="0 0 10px 0"),
         )
-        # tabs only for what the call asked for: the backward pass, and the extra views
+        core = widgets.VBox([widgets.HTML(text_html(HINTS["core"])), steps_row, self.panel, self.frozen_note])
+        # tabs only for what the call asked for; the backward pass stays on while its tab exists
         self.kinds, panels = ["core"], {"core": core}
         if "backprop" in S.views:
             self.kinds.append("backprop")
@@ -203,9 +191,8 @@ class Controller:
         else:
             self.tabs = widgets.Tab(children=[panels[k] for k in self.kinds])
             for i, kind in enumerate(self.kinds):
-                self.tabs.set_title(i, f"{i + 1} · {TITLES[kind]}")
+                self.tabs.set_title(i, TITLES[kind])
             self.tabs.selected_index = self.kinds.index("backprop") if "backprop" in S.views else 0
-            self.tabs.observe(self.on_tab, names="selected_index")
             self.controls = self.tabs
 
         for s in self.sliders:
@@ -215,38 +202,25 @@ class Controller:
         self.buttons["10 steps"].on_click(lambda _: self.steps(10))
         self.buttons["reset"].on_click(lambda _: self.reset())
 
-        # one box that holds the controls and the picture; arrange() puts them in a band (wide) or a stack (standard)
-        self.band = widgets.HBox(layout=widgets.Layout(align_items="flex-start", width="100%"))
+        # the picture first, then the status line, then the controls
         self.picture_box = self.out if self.use_output else self.image
-        self.root = widgets.VBox(layout=widgets.Layout(width="100%"))
+        tail = [] if self.use_output else [self.out]
+        self.root = widgets.VBox([self.picture_box, self.status, self.controls, *tail])
+        self.root.layout.width = "100%"
         self.arrange(S.layout.style)
         self.widgets = [self.root]
-        first = (
-            "Start here: drag a slider, or press gradient step." if "backprop" not in S.views else self.stage_words()
-        )
-        self.say(first)
+        self.say(f"At the start: R = {S.history[0]:.4f}." if "backprop" not in S.views else self.stage_words())
 
     # ---------------------------------------------------------------- building
 
     def arrange(self, style):
-        """Wide: a band across the top with the tabs on the left and the status on the right, and the picture under
-        it at the full width. Standard: the tabs, the status and the picture one above the other."""
-        tail = [] if self.use_output else [self.out]
-        self.controls.layout.flex, self.controls.layout.min_width = ("1 1 auto", "0") if style == "wide" else ("", "")
-        self.status.layout.width = "380px" if style == "wide" else ""
-        self.status.layout.min_width = "380px" if style == "wide" else ""
-        self.status.layout.margin = "0 0 0 12px" if style == "wide" else ""
+        """The picture takes the full width in the wide layout; in the standard one it keeps its own width."""
         self.picture_box.layout.max_width = "100%"
         self.picture_box.layout.width = "100%" if style == "wide" else ""
-        if style == "wide":
-            self.band.children = [self.controls, self.status]
-            self.root.children = [self.band, self.picture_box, *tail]
-        else:
-            self.band.children = []
-            self.root.children = [self.controls, self.status, self.picture_box, *tail]
 
     def grouped_panel(self, widgets):
-        """Up to 30 sliders: one box per unit with weights that move, headed by the names of their inputs."""
+        """Up to 30 sliders: one column per unit with weights that move, headed by the unit and its inputs; the
+        columns line up in a grid."""
         S = self.session
         M = S.model
         moving = set(self.index)
@@ -260,7 +234,10 @@ class Controller:
                     head = widgets.HTML(f"<b>{M.unit_title(layer, j)}</b>: weights for {names}")
                     boxes.append(widgets.VBox([head] + [self.sliders[self.index.index(q)] for q in ks]))
                 k += L.in_features + 1
-        return widgets.Box(boxes, layout=widgets.Layout(flex_flow="row wrap"))
+        return widgets.GridBox(
+            boxes,
+            layout=widgets.Layout(grid_template_columns="repeat(auto-fill, minmax(270px, 1fr))", grid_gap="2px 16px"),
+        )
 
     def dropdown_panel(self, widgets):
         """More than 30 sliders: choose one weight, then move it."""
@@ -272,14 +249,16 @@ class Controller:
         return widgets.HBox([pick, holder])
 
     def backprop_tab(self, widgets):
-        """Back and next buttons, the stage, the case the derivation follows, and the formula of the stage."""
+        """Previous and next stage, the stage, the case the derivation follows, and the formula of the stage."""
         S = self.session
         n = len(S.backprop_stages)
-        self.bp_prev = tip(widgets.Button(description="◀ back"), "the stage before")
+        self.bp_prev = tip(widgets.Button(description="previous stage"), "the stage before")
         self.bp_next = tip(
-            widgets.Button(description="next ▶", button_style="primary"), "the next stage, one layer back"
+            widgets.Button(description="next stage", button_style="primary"), "the next stage, one layer back"
         )
-        self.bp_step = widgets.IntSlider(value=S.backprop_step, min=0, max=n - 1, description="stage")
+        self.bp_step = widgets.IntSlider(
+            value=S.backprop_step, min=0, max=n - 1, description="stage", style=SLIDER_STYLE
+        )
         tip(self.bp_step, "0 is the forward pass; the last stage is the average over the cases")
         letters = [chr(65 + c) if c < 26 else str(c) for c in range(S.data.G)]
         self.bp_case = widgets.Dropdown(
@@ -294,8 +273,11 @@ class Controller:
         self.bp_next.on_click(lambda _: setattr(self.bp_step, "value", min(n - 1, self.bp_step.value + 1)))
         self.bp_step.observe(self.on_backprop, names="value")
         self.bp_case.observe(self.on_backprop, names="value")
-        buttons = widgets.HBox([self.bp_prev, self.bp_next, self.bp_case], layout=widgets.Layout(flex_flow="row wrap"))
-        return widgets.VBox([widgets.HTML(guide_html(GUIDES["backprop"])), buttons, self.bp_step, self.bp_caption])
+        row = widgets.HBox(
+            [self.bp_prev, self.bp_next, self.bp_step, self.bp_case],
+            layout=widgets.Layout(align_items="center", flex_flow="row wrap"),
+        )
+        return widgets.VBox([widgets.HTML(text_html(HINTS["backprop"])), row, self.bp_caption])
 
     def views_tab(self, widgets):
         """A checkbox per extra panel with a line on what it shows, and the settings of the panels."""
@@ -310,8 +292,10 @@ class Controller:
             widgets.HBox([box, widgets.HTML(f'<span style="color:#666;font-size:12px">{VIEW_HELP[v]}</span>')])
             for v, box in self.view_boxes.items()
         ]
-        self.case_pick = widgets.Dropdown(options=names, value=names[S.case_weight], description="case slopes of")
-        tip(self.case_pick, "the weight of the panel 'each case's slope'")
+        self.case_pick = tip(
+            widgets.Dropdown(options=names, value=names[S.case_weight], description="case slopes of"),
+            "the weight of the panel 'each case's slope'",
+        )
         a = S.slice_weights[0]
         b = S.slice_weights[1] if len(S.slice_weights) > 1 else None
         self.slice_pick = [
@@ -335,18 +319,11 @@ class Controller:
         )
         for w in [*self.view_boxes.values(), self.case_pick, *self.slice_pick, self.beta, self.ahead, self.log_box]:
             w.observe(self.on_views, names="value")
-        return widgets.VBox(
-            [
-                widgets.HTML(guide_html(GUIDES["views"])),
-                *rows,
-                self.log_box,
-                widgets.HTML("<b>Settings</b>"),
-                self.case_pick,
-                *self.slice_pick,
-                self.beta,
-                self.ahead,
-            ]
+        settings = widgets.GridBox(
+            [self.case_pick, *self.slice_pick, self.beta, self.ahead],
+            layout=widgets.Layout(grid_template_columns="repeat(auto-fill, minmax(300px, 1fr))", grid_gap="2px 16px"),
         )
+        return widgets.VBox([widgets.HTML(text_html(HINTS["views"])), *rows, self.log_box, settings])
 
     # ---------------------------------------------------------------- state
 
@@ -372,19 +349,16 @@ class Controller:
         self.session.model.set_weights(self.values())
         self.redraw()
         if change is not None and before is not None:
-            name = change["owner"].description
-            self.say(
-                f"You set {name} from {change['old']:.2f} to {change['new']:.2f}: {change_words(before, self.last_R)}."
-            )
+            name, old, new = change["owner"].description, change["old"], change["new"]
+            self.say(f"{name} changed from {old:.2f} to {new:.2f}: {change_words(before, self.last_R)}.")
 
     def on_eta(self, change):
         self.session.eta = float(change["new"])
         if not self.busy:
             self.redraw()
-            r = self.session.readouts(self.session.eta)
-            self.say(
-                f"eta is now {self.session.eta:g}: the next step should change R by about {r['next_change']:+.4f}."
-            )
+            eta = self.session.eta
+            r = self.session.readouts(eta)
+            self.say(f"eta is now {eta:g}: the next step should change R by about {r['next_change']:+.4f}.")
 
     def on_backprop(self, *_):
         S = self.session
@@ -394,26 +368,15 @@ class Controller:
             self.redraw()
             self.say(self.stage_words())
 
-    def on_tab(self, change):
-        """The Backprop tab turns the backward pass on; leaving it turns it off."""
-        S = self.session
-        on = self.kinds[change["new"]] == "backprop"
-        if on == ("backprop" in S.views):
-            return
-        S.views = tuple(v for v in VIEWS if (v == "backprop" and on) or (v != "backprop" and v in S.views))
-        self.picture = None
-        self.redraw()
-        self.say(self.stage_words() if on else "The backward pass is off. The Backprop tab turns it on again.")
-
     def on_layout(self, change):
-        """Switches between the wide and the standard layout: a new figure and a new arrangement."""
+        """Switches between the wide and the standard layout: a new figure."""
         S = self.session
         S.set_layout(change["new"])
         self.arrange(change["new"])
         self.picture = None
         self.redraw()
-        where = "beside" if change["new"] == "wide" else "above"
-        self.say(f"Layout: {change['new']}, with the controls {where} the picture.")
+        where = "all networks in one row" if change["new"] == "wide" else "two networks per row, larger text"
+        self.say(f"Layout {change['new']}: {where}.")
 
     def on_views(self, *_):
         if self.busy:
@@ -493,13 +456,10 @@ class Controller:
             self.last_R = self.picture.frame.R
             png = self.picture.png()
             self.readout.value = readout_html(S.readouts(self.eta.value, w))
-            n = len(S.backprop_stages) - 1
-            stage = S.backprop_stages[S.backprop_step]
             if "backprop" in self.kinds:
-                self.bp_caption.value = (
-                    f'<div style="font-size:14px;padding:4px 0"><b>Stage {S.backprop_step} of {n}.</b> '
-                    f"{stage.text}</div>"
-                )
+                n = len(S.backprop_stages) - 1
+                text = S.backprop_stages[S.backprop_step].text
+                self.bp_caption.value = text_html(f"Stage {S.backprop_step} of {n}. {text[:1].upper()}{text[1:]}.")
             if self.use_output:
                 from IPython.display import Image, clear_output, display
 

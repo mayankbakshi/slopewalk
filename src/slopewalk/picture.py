@@ -15,7 +15,7 @@ from matplotlib.figure import Figure
 
 from .backprop import backward_pass, draw_derivation, label_spec, line_styles, overlay, stage_index
 from .draw import draw_case, draw_edge_labels, draw_history, draw_input_plane, draw_slope_table
-from .layout import BOTTOM_HEIGHT, BOTTOM_PER_ROW
+from .layout import BOTTOM_HEIGHT, NET_GAP, PANEL_GAP
 from .views import VIEW_DRAWERS, VIEWS, needs_3d
 
 Frame = namedtuple(
@@ -69,26 +69,6 @@ def bottom_panels(S):
     return ["plane", "history", "table"] + [v for v in VIEWS if v in S.views]
 
 
-def bottom_slots(S, panels):
-    """(row, column, columns spanned) of each lower panel, and the number of columns. The derivation of the backward
-    pass is text: it takes a whole row (two columns of the wide layout); the other panels take one column each."""
-    L = S.layout
-    span = {name: 1 for name in panels}
-    if "backprop" in span:
-        span["backprop"] = 2 if L.style == "wide" else BOTTOM_PER_ROW
-    cols = L.bottom_per_row(sum(span.values()))
-    slots, r, c = {}, 0, 0
-    for name in panels:
-        width = min(span[name], cols)
-        if c + width > cols:
-            r, c = r + 1, 0
-        slots[name] = (r, c, width)
-        c += width
-        if c >= cols:
-            r, c = r + 1, 0
-    return slots, cols
-
-
 class Picture:
     """The figure of a session for its current views. refresh(w) draws it at the weights w.
 
@@ -103,8 +83,8 @@ class Picture:
         per_row, rows = L.per_row(D.G), L.rows(D.G)
         with_sd = any(sel.sum() > 1 for sel in D.gsel)  # groups of points: the boxes show mean and standard deviation
         backprop = "backprop" in S.views  # taller rows: room for the backward boxes under the units
-        slots, bottom_cols = bottom_slots(S, self.panels)
-        n_bottom = max(r for r, _, _ in slots.values()) + 1
+        lower = L.lower_rows(self.panels, S.model.n_weights)
+        n_bottom = len(lower)
         size = (L.width, L.row_height(with_sd, backprop) * rows + BOTTOM_HEIGHT * n_bottom)
         if pyplot:
             fig = plt.figure(figsize=size)
@@ -112,17 +92,22 @@ class Picture:
             fig = Figure(figsize=size, dpi=dpi)
             FigureCanvasAgg(fig)
         heights = [L.row_height(with_sd, backprop)] * rows + [BOTTOM_HEIGHT] * n_bottom
-        gs = fig.add_gridspec(rows + n_bottom, bottom_cols, height_ratios=heights)
+        gs = fig.add_gridspec(rows + n_bottom, 1, height_ratios=heights)  # every row has its own grid and spacing
         self.case_axes = []
-        for c in range(D.G):
-            r, cc = divmod(c, per_row)
-            cell = gs[r, :] if per_row == 1 else gs[r, :].subgridspec(1, per_row)[0, cc]
-            self.case_axes.append(fig.add_subplot(cell))
+        for r in range(rows):
+            if per_row == 1:
+                self.case_axes.append(fig.add_subplot(gs[r, 0]))
+            else:
+                cells = gs[r, 0].subgridspec(1, per_row, wspace=L.wspace(per_row, NET_GAP))
+                self.case_axes += [fig.add_subplot(cells[0, c]) for c in range(min(per_row, D.G - r * per_row))]
         self.axes = {}
-        for name in self.panels:
-            r, cc, span = slots[name]
-            extra = {"projection": "3d"} if name == "hidden" and needs_3d(S) else {}
-            self.axes[name] = fig.add_subplot(gs[rows + r, cc : cc + span], **extra)
+        for r, row in enumerate(lower):
+            widths = [w for _, w in row]
+            cells = gs[rows + r, 0].subgridspec(1, len(row), width_ratios=widths, wspace=L.wspace(len(row), PANEL_GAP))
+            for c, (name, _) in enumerate(row):
+                if name is not None:
+                    extra = {"projection": "3d"} if name == "hidden" and needs_3d(S) else {}
+                    self.axes[name] = fig.add_subplot(cells[0, c], **extra)
         if S.title:
             fig.suptitle(S.title, fontsize=S.theme.suptitle_size)
         self.fig = fig

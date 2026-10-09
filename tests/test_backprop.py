@@ -12,7 +12,7 @@ from render_examples import reference_net
 
 from slopewalk import Session, explore, xor_centres
 from slopewalk.backprop import backprop_stages, backward_pass, derivation_lines, traced_case
-from slopewalk.draw import THEME
+from slopewalk.draw import THEME, width_share
 from slopewalk.model import Model
 
 XOR = xor_centres()
@@ -159,11 +159,13 @@ def test_options(static):
         explore(reference_net(40), *XOR, backprop_case="Z")
 
 
-def test_wide_layout_gives_the_derivation_two_columns(static):
-    s = explore(reference_net(40), *XOR, views="backprop", layout="wide", backprop_step=1)
-    ax = [a for a in s.fig.axes if a.get_title(loc="left").startswith("backward pass of A")][0]
-    spec = ax.get_subplotspec()
-    assert spec.colspan.stop - spec.colspan.start == 2
+def test_the_derivation_is_the_widest_lower_panel(static):
+    for style, share in (("wide", 0.3), ("standard", 1.0)):
+        s = explore(reference_net(40), *XOR, views="backprop", layout=style, backprop_step=1)
+        ax = [a for a in s.fig.axes if a.get_title(loc="left").startswith("backward pass of A")][0]
+        others = [a for a in s.fig.axes[4:] if a is not ax]
+        assert width_share(ax) >= share and all(width_share(a) < width_share(ax) for a in others)
+        plt.close("all")
 
 
 def test_record_backprop(tmp_path):
@@ -186,20 +188,20 @@ def test_widget_controls(monkeypatch):
     monkeypatch.setattr(IPython.display, "display", lambda *a, **k: None)
     s = explore(reference_net(40), *XOR, views="backprop")
     C = s.controller
-    assert C.tabs.selected_index == 1 and "backprop" in s.views and "Press next ▶" in C.message.value
+    assert C.tabs.selected_index == 1 and "backprop" in s.views and "Press next stage" in C.message.value
     png = C.image.value
     C.bp_next.click()
     C.bp_next.click()
     assert s.backprop_step == 2 and C.image.value != png
-    assert "Stage 2 of 6" in C.bp_caption.value and "Look at the purple lines" in C.message.value
+    assert "Stage 2 of 6. Slopes of the output weights" in C.bp_caption.value
+    assert "On the purple lines" in C.message.value
     C.bp_prev.click()
     assert s.backprop_step == 1
     C.bp_case.value = "D"
     assert s.backprop_case == 3 and any(ax.get_title(loc="left").startswith("backward pass of D") for ax in s.fig.axes)
-    C.tabs.selected_index = 0  # leaving the tab turns the backward pass off
-    assert "backprop" not in s.views and "backward pass is off" in C.message.value
-    C.tabs.selected_index = 1  # and coming back turns it on again, at the same stage
-    assert "backprop" in s.views and s.backprop_step == 1
+    png = C.image.value
+    C.tabs.selected_index = 0  # the other tab: the backward pass stays in the picture, which does not change
+    assert "backprop" in s.views and s.backprop_step == 1 and C.image.value == png
     starts_on = explore(reference_net(40), *XOR, backprop_step=3).controller
     assert starts_on.tabs.selected_index == 1
     plt.close("all")

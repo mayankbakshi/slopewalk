@@ -10,7 +10,7 @@ from render_examples import CASES
 
 from slopewalk import explore, sine_points, xor_centres
 from slopewalk.draw import THEME
-from slopewalk.layout import overlap_area
+from slopewalk.layout import Layout, overlap_area
 
 EXTRA = {
     "three_inputs": lambda: (make("three_inputs"), [(0, 0, 1), (1, 1, 1), (1, 0, 0)], [0, 1, 1], None),
@@ -148,7 +148,8 @@ def test_wide_layout_sizes(static):
     assert len(tops) == 1 and len(panels(wide.fig)) == 4
     views = explore(make("tanh3"), X, y, groups, layout="wide", views=("slice", "line", "momentum"))
     lower = views.fig.axes[4:]
-    assert len(lower) == 6 and len({ax.get_subplotspec().rowspan.start for ax in lower}) == 1  # one row of six
+    rows = {ax.get_subplotspec().get_topmost_subplotspec().rowspan.start for ax in lower}
+    assert len(lower) == 6 and len(rows) == 1  # one row of six
     assert explore(make("tanh3"), X, y, groups, width=18).fig.get_size_inches()[0] == 18
     deep = explore(make("two_hidden"), X, y, groups, layout="wide")
     assert len({round(ax.get_position().y0, 3) for ax in panels(deep.fig)}) == 2  # deep networks: two per row
@@ -196,3 +197,39 @@ def test_backprop_labels_do_not_overlap(step, style, static):
                     assert overlap_area(a, b) <= 0.02 * area, (step, style, ax.get_title(), i, j)
             for b in others + glyphs:
                 assert overlap_area(a, b) <= 0.05 * area, (step, style, ax.get_title(), i)
+
+
+def test_network_panels_keep_their_size_and_spacing(static):
+    """The panels below the networks do not change the network panels: half an inch between them, in every case."""
+    X, y, groups = xor_centres()
+    for style in ("standard", "wide"):
+        gaps, widths = set(), []
+        for views in ((), ("backprop",), ("slice", "line"), ("cases", "slice", "line", "hidden", "momentum")):
+            fig = explore(make("tanh3"), X, y, groups, layout=style, views=views).fig
+            W = fig.get_figwidth()
+            boxes = [ax.get_position() for ax in panels(fig)]
+            row = [b for b in boxes if abs(b.y0 - boxes[0].y0) < 1e-6]
+            gaps |= {round((b.x0 - a.x1) * W, 1) for a, b in zip(row, row[1:])}
+            widths.append(boxes[0].width * W)
+            plt.close("all")
+        assert gaps == {0.5} and max(widths) - min(widths) < 0.15 * max(widths)
+
+
+def test_lower_rows():
+    wide = Layout(2, [3], style="wide")
+    (row,) = wide.lower_rows(["plane", "history", "table"])
+    widths = dict(row)
+    assert list(widths) == ["plane", "history", "table"] and sum(widths.values()) == pytest.approx(27)
+    assert widths["plane"] == 4.6 and widths["history"] > widths["table"] > widths["plane"]  # R gets the spare width
+    rows = wide.lower_rows(["plane", "history", "table", "backprop", "cases", "slice", "line", "hidden", "momentum"])
+    assert [[n for n, _ in r] for r in rows] == [
+        ["plane", "history", "table", "backprop"],
+        ["cases", "slice", "line", "hidden", "momentum"],
+    ]
+    assert all(sum(w for _, w in r) == pytest.approx(27) for r in rows)  # every row is filled
+    standard = Layout(2, [3])
+    assert standard.lower_rows(["plane", "history", "table", "backprop", "cases"]) == [
+        [("plane", 5.0), ("history", 5.0), ("table", 5.0)],
+        [("backprop", 15.0)],
+        [("cases", 5.0), (None, 5.0), (None, 5.0)],
+    ]

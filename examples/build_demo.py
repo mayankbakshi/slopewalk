@@ -140,7 +140,7 @@ Image("run.gif")
 md(r"""
 ## 11. Backpropagation step by step
 
-The view `backprop` draws the backward pass one stage at a time, from the output back to the first layer: $\delta_a = p - y$ at the output, the slopes of the output weights ($\delta_a$ times the input of each line), $\partial \ell / \partial h_j = w_j \delta_a$, $\delta_j = \tanh'(z_j)\, \partial \ell / \partial h_j$, and the slopes of the first-layer weights. The buttons step forward and back; the panel below writes out the numbers for one case. The last stage: the average over the cases is the slope column of the table.
+The view `backprop` draws the backward pass one stage at a time, from the output back to the first layer: $\delta_a = p - y$ at the output, the slopes of the output weights ($\delta_a$ times the input of each line), $\partial \ell / \partial h_j = w_j \delta_a$, $\delta_j = \tanh'(z_j)\, \partial \ell / \partial h_j$, and the slopes of the first-layer weights. `previous stage` and `next stage` step through the stages; the panel below writes out the numbers for one case. The last stage: the average over the cases is the slope column of the table.
 """)
 code(r"""
 torch.manual_seed(0)
@@ -151,7 +151,7 @@ explore(net, X, y, groups, views=("backprop",), backprop_step=2)
 md(r"""
 ## 12. Wide screens
 
-`layout="wide"` puts the four networks side by side, the lower panels in one row, and the controls beside the picture. It helps most in VS Code or JupyterLab on a large monitor; Colab shows notebooks at a fixed width.
+`layout="wide"` puts the four networks side by side and the lower panels in one row. It is the default where the sliders run in VS Code or JupyterLab, and it helps most on a large monitor. Colab shows notebooks at a fixed width and uses the standard layout.
 """)
 code(r"""
 torch.manual_seed(0)
