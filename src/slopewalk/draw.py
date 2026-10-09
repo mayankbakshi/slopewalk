@@ -249,6 +249,8 @@ def draw_case(ax, S, F, c, styles=None):
     node = dict(fontsize=T.node_size, ha="center", va="center", zorder=4)
     value = dict(fontsize=T.value_size, ha="center", va="center", zorder=5, bbox=T.value_box)
     edges, obstacles = [], []  # edges: (k, source, target, preferred label fraction); obstacles: boxes to keep clear
+    # in the backpropagation view the names of the values are written once, in panel A; the other panels show values
+    tag = (lambda name: f"{name}\n") if c == 0 or F.stage is None else (lambda name: "")
     src = [(0.12, yy) for yy in L.y_inputs]
     src_x, k = 0.0, 0
     for l, layer in enumerate(M.layers):
@@ -269,14 +271,14 @@ def draw_case(ax, S, F, c, styles=None):
             (zm, zs), (hm, hs) = D.stats(out.hidden[l][0], c), D.stats(out.hidden[l][1], c)
             for j, ty in enumerate(tys):
                 nm = M.unit_name(l, j)
-                ax.text(XZ, ty, f"z{nm}\n" + num(zm[j], zs[j]), **value)
+                ax.text(XZ, ty, tag(f"z{nm}") + num(zm[j], zs[j]), **value)
                 if layer.act:
                     ax.annotate("", xy=(XG - 0.31, ty), xytext=(XZ + BW, ty), arrowprops=arrow)
                     obstacles.append(glyph(ax, XG, ty, layer.act, zm[j], zs[j], T, height=glyph_height))
                     ax.annotate("", xy=(XH - BW, ty), xytext=(XG + 0.31, ty), arrowprops=arrow)
                 else:
                     ax.annotate("", xy=(XH - BW, ty), xytext=(XZ + BW, ty), arrowprops=arrow)
-                ax.text(XH, ty, f"h{nm}\n" + num(hm[j], hs[j]), color=T.hidden, **value)
+                ax.text(XH, ty, tag(f"h{nm}") + num(hm[j], hs[j]), color=T.hidden, **value)
             src = [(XH + BW, ty) for ty in tys]
             src_x = XH
     xm, xs = D.stats(D.X.numpy(), c)
@@ -299,9 +301,8 @@ def draw_case(ax, S, F, c, styles=None):
     change = f"change\nfrom start\n{lm - S.loss0[c]:+.3f}"
     loss_box = dict(boxstyle="round,pad=0.3", fc=tint, ec=col, lw=0.8)
     if D.task == "regression":
-        ax.text(
-            L.x_a, 1.2, "ŷ\n" + num(am, as_), fontsize=T.node_size, ha="center", va="center", zorder=5, bbox=T.value_box
-        )
+        box_a = dict(fontsize=T.node_size, ha="center", va="center", zorder=5, bbox=T.value_box)
+        ax.text(L.x_a, 1.2, tag("ŷ") + num(am, as_), **box_a)
         ax.annotate("", xy=(L.x_loss - 0.42 * L.text_scale, 1.2), xytext=(L.x_a + BW, 1.2), arrowprops=arrow)
         ym, ys = D.stats(D.y.numpy(), c)
         ytxt = f"y = {ym:+.2f}" if npts == 1 else f"y {ym:+.2f}\n±{ys:.2f}"
@@ -318,16 +319,15 @@ def draw_case(ax, S, F, c, styles=None):
         title = f"{lead}, y = {ym:+.2f}:  loss {lm:.3f}"
     else:
         pm, ps = D.stats(out.p, c)
-        ax.text(
-            L.x_a, 1.2, "a\n" + num(am, as_), fontsize=T.node_size, ha="center", va="center", zorder=5, bbox=T.value_box
-        )
+        box_a = dict(fontsize=T.node_size, ha="center", va="center", zorder=5, bbox=T.value_box)
+        ax.text(L.x_a, 1.2, tag("a") + num(am, as_), **box_a)
         ax.annotate("", xy=(L.x_sigmoid - 0.31, 1.2), xytext=(L.x_a + BW, 1.2), arrowprops=arrow)
         obstacles.append(glyph(ax, L.x_sigmoid, 1.2, SIGMOID, am, as_, T))
         ax.annotate("", xy=(L.x_p - BW, 1.2), xytext=(L.x_sigmoid + 0.31, 1.2), arrowprops=arrow)
         ax.text(
             L.x_p,
             1.2,
-            "p\n" + num(pm, ps, sign=False),
+            tag("p") + num(pm, ps, sign=False),
             fontsize=T.node_size,
             ha="center",
             va="center",

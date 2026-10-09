@@ -136,7 +136,7 @@ def test_pictures_of_every_stage(static):
             len(labels)
             == {"forward": 13, "output": 0, "weights": 4 if k == 2 else 9, "to_h": 3, "delta": 0, "average": 13}[kind]
         )
-        derivation = [ax for ax in fig.axes if ax.get_title(loc="left").startswith("backward pass of A")]
+        derivation = [ax for ax in fig.axes if ax.get_title(loc="left").startswith("worked example: case A")]
         assert len(derivation) == 1 and f"stage {k} of 6" in derivation[0].get_title(loc="left")
         plt.close("all")
 
@@ -152,7 +152,7 @@ def test_slope_labels_are_the_group_means(static):
 def test_options(static):
     s = explore(reference_net(40), *XOR, backprop_step=3, backprop_case="C")
     assert "backprop" in s.views and s.backprop_step == 3 and s.backprop_case == 2
-    assert any(ax.get_title(loc="left").startswith("backward pass of C") for ax in s.fig.axes)
+    assert any(ax.get_title(loc="left").startswith("worked example: case C") for ax in s.fig.axes)
     with pytest.raises(ValueError, match="backprop_step must be a whole number from 0 to 6"):
         explore(reference_net(40), *XOR, backprop_step=7)
     with pytest.raises(ValueError, match="is not a group"):
@@ -162,7 +162,7 @@ def test_options(static):
 def test_the_derivation_is_the_widest_lower_panel(static):
     for style, share in (("wide", 0.3), ("standard", 1.0)):
         s = explore(reference_net(40), *XOR, views="backprop", layout=style, backprop_step=1)
-        ax = [a for a in s.fig.axes if a.get_title(loc="left").startswith("backward pass of A")][0]
+        ax = [a for a in s.fig.axes if a.get_title(loc="left").startswith("worked example: case A")][0]
         others = [a for a in s.fig.axes[4:] if a is not ax]
         assert width_share(ax) >= share and all(width_share(a) < width_share(ax) for a in others)
         plt.close("all")
@@ -198,7 +198,8 @@ def test_widget_controls(monkeypatch):
     C.bp_prev.click()
     assert s.backprop_step == 1
     C.bp_case.value = "D"
-    assert s.backprop_case == 3 and any(ax.get_title(loc="left").startswith("backward pass of D") for ax in s.fig.axes)
+    titles = [ax.get_title(loc="left") for ax in s.fig.axes]
+    assert s.backprop_case == 3 and any(t.startswith("worked example: case D") for t in titles)
     png = C.image.value
     C.tabs.selected_index = 0  # the other tab: the backward pass stays in the picture, which does not change
     assert "backprop" in s.views and s.backprop_step == 1 and C.image.value == png
@@ -219,3 +220,20 @@ def test_shared_labels_only_in_the_first_panel(static):
         s.backprop_step = k
         assert count(s.draw()) == expected, k
         plt.close("all")
+
+
+def test_names_once_in_the_backpropagation_view(static):
+    """Names that repeat in every panel (z, h, a, p, δ, ∂ℓ/∂h, and the slopes' names) are written in panel A only;
+    the other panels show the values."""
+    s = explore(make("logistic"), *XOR, views="backprop", backprop_step=2)  # 3 weights: slope labels with names
+    P = network_panels(s.fig)
+    first = [t.get_text() for t in P[0].texts]
+    assert any(t.startswith("a\n") for t in first) and any(t.startswith("δa\n") for t in first)
+    assert any(t.startswith("∂ℓ/∂w1 = ") for t in first)
+    for ax in P[1:]:
+        texts = [t.get_text() for t in ax.texts]
+        assert not any(t.startswith(("a\n", "p\n", "δa\n", "∂ℓ/∂")) for t in texts)
+        assert len(backward_boxes(ax)) == len(backward_boxes(P[0]))  # the same boxes, values only
+    plain = explore(make("logistic"), *XOR)  # outside the backpropagation view every panel keeps its names
+    assert all(any(t.get_text().startswith("a\n") for t in ax.texts) for ax in network_panels(plain.fig))
+    plt.close("all")

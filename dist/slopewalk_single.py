@@ -922,6 +922,8 @@ def draw_case(ax, S, F, c, styles=None):
     node = dict(fontsize=T.node_size, ha="center", va="center", zorder=4)
     value = dict(fontsize=T.value_size, ha="center", va="center", zorder=5, bbox=T.value_box)
     edges, obstacles = [], []  # edges: (k, source, target, preferred label fraction); obstacles: boxes to keep clear
+    # in the backpropagation view the names of the values are written once, in panel A; the other panels show values
+    tag = (lambda name: f"{name}\n") if c == 0 or F.stage is None else (lambda name: "")
     src = [(0.12, yy) for yy in L.y_inputs]
     src_x, k = 0.0, 0
     for l, layer in enumerate(M.layers):
@@ -942,14 +944,14 @@ def draw_case(ax, S, F, c, styles=None):
             (zm, zs), (hm, hs) = D.stats(out.hidden[l][0], c), D.stats(out.hidden[l][1], c)
             for j, ty in enumerate(tys):
                 nm = M.unit_name(l, j)
-                ax.text(XZ, ty, f"z{nm}\n" + num(zm[j], zs[j]), **value)
+                ax.text(XZ, ty, tag(f"z{nm}") + num(zm[j], zs[j]), **value)
                 if layer.act:
                     ax.annotate("", xy=(XG - 0.31, ty), xytext=(XZ + BW, ty), arrowprops=arrow)
                     obstacles.append(glyph(ax, XG, ty, layer.act, zm[j], zs[j], T, height=glyph_height))
                     ax.annotate("", xy=(XH - BW, ty), xytext=(XG + 0.31, ty), arrowprops=arrow)
                 else:
                     ax.annotate("", xy=(XH - BW, ty), xytext=(XZ + BW, ty), arrowprops=arrow)
-                ax.text(XH, ty, f"h{nm}\n" + num(hm[j], hs[j]), color=T.hidden, **value)
+                ax.text(XH, ty, tag(f"h{nm}") + num(hm[j], hs[j]), color=T.hidden, **value)
             src = [(XH + BW, ty) for ty in tys]
             src_x = XH
     xm, xs = D.stats(D.X.numpy(), c)
@@ -972,9 +974,8 @@ def draw_case(ax, S, F, c, styles=None):
     change = f"change\nfrom start\n{lm - S.loss0[c]:+.3f}"
     loss_box = dict(boxstyle="round,pad=0.3", fc=tint, ec=col, lw=0.8)
     if D.task == "regression":
-        ax.text(
-            L.x_a, 1.2, "ŷ\n" + num(am, as_), fontsize=T.node_size, ha="center", va="center", zorder=5, bbox=T.value_box
-        )
+        box_a = dict(fontsize=T.node_size, ha="center", va="center", zorder=5, bbox=T.value_box)
+        ax.text(L.x_a, 1.2, tag("ŷ") + num(am, as_), **box_a)
         ax.annotate("", xy=(L.x_loss - 0.42 * L.text_scale, 1.2), xytext=(L.x_a + BW, 1.2), arrowprops=arrow)
         ym, ys = D.stats(D.y.numpy(), c)
         ytxt = f"y = {ym:+.2f}" if npts == 1 else f"y {ym:+.2f}\n±{ys:.2f}"
@@ -991,16 +992,15 @@ def draw_case(ax, S, F, c, styles=None):
         title = f"{lead}, y = {ym:+.2f}:  loss {lm:.3f}"
     else:
         pm, ps = D.stats(out.p, c)
-        ax.text(
-            L.x_a, 1.2, "a\n" + num(am, as_), fontsize=T.node_size, ha="center", va="center", zorder=5, bbox=T.value_box
-        )
+        box_a = dict(fontsize=T.node_size, ha="center", va="center", zorder=5, bbox=T.value_box)
+        ax.text(L.x_a, 1.2, tag("a") + num(am, as_), **box_a)
         ax.annotate("", xy=(L.x_sigmoid - 0.31, 1.2), xytext=(L.x_a + BW, 1.2), arrowprops=arrow)
         obstacles.append(glyph(ax, L.x_sigmoid, 1.2, SIGMOID, am, as_, T))
         ax.annotate("", xy=(L.x_p - BW, 1.2), xytext=(L.x_sigmoid + 0.31, 1.2), arrowprops=arrow)
         ax.text(
             L.x_p,
             1.2,
-            "p\n" + num(pm, ps, sign=False),
+            tag("p") + num(pm, ps, sign=False),
             fontsize=T.node_size,
             ha="center",
             va="center",
@@ -1776,7 +1776,8 @@ def label_spec(S, F, c):
     if st.kind in ("weights", "average"):
         ks = M.layer_indices(st.layer) if st.kind == "weights" else range(M.n_weights)
         for k in ks:
-            spec[k] = (f"∂ℓ/∂{M.names[k]} = {g[k]:+.3f}", f"{g[k]:+.3f}", T.backprop_colour, f"{g[k]:+.2f}")
+            long = f"∂ℓ/∂{M.names[k]} = {g[k]:+.3f}" if c == 0 else f"{g[k]:+.3f}"  # names in panel A only
+            spec[k] = (long, f"{g[k]:+.3f}", T.backprop_colour, f"{g[k]:+.2f}")
     elif st.kind == "to_h":
         for k in M.layer_indices(st.layer + 1):
             if M.where[k][2] >= 0:
@@ -1835,10 +1836,11 @@ def overlay(ax, S, F, c, edges):
     bp = F.bp
     sel = D.gsel[c]
     reached = S.backprop_stages[1 : stage_index(S) + 1]
+    tag = (lambda name: f"{name}\n") if c == 0 else (lambda name: "")  # the names once, in panel A
     for s in reached:
         if s.kind == "output":
             m, sd = D.stats(bp.delta[-1][:, 0], c)
-            box(ax, L.x_a, 1.2, "δa\n" + num(m, sd), T)
+            box(ax, L.x_a, 1.2, tag("δa") + num(m, sd), T)
         elif s.kind in ("to_h", "delta"):
             l = s.layer
             XZ, XG, XH = L.blocks[l]
@@ -1848,9 +1850,9 @@ def overlay(ax, S, F, c, edges):
                 m, sd = D.stats(values[:, j], c)
                 nm = M.unit_name(l, j)
                 if s.kind == "to_h":
-                    box(ax, XH, ty, f"∂ℓ/∂h{nm}\n" + num(m, sd), T)
+                    box(ax, XH, ty, tag(f"∂ℓ/∂h{nm}") + num(m, sd), T)
                 else:
-                    box(ax, XZ, ty, f"δ{nm}\n" + num(m, sd), T)
+                    box(ax, XZ, ty, tag(f"δ{nm}") + num(m, sd), T)
     if st.kind == "delta" and M.layers[st.layer].act:
         l = st.layer
         XZ, XG, XH = L.blocks[l]
@@ -1953,7 +1955,8 @@ def derivation_lines(S, F, i):
 
 
 def draw_derivation(ax, S, F):
-    """The backward pass of one case, step by step: the stages reached so far, the current one in bold."""
+    """The worked example: the backward pass of one case, step by step; the stages reached so far, the current one in
+    bold."""
     T = S.theme
     ax.axis("off")
     c = max(0, min(S.backprop_case, S.data.G - 1))
@@ -1964,8 +1967,10 @@ def draw_derivation(ax, S, F):
     per_column, columns = 12, 2  # the steps run down the first column, then the second
     most = per_column * columns
     shown = lines[-most:]
-    group = "" if S.data.gsel[c].sum() == 1 else f", the case nearest the mean of group {letter(c)}"
-    head = f"backward pass of {letter(c)}{group}"
+    if S.data.gsel[c].sum() == 1:
+        head = f"worked example: case {letter(c)}"
+    else:
+        head = f"worked example: the case nearest the mean of group {letter(c)}"
     title = f"{head}\nstage {step} of {len(S.backprop_stages) - 1}: {stage.text}"
     ax.set_title(title, fontsize=T.panel_title_size, loc="left")
     dy = 0.96 / per_column
@@ -2178,7 +2183,7 @@ UI = {
     "column": "270px",  # the narrowest column of the slider grid
     "gap": "16px",
 }
-TITLES = {"core": "Weights and steps", "backprop": "Backprop", "views": "Views"}
+TITLES = {"core": "Weights and steps", "backprop": "Backpropagation", "views": "Views"}
 VIEW_LABELS = {
     "backprop": "backward pass",
     "cases": "each case's slope",
@@ -2204,7 +2209,8 @@ LOOK = {  # where to look in the picture at each stage of the backward pass
 }
 HINTS = {
     "core": "Press gradient step to move every weight against its slope. Drag a slider to change one weight.",
-    "backprop": "Step from the output back to the first layer. The text panel below the networks follows one case.",
+    "backprop": "Step from the output back to the first layer. The worked example below the networks writes out the "
+    "numbers for one case.",
     "views": "Tick a box to add a view under the network.",
 }
 BUTTONS = ("gradient step", "10 steps", "back one step", "reset")
@@ -2446,7 +2452,7 @@ class Controller:
         return widgets.HBox([pick, holder])
 
     def backprop_tab(self, widgets):
-        """Previous and next stage, the stage and the case the text panel below the networks follows."""
+        """Previous and next stage, the stage, and the case of the worked example below the networks."""
         S = self.session
         n = len(S.backprop_stages)
         self.bp_prev = tip(widgets.Button(description="previous stage"), "the stage before")
@@ -2467,11 +2473,11 @@ class Controller:
         self.bp_case = widgets.Dropdown(
             options=letters,
             value=letters[S.backprop_case],
-            description="trace case",
-            style={"description_width": "70px"},
-            layout=widgets.Layout(width="190px"),
+            description="worked example",
+            style={"description_width": UI["setting_label"]},
+            layout=widgets.Layout(width=UI["short"]),
         )
-        tip(self.bp_case, "the group whose case the text panel below the networks follows")
+        tip(self.bp_case, "the case whose numbers the worked example writes out (in a group: the one nearest its mean)")
         self.bp_prev.on_click(lambda _: setattr(self.bp_step, "value", max(0, self.bp_step.value - 1)))
         self.bp_next.on_click(lambda _: setattr(self.bp_step, "value", min(n - 1, self.bp_step.value + 1)))
         self.bp_step.observe(self.on_backprop, names="value")

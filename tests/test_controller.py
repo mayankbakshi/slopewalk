@@ -256,11 +256,11 @@ def test_tabs_appear_only_when_asked_for(live):
     assert explore(make("tanh3"), X, y, groups).controller.tabs is None
     titles = lambda C: [C.tabs.get_title(i) for i in range(len(C.tabs.children))]  # noqa: E731
     C = explore(make("tanh3"), X, y, groups, views="backprop").controller
-    assert titles(C) == ["Weights and steps", "Backprop"] and C.tabs.selected_index == 1
+    assert titles(C) == ["Weights and steps", "Backpropagation"] and C.tabs.selected_index == 1
     C = explore(make("tanh3"), X, y, groups, views="slice").controller
     assert titles(C) == ["Weights and steps", "Views"] and C.tabs.selected_index == 0
     C = explore(make("tanh3"), X, y, groups, views=("backprop", "line"), case_slopes="w10").controller
-    assert titles(C) == ["Weights and steps", "Backprop", "Views"]
+    assert titles(C) == ["Weights and steps", "Backpropagation", "Views"]
     assert list(C.root.children) == [C.image, C.status, C.tabs, C.layout_row, C.out]  # the tabs under the picture
     assert C.view_boxes["line"].value and C.view_boxes["cases"].value and not C.view_boxes["slice"].value
 
@@ -407,4 +407,5 @@ def test_backprop_wording(live):
     s = explore(make("tanh3"), *xor_centres(), views="backprop")
     C = s.controller
     hint = C.tabs.children[1].children[0].value
-    assert "text panel below the networks" in hint and "under the picture" not in hint
+    assert "worked example below the networks" in hint and "under the picture" not in hint
+    assert C.tabs.get_title(1) == "Backpropagation" and C.bp_case.description == "worked example"

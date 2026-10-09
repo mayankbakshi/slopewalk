@@ -140,7 +140,7 @@ Image("run.gif")
 md(r"""
 ## 11. Backpropagation step by step
 
-The view `backprop` draws the backward pass one stage at a time, from the output back to the first layer: $\delta_a = p - y$ at the output, the slopes of the output weights ($\delta_a$ times the input of each line), $\partial \ell / \partial h_j = w_j \delta_a$, $\delta_j = \tanh'(z_j)\, \partial \ell / \partial h_j$, and the slopes of the first-layer weights. `previous stage` and `next stage` step through the stages; the panel below writes out the numbers for one case. The last stage: the average over the cases is the slope column of the table.
+The view `backprop` draws the backward pass one stage at a time, from the output back to the first layer: $\delta_a = p - y$ at the output, the slopes of the output weights ($\delta_a$ times the input of each line), $\partial \ell / \partial h_j = w_j \delta_a$, $\delta_j = \tanh'(z_j)\, \partial \ell / \partial h_j$, and the slopes of the first-layer weights. `previous stage` and `next stage` step through the stages; the worked example below the networks writes out the numbers for one case. The last stage: the average over the cases is the slope column of the table.
 """)
 code(r"""
 torch.manual_seed(0)

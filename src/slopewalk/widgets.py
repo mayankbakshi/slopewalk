@@ -1,7 +1,7 @@
 """The controls of explore. The picture comes first; under it a status block (R and the last step's change, large,
 then the other numbers and one sentence on the last action), then the controls: one row with eta and the step
 buttons, the sliders in a column per unit, and last the layout of the picture. Tabs appear only for what the explore
-call asks for: "Backprop" when the views include "backprop", "Views" when other views are asked for. Changing tabs
+call asks for: "Backpropagation" when the views include "backprop", "Views" for other views. Changing tabs
 leaves the picture as it is. Needs ipywidgets.
 """
 
@@ -32,7 +32,7 @@ UI = {
     "column": "270px",  # the narrowest column of the slider grid
     "gap": "16px",
 }
-TITLES = {"core": "Weights and steps", "backprop": "Backprop", "views": "Views"}
+TITLES = {"core": "Weights and steps", "backprop": "Backpropagation", "views": "Views"}
 VIEW_LABELS = {
     "backprop": "backward pass",
     "cases": "each case's slope",
@@ -58,7 +58,8 @@ LOOK = {  # where to look in the picture at each stage of the backward pass
 }
 HINTS = {
     "core": "Press gradient step to move every weight against its slope. Drag a slider to change one weight.",
-    "backprop": "Step from the output back to the first layer. The text panel below the networks follows one case.",
+    "backprop": "Step from the output back to the first layer. The worked example below the networks writes out the "
+    "numbers for one case.",
     "views": "Tick a box to add a view under the network.",
 }
 BUTTONS = ("gradient step", "10 steps", "back one step", "reset")
@@ -300,7 +301,7 @@ class Controller:
         return widgets.HBox([pick, holder])
 
     def backprop_tab(self, widgets):
-        """Previous and next stage, the stage and the case the text panel below the networks follows."""
+        """Previous and next stage, the stage, and the case of the worked example below the networks."""
         S = self.session
         n = len(S.backprop_stages)
         self.bp_prev = tip(widgets.Button(description="previous stage"), "the stage before")
@@ -321,11 +322,11 @@ class Controller:
         self.bp_case = widgets.Dropdown(
             options=letters,
             value=letters[S.backprop_case],
-            description="trace case",
-            style={"description_width": "70px"},
-            layout=widgets.Layout(width="190px"),
+            description="worked example",
+            style={"description_width": UI["setting_label"]},
+            layout=widgets.Layout(width=UI["short"]),
         )
-        tip(self.bp_case, "the group whose case the text panel below the networks follows")
+        tip(self.bp_case, "the case whose numbers the worked example writes out (in a group: the one nearest its mean)")
         self.bp_prev.on_click(lambda _: setattr(self.bp_step, "value", max(0, self.bp_step.value - 1)))
         self.bp_next.on_click(lambda _: setattr(self.bp_step, "value", min(n - 1, self.bp_step.value + 1)))
         self.bp_step.observe(self.on_backprop, names="value")

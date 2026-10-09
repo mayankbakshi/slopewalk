@@ -167,7 +167,8 @@ def label_spec(S, F, c):
     if st.kind in ("weights", "average"):
         ks = M.layer_indices(st.layer) if st.kind == "weights" else range(M.n_weights)
         for k in ks:
-            spec[k] = (f"∂ℓ/∂{M.names[k]} = {g[k]:+.3f}", f"{g[k]:+.3f}", T.backprop_colour, f"{g[k]:+.2f}")
+            long = f"∂ℓ/∂{M.names[k]} = {g[k]:+.3f}" if c == 0 else f"{g[k]:+.3f}"  # names in panel A only
+            spec[k] = (long, f"{g[k]:+.3f}", T.backprop_colour, f"{g[k]:+.2f}")
     elif st.kind == "to_h":
         for k in M.layer_indices(st.layer + 1):
             if M.where[k][2] >= 0:
@@ -226,10 +227,11 @@ def overlay(ax, S, F, c, edges):
     bp = F.bp
     sel = D.gsel[c]
     reached = S.backprop_stages[1 : stage_index(S) + 1]
+    tag = (lambda name: f"{name}\n") if c == 0 else (lambda name: "")  # the names once, in panel A
     for s in reached:
         if s.kind == "output":
             m, sd = D.stats(bp.delta[-1][:, 0], c)
-            box(ax, L.x_a, 1.2, "δa\n" + num(m, sd), T)
+            box(ax, L.x_a, 1.2, tag("δa") + num(m, sd), T)
         elif s.kind in ("to_h", "delta"):
             l = s.layer
             XZ, XG, XH = L.blocks[l]
@@ -239,9 +241,9 @@ def overlay(ax, S, F, c, edges):
                 m, sd = D.stats(values[:, j], c)
                 nm = M.unit_name(l, j)
                 if s.kind == "to_h":
-                    box(ax, XH, ty, f"∂ℓ/∂h{nm}\n" + num(m, sd), T)
+                    box(ax, XH, ty, tag(f"∂ℓ/∂h{nm}") + num(m, sd), T)
                 else:
-                    box(ax, XZ, ty, f"δ{nm}\n" + num(m, sd), T)
+                    box(ax, XZ, ty, tag(f"δ{nm}") + num(m, sd), T)
     if st.kind == "delta" and M.layers[st.layer].act:
         l = st.layer
         XZ, XG, XH = L.blocks[l]
@@ -344,7 +346,8 @@ def derivation_lines(S, F, i):
 
 
 def draw_derivation(ax, S, F):
-    """The backward pass of one case, step by step: the stages reached so far, the current one in bold."""
+    """The worked example: the backward pass of one case, step by step; the stages reached so far, the current one in
+    bold."""
     T = S.theme
     ax.axis("off")
     c = max(0, min(S.backprop_case, S.data.G - 1))
@@ -355,8 +358,10 @@ def draw_derivation(ax, S, F):
     per_column, columns = 12, 2  # the steps run down the first column, then the second
     most = per_column * columns
     shown = lines[-most:]
-    group = "" if S.data.gsel[c].sum() == 1 else f", the case nearest the mean of group {letter(c)}"
-    head = f"backward pass of {letter(c)}{group}"
+    if S.data.gsel[c].sum() == 1:
+        head = f"worked example: case {letter(c)}"
+    else:
+        head = f"worked example: the case nearest the mean of group {letter(c)}"
     title = f"{head}\nstage {step} of {len(S.backprop_stages) - 1}: {stage.text}"
     ax.set_title(title, fontsize=T.panel_title_size, loc="left")
     dy = 0.96 / per_column
