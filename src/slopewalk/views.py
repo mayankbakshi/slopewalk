@@ -70,7 +70,7 @@ def draw_cases(ax, S, F):
         ax.hlines(float(v[idx].mean()), c - 0.32, c + 0.32, color=T.ink, lw=2, zorder=4)
     avg = float(v.mean())
     ax.axhline(0.0, color=T.zero_line, lw=0.8, zorder=0)
-    ax.axhline(avg, ls="--", color=T.hidden, lw=1.5, zorder=2, label=f"average {avg:+.4f} = dR/d{name}")
+    ax.axhline(avg, ls="--", color=T.ink, lw=1.5, zorder=2, label=f"average {avg:+.4f} = dR/d{name}")
     ax.set_xticks(range(D.G))
     ax.set_xticklabels([letter(c) for c in range(D.G)])
     ax.set_xlim(-0.6, D.G - 0.4)
@@ -123,7 +123,9 @@ def draw_slice(ax, S, F):
         W[:, a] = u
         R = M.risk_batch(D.X, D.y, W)
         ax.plot(u, R, color=T.ink, lw=1.8, label="R")
-        ax.plot(u, F.R + F.g[a] * (u - w[a]), "--", color=T.hidden, lw=1.2, label=f"tangent, slope {F.g[a]:+.3f}")
+        ax.plot(
+            u, F.R + F.g[a] * (u - w[a]), "--", color=T.prediction_colour, lw=1.2, label=f"tangent, slope {F.g[a]:+.3f}"
+        )
         ax.plot([w[a]], [F.R], "o", color=T.ink, zorder=5)
         if w0[a] != w[a]:
             ax.axvline(w0[a], color=T.start_colour, ls=":", lw=1, label="start")
@@ -145,7 +147,7 @@ def draw_slice(ax, S, F):
     R = M.risk_batch(D.X, D.y, W).reshape(n, n)
     levels = np.unique(np.quantile(R, [0.0, 0.01, 0.04, 0.09, 0.16, 0.25, 0.36, 0.49, 0.64, 0.81, 1.0]))
     if len(levels) > 1:
-        ax.contourf(A, B, R, levels=levels, cmap=T.landscape_cmap, alpha=0.35)
+        ax.contourf(A, B, R, levels=levels, cmap=T.landscape_colormap(), alpha=0.35)
         ax.contour(A, B, R, levels=levels, colors=T.landscape_line, linewidths=0.6)
     if look:
         for key, colour, style, label in (
@@ -167,7 +169,7 @@ def draw_slice(ax, S, F):
             "",
             xy=(w[a] + d[0], w[b] + d[1]),
             xytext=(w[a], w[b]),
-            arrowprops=dict(arrowstyle="-|>", color=T.hidden, lw=1.8),
+            arrowprops=dict(arrowstyle="-|>", color=T.ink, lw=1.8),
             zorder=7,
         )
     ax.set_xlim(*xa)
@@ -200,10 +202,10 @@ def draw_line(ax, S, F):
     pred = F.R - eta * g2
     tangent = F.R - ts * g2
     ax.plot(ts, R, color=T.ink, lw=1.8, label="R along the step")
-    ax.plot(ts, tangent, "--", color=T.hidden, lw=1.2, label="first-order prediction")
+    ax.plot(ts, tangent, "--", color=T.prediction_colour, lw=1.2, label="first-order prediction")
     ax.axvline(eta, color=T.reference_line, lw=0.8, zorder=0)
     ax.plot([eta], [R_eta], "o", color=T.ink, ms=6, zorder=5, label=f"step of eta: R {R_eta:.4f}")
-    ax.plot([eta], [pred], "o", mfc=T.paper, mec=T.hidden, ms=7, zorder=5, label=f"predicted: {pred:.4f}")
+    ax.plot([eta], [pred], "o", mfc=T.paper, mec=T.prediction_colour, ms=7, zorder=5, label=f"predicted: {pred:.4f}")
     best = int(np.argmin(R))
     if 0 < best < len(ts) - 1:  # a minimum inside the range shown, not R still falling at its end
         ax.plot(
@@ -283,7 +285,7 @@ def draw_hidden(ax, S, F):
         a = v[0] * U1 + v[1] * U2 + b
         if binary:
             P = 1 / (1 + np.exp(-a))
-            ax.contourf(U1, U2, P, levels=np.linspace(0, 1, 11), cmap=T.plane_cmap, alpha=0.4)
+            ax.contourf(U1, U2, P, levels=np.linspace(0, 1, 11), cmap=T.plane_colormap(), alpha=T.plane_alpha)
             if P.min() < 0.5 < P.max():
                 ax.contour(U1, U2, P, levels=[0.5], colors=T.boundary)
         else:

@@ -22,6 +22,7 @@ import torch.nn.functional as F
 from contextlib import contextmanager
 from matplotlib import patheffects
 from matplotlib.backends.backend_agg import FigureCanvasAgg
+from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.figure import Figure
 from matplotlib.font_manager import FontProperties
 from matplotlib.patches import BoxStyle, Rectangle
@@ -690,36 +691,55 @@ def place_labels(edges, sizes, obstacles, defaults, pad=0.0):
 # ------------------------ draw.py ------------------------
 
 class Theme:
-    """Colours, fonts and sizes. Red is class 1 and blue class 0.
+    """Colours, fonts and sizes of the picture. Red is class 1 and blue class 0; green is the hidden layer; purple is
+    the backward pass; orange marks negative weights. Text in boxes is ink: a box carries its meaning in its border and
+    fill. Ratios are WCAG contrast against paper unless said otherwise.
 
     Only the labels on the weight lines use edge_label_size, and only the weight lines use zorder 1.
     """
 
-    class_colour = {0: "blue", 1: "#C62828"}  # a red dark enough for text: 5.6:1 on white, 4.7:1 on its tint
-    class_tint = {0: "#E5ECFF", 1: "#FFE5E5"}
-    mixed_colour, mixed_tint = "black", "#EEEEEE"
-    neutral_colour, neutral_tint = "0.15", "#EEEEEE"  # regression panels
-    positive, negative, negative_text = "black", "#E86A00", "#B35900"  # negative lines 3.2:1 on white
+    paper, ink, muted = "#FFFFFF", "#1F2328", "#59636E"  # ink 15.8:1, muted 6.1:1
+    class_colour = {0: "#0969DA", 1: "#CF222E"}  # 5.2:1 and 5.4:1: panel titles, borders, markers
+    class_tint = {0: "#E3EFFD", 1: "#FDECEC"}  # box fills; the text on them is ink
+    mixed_colour, mixed_tint = "#1F2328", "#EEF1F4"
+    neutral_colour, neutral_tint = "#3D444D", "#EEF1F4"  # regression panels
+    positive, negative, negative_text = "#1F2328", "#D1600A", "#B04800"  # lines 15.8:1 and 3.9:1, numbers 5.6:1
     line_width, line_slope, line_max = 1.0, 1.3, 7  # a weight's line: line_width + line_slope * |w|, at most line_max
-    frozen_alpha, frozen_text, frozen_fill = 0.35, "0.55", "#F5F5F5"  # weights that do not move (params)
-    hidden = "green"  # the h boxes, the dot and the band on the glyphs, the history line
-    arrow, curve, node_edge = "0.45", "0.35", "gray"
-    start_colour, prediction_colour = "0.35", "0.45"
-    gd_colour, momentum_colour = "green", "#B9852B"
-    value_box = dict(boxstyle="round,pad=0.25", fc="#F2F2F2", ec="0.7", lw=0.8)
+    frozen_alpha, frozen_text, frozen_fill = 0.35, "#59636E", "#F6F8FA"  # weights that do not move (params)
+    hidden = "#1A7F37"  # the hidden layer only: the border of the h boxes, the dot and the band on the curves
+    arrow, curve, node_edge = "#8C959F", "#59636E", "#8C959F"
+    start_colour, prediction_colour = "#59636E", "#8C959F"
+    gd_colour, momentum_colour = "#59636E", "#9A6700"  # gradient descent solid, momentum dashed
+    value_box = dict(boxstyle="round,pad=0.25", fc="#F6F8FA", ec="#C4CBD3", lw=0.8)
     edge_label_size, glyph_name_size, value_size, node_size, title_size, suptitle_size = 8.5, 8, 9.5, 10, 11.5, 13
     note_size = 9.5  # notes inside panels, and the lines of the backward pass
     panel_title_size, legend_size, letter_size = 10.5, 8, 11  # the panels below the networks
-    plane_cmap, value_cmap = "RdBu_r", "viridis"
+    plane_alpha, value_cmap = 0.4, "viridis"
     table_size, table_row_height = 10, 0.058  # row height as a fraction of the panel
-    table_edge, table_head, table_highlight = "0.8", "#F2F2F2", "#FFF1D6"
-    backprop_colour, backprop_tint, backprop_size = "#7B1FA2", "#F3E5F5", 9  # the backward pass
+    table_edge, table_head, table_highlight = "#D0D7DE", "#EEF1F4", "#FFF4C2"
+    backprop_colour, backprop_tint, backprop_size = "#7A45D6", "#F4EFFC", 9  # 5.8:1, and 5.1:1 on its tint
     # surfaces and neutral marks: every colour of the picture lives in this class, so that a theme can change them all
-    paper, ink, marker_edge, boundary = "white", "black", "k", "k"
-    note_text, derivation_text, derivation_muted, point_neutral = "0.25", "0.2", "0.5", "0.25"
-    glyph_fill, glyph_edge, node_fill, label_backing = "white", "0.75", "white", "white"
-    reference_line, zero_line, landscape_line, plane_surface, path_colour = "0.7", "0.8", "0.35", "0.5", "0.1"
-    landscape_cmap = "Greys_r"
+    marker_edge, boundary = "#1F2328", "#1F2328"
+    note_text, derivation_text, derivation_muted, point_neutral = "#59636E", "#1F2328", "#8C959F", "#59636E"
+    glyph_fill, glyph_edge, node_fill, label_backing = "#FFFFFF", "#C4CBD3", "#FFFFFF", "#FFFFFF"
+    reference_line, zero_line, landscape_line, plane_surface, path_colour = (
+        "#C4CBD3",
+        "#D0D7DE",
+        "#8C959F",
+        "#8C959F",
+        "#1F2328",
+    )
+    landscape_low = "#59636E"  # R over two weights: low R in this colour, high R in paper
+
+    def plane_colormap(self):
+        """p for class 1 over the input plane: class 0 colour, paper at p = 0.5, class 1 colour."""
+        return LinearSegmentedColormap.from_list(
+            "slopewalk_plane", [self.class_colour[0], self.paper, self.class_colour[1]]
+        )
+
+    def landscape_colormap(self):
+        return LinearSegmentedColormap.from_list("slopewalk_landscape", [self.landscape_low, self.paper])
+
     network_sizes = ("edge_label_size", "glyph_name_size", "value_size", "node_size", "title_size", "backprop_size")
 
     def scaled(self, factor):
@@ -928,7 +948,8 @@ def draw_case(ax, S, F, c, styles=None):
     col, tint, mixed, yi = group_style(S, c)
     arrow = dict(arrowstyle="-|>", color=T.arrow, lw=1.0, shrinkA=0, shrinkB=0)
     node = dict(fontsize=T.node_size, ha="center", va="center", zorder=4)
-    value = dict(fontsize=T.value_size, ha="center", va="center", zorder=5, bbox=T.value_box)
+    value = dict(fontsize=T.value_size, ha="center", va="center", zorder=5, bbox=T.value_box, color=T.ink)
+    h_value = dict(value, bbox=dict(T.value_box, ec=T.hidden, lw=1.2))  # the hidden layer: a green border
     edges, obstacles = [], []  # edges: (k, source, target, preferred label fraction); obstacles: boxes to keep clear
     # in the backpropagation view the names of the values are written once, in panel A; the other panels show values
     tag = (lambda name: f"{name}\n") if c == 0 or F.stage is None else (lambda name: "")
@@ -959,12 +980,12 @@ def draw_case(ax, S, F, c, styles=None):
                     ax.annotate("", xy=(XH - BW, ty), xytext=(XG + 0.31, ty), arrowprops=arrow)
                 else:
                     ax.annotate("", xy=(XH - BW, ty), xytext=(XZ + BW, ty), arrowprops=arrow)
-                ax.text(XH, ty, tag(f"h{nm}") + num(hm[j], hs[j]), color=T.hidden, **value)
+                ax.text(XH, ty, tag(f"h{nm}") + num(hm[j], hs[j]), **h_value)
             src = [(XH + BW, ty) for ty in tys]
             src_x = XH
     xm, xs = D.stats(D.X.numpy(), c)
     for i, yy in enumerate(L.y_inputs):
-        ax.text(0, yy, f"x{i + 1}", color=col, bbox=dict(boxstyle="circle", fc=tint, ec=col), **node)
+        ax.text(0, yy, f"x{i + 1}", bbox=dict(boxstyle="circle", fc=tint, ec=col), **node)
         ax.text(
             L.x_input_value,
             yy,
@@ -972,7 +993,7 @@ def draw_case(ax, S, F, c, styles=None):
             fontsize=T.node_size,
             ha="right",
             va="center",
-            color=col,
+            color=T.ink,
             bbox=dict(boxstyle="round,pad=0.25", fc=tint, ec=col, lw=0.8),
         )
     (am, as_), (lm, _) = D.stats(out.a, c), D.stats(out.loss, c)
@@ -982,7 +1003,7 @@ def draw_case(ax, S, F, c, styles=None):
     change = f"change\nfrom start\n{lm - S.loss0[c]:+.3f}"
     loss_box = dict(boxstyle="round,pad=0.3", fc=tint, ec=col, lw=0.8)
     if D.task == "regression":
-        box_a = dict(fontsize=T.node_size, ha="center", va="center", zorder=5, bbox=T.value_box)
+        box_a = dict(fontsize=T.node_size, ha="center", va="center", zorder=5, bbox=T.value_box, color=T.ink)
         ax.text(L.x_a, 1.2, tag("ŷ") + num(am, as_), **box_a)
         ax.annotate("", xy=(L.x_loss - 0.42 * L.text_scale, 1.2), xytext=(L.x_a + BW, 1.2), arrowprops=arrow)
         ym, ys = D.stats(D.y.numpy(), c)
@@ -994,13 +1015,13 @@ def draw_case(ax, S, F, c, styles=None):
             fontsize=T.node_size,
             ha="center",
             va="center",
-            color=col,
+            color=T.ink,
             bbox=loss_box,
         )
         title = f"{lead}, y = {ym:+.2f}:  loss {lm:.3f}"
     else:
         pm, ps = D.stats(out.p, c)
-        box_a = dict(fontsize=T.node_size, ha="center", va="center", zorder=5, bbox=T.value_box)
+        box_a = dict(fontsize=T.node_size, ha="center", va="center", zorder=5, bbox=T.value_box, color=T.ink)
         ax.text(L.x_a, 1.2, tag("a") + num(am, as_), **box_a)
         ax.annotate("", xy=(L.x_sigmoid - 0.31, 1.2), xytext=(L.x_a + BW, 1.2), arrowprops=arrow)
         obstacles.append(glyph(ax, L.x_sigmoid, 1.2, SIGMOID, am, as_, T))
@@ -1009,11 +1030,7 @@ def draw_case(ax, S, F, c, styles=None):
             L.x_p,
             1.2,
             tag("p") + num(pm, ps, sign=False),
-            fontsize=T.node_size,
-            ha="center",
-            va="center",
-            zorder=5,
-            bbox=T.value_box,
+            **box_a,
         )
         ytxt = "y mixed" if mixed else f"y = {yi}"
         ax.text(
@@ -1023,7 +1040,7 @@ def draw_case(ax, S, F, c, styles=None):
             fontsize=T.node_size,
             ha="center",
             va="center",
-            color=col,
+            color=T.ink,
             bbox=loss_box,
         )
         what = "classes mixed" if mixed else f"class {yi}"
@@ -1138,7 +1155,7 @@ def draw_input_plane(ax, S, F):
     a = net_on(S, grid, w).reshape(P1.shape)
     if D.task == "binary":
         P = 1 / (1 + np.exp(-a))
-        ax.contourf(P1, P2, P, levels=np.linspace(0, 1, 11), cmap=T.plane_cmap, alpha=0.5)
+        ax.contourf(P1, P2, P, levels=np.linspace(0, 1, 11), cmap=T.plane_colormap(), alpha=T.plane_alpha)
         if P.min() < 0.5 < P.max():
             ax.contour(P1, P2, P, levels=[0.5], colors=T.boundary)
         if moved:
@@ -1183,7 +1200,7 @@ def draw_history(ax, S, F):
     last step and the next one."""
     T = S.theme
     history = F.history
-    ax.plot(range(len(history)), history, "o-", color=T.hidden, ms=4, label="R after the step")
+    ax.plot(range(len(history)), history, "o-", color=T.ink, ms=4, label="R after the step")
     predicted = [(k + 1, p.predicted) for k, p in enumerate(F.predictions)]
     if S.log_scale:
         predicted = [(k, v) for k, v in predicted if v > 0]
@@ -1353,7 +1370,7 @@ def draw_cases(ax, S, F):
         ax.hlines(float(v[idx].mean()), c - 0.32, c + 0.32, color=T.ink, lw=2, zorder=4)
     avg = float(v.mean())
     ax.axhline(0.0, color=T.zero_line, lw=0.8, zorder=0)
-    ax.axhline(avg, ls="--", color=T.hidden, lw=1.5, zorder=2, label=f"average {avg:+.4f} = dR/d{name}")
+    ax.axhline(avg, ls="--", color=T.ink, lw=1.5, zorder=2, label=f"average {avg:+.4f} = dR/d{name}")
     ax.set_xticks(range(D.G))
     ax.set_xticklabels([letter(c) for c in range(D.G)])
     ax.set_xlim(-0.6, D.G - 0.4)
@@ -1406,7 +1423,9 @@ def draw_slice(ax, S, F):
         W[:, a] = u
         R = M.risk_batch(D.X, D.y, W)
         ax.plot(u, R, color=T.ink, lw=1.8, label="R")
-        ax.plot(u, F.R + F.g[a] * (u - w[a]), "--", color=T.hidden, lw=1.2, label=f"tangent, slope {F.g[a]:+.3f}")
+        ax.plot(
+            u, F.R + F.g[a] * (u - w[a]), "--", color=T.prediction_colour, lw=1.2, label=f"tangent, slope {F.g[a]:+.3f}"
+        )
         ax.plot([w[a]], [F.R], "o", color=T.ink, zorder=5)
         if w0[a] != w[a]:
             ax.axvline(w0[a], color=T.start_colour, ls=":", lw=1, label="start")
@@ -1428,7 +1447,7 @@ def draw_slice(ax, S, F):
     R = M.risk_batch(D.X, D.y, W).reshape(n, n)
     levels = np.unique(np.quantile(R, [0.0, 0.01, 0.04, 0.09, 0.16, 0.25, 0.36, 0.49, 0.64, 0.81, 1.0]))
     if len(levels) > 1:
-        ax.contourf(A, B, R, levels=levels, cmap=T.landscape_cmap, alpha=0.35)
+        ax.contourf(A, B, R, levels=levels, cmap=T.landscape_colormap(), alpha=0.35)
         ax.contour(A, B, R, levels=levels, colors=T.landscape_line, linewidths=0.6)
     if look:
         for key, colour, style, label in (
@@ -1450,7 +1469,7 @@ def draw_slice(ax, S, F):
             "",
             xy=(w[a] + d[0], w[b] + d[1]),
             xytext=(w[a], w[b]),
-            arrowprops=dict(arrowstyle="-|>", color=T.hidden, lw=1.8),
+            arrowprops=dict(arrowstyle="-|>", color=T.ink, lw=1.8),
             zorder=7,
         )
     ax.set_xlim(*xa)
@@ -1483,10 +1502,10 @@ def draw_line(ax, S, F):
     pred = F.R - eta * g2
     tangent = F.R - ts * g2
     ax.plot(ts, R, color=T.ink, lw=1.8, label="R along the step")
-    ax.plot(ts, tangent, "--", color=T.hidden, lw=1.2, label="first-order prediction")
+    ax.plot(ts, tangent, "--", color=T.prediction_colour, lw=1.2, label="first-order prediction")
     ax.axvline(eta, color=T.reference_line, lw=0.8, zorder=0)
     ax.plot([eta], [R_eta], "o", color=T.ink, ms=6, zorder=5, label=f"step of eta: R {R_eta:.4f}")
-    ax.plot([eta], [pred], "o", mfc=T.paper, mec=T.hidden, ms=7, zorder=5, label=f"predicted: {pred:.4f}")
+    ax.plot([eta], [pred], "o", mfc=T.paper, mec=T.prediction_colour, ms=7, zorder=5, label=f"predicted: {pred:.4f}")
     best = int(np.argmin(R))
     if 0 < best < len(ts) - 1:  # a minimum inside the range shown, not R still falling at its end
         ax.plot(
@@ -1566,7 +1585,7 @@ def draw_hidden(ax, S, F):
         a = v[0] * U1 + v[1] * U2 + b
         if binary:
             P = 1 / (1 + np.exp(-a))
-            ax.contourf(U1, U2, P, levels=np.linspace(0, 1, 11), cmap=T.plane_cmap, alpha=0.4)
+            ax.contourf(U1, U2, P, levels=np.linspace(0, 1, 11), cmap=T.plane_colormap(), alpha=T.plane_alpha)
             if P.min() < 0.5 < P.max():
                 ax.contour(U1, U2, P, levels=[0.5], colors=T.boundary)
         else:
