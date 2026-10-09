@@ -57,6 +57,9 @@ VIEW_HELP = {
 LOOK = {  # where to look in the picture at each stage of the backward pass
     "forward": "The picture shows the forward pass. Press next stage to start at the output.",
     "output": "Under a, the purple box is δa = p - y of each case.",
+    "output multiclass": "Under each score ak, the purple box is δak = pk - yk of each case: yk is 1 for the case's "
+    "class and 0 for the others.",
+    "output regression": "Under ŷ, the purple box is δa = 2(ŷ - y) of each case.",
     "weights": "On the purple lines, each number is δ of the unit times the input of its line.",
     "to_h": "The purple arrows carry δ back along the weights to each h.",
     "delta": "The purple tangents on the curves: their slope multiplies ∂ℓ/∂h to give δ.",
@@ -519,7 +522,8 @@ class Controller:
     def stage_words(self):
         """The message for the current stage of the backward pass: where to look in the picture."""
         S = self.session
-        return LOOK[S.backprop_stages[S.backprop_step].kind]
+        kind = S.backprop_stages[S.backprop_step].kind
+        return LOOK.get(f"{kind} {S.task}", LOOK[kind])
 
     def action_buttons(self):
         return [*self.buttons.values()] + ([self.bp_prev, self.bp_next] if "backprop" in self.kinds else [])

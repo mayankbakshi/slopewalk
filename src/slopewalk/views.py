@@ -9,7 +9,7 @@ Every function takes (ax, S, F) like the panels in draw.py.
 
 import numpy as np
 
-from .draw import halo, letter
+from .draw import class_boundaries, class_shading, halo, letter, softmax
 
 VIEWS = ("backprop", "cases", "slice", "line", "hidden", "momentum")
 
@@ -20,10 +20,10 @@ def message(ax, T, text):
 
 
 def point_colours(S):
-    """A colour per case: its class colour (binary) or a colour for its target y (regression)."""
+    """A colour per case: its class colour (classification) or a colour for its target y (regression)."""
     D, T = S.data, S.theme
     y = D.y.numpy()
-    if D.task == "binary":
+    if D.task in ("binary", "multiclass"):
         return [T.class_colour[int(v)] for v in y]
     import matplotlib
 
@@ -75,7 +75,7 @@ def draw_cases(ax, S, F):
     ax.set_xticklabels([letter(c) for c in range(D.G)])
     ax.set_xlim(-0.6, D.G - 0.4)
     ax.set_ylabel("slope of the case's own loss")
-    formula = "(p - y) da/dw" if D.task == "binary" else "2(ŷ - y) dŷ/dw"
+    formula = {"binary": "(p - y) da/dw", "multiclass": "Σk (pk - yk) dak/dw", "regression": "2(ŷ - y) dŷ/dw"}[D.task]
     title = f"each case's slope along {name}, {formula};\nbars: group means; dashed: the average"
     ax.set_title(title, fontsize=T.panel_title_size)
     ax.legend(fontsize=T.legend_size, loc="best")
@@ -246,6 +246,77 @@ def output_weights(S, w):
     return v[:-1], float(v[-1])
 
 
+def output_layer(S, w):
+    """The output layer as a matrix (one row per class, one column per unit of the last hidden layer) and its biases."""
+    k = S.model.layer_indices(len(S.model.layers) - 1)
+    V = np.asarray([w[i] for i in k], dtype=float).reshape(S.model.n_outputs, -1)
+    return V[:, :-1], V[:, -1]
+
+
+def draw_hidden_classes(ax, S, F, H, colours, small, label):
+    """draw_hidden for K classes. One unit: p of each class against h, each case on the curve of its class. Two
+    units: the most likely class over the (h1, h2) plane, with the boundaries. Three: the cases in 3-D; more: along
+    the two directions in which h varies most; both coloured by class, without boundaries."""
+    D, T = S.data, S.theme
+    m = H.shape[1]
+    V, b = output_layer(S, F.w)
+    if m == 1:
+        lo, hi = window(H[:, 0], minimum=0.6)
+        u = np.linspace(lo, hi, 101)
+        P = softmax(u[:, None] * V[None, :, 0] + b)
+        for k in range(D.n_classes):
+            ax.plot(u, P[:, k], color=T.class_colour[k], lw=1.5, label=f"p{k}")
+        own = F.out.p[np.arange(D.n), D.y.numpy().astype(np.int64)]
+        ax.scatter(H[:, 0], own, c=colours, s=small, edgecolor=T.marker_edge, lw=0.3, zorder=3)
+        ax.set_xlabel(f"{label}1")
+        ax.set_ylabel("p of each class; each case on its own")
+        ax.legend(fontsize=T.legend_size, loc="best")
+        what = "p of each class"
+    elif m == 2:
+        x0, x1 = window(H[:, 0], minimum=0.6), window(H[:, 1], minimum=0.6)
+        U1, U2 = np.meshgrid(np.linspace(*x0, 81), np.linspace(*x1, 81))
+        A = U1[..., None] * V[:, 0] + U2[..., None] * V[:, 1] + b
+        ax.imshow(class_shading(T, A), extent=(*x0, *x1), origin="lower", aspect="auto", interpolation="bilinear")
+        class_boundaries(ax, U1, U2, A, colors=T.boundary)
+        ax.scatter(H[:, 0], H[:, 1], c=colours, s=small, edgecolor=T.marker_edge, lw=0.3, zorder=3)
+        gh = [D.stats(H, c)[0] for c in range(D.G)]
+        for c in range(D.G):
+            ax.text(
+                gh[c][0],
+                gh[c][1],
+                f"  {letter(c)}",
+                fontsize=T.letter_size,
+                zorder=4,
+                path_effects=halo(T),
+                color=T.ink,
+            )
+        ax.set_xlim(*x0)
+        ax.set_ylim(*x1)
+        ax.set_xlabel(f"{label}1")
+        ax.set_ylabel(f"{label}2")
+        what = "the most likely class"
+    elif m == 3 and hasattr(ax, "set_zlim"):
+        ax.scatter(
+            H[:, 0], H[:, 1], H[:, 2], c=colours, s=small, edgecolor=T.marker_edge, linewidths=0.3, depthshade=False
+        )
+        for q in range(3):
+            getattr(ax, f"set_{'xyz'[q]}lim")(*window(H[:, q], minimum=0.6))
+        ax.set_xlabel(f"{label}1")
+        ax.set_ylabel(f"{label}2")
+        ax.set_zlabel(f"{label}3")
+        ax.view_init(elev=20, azim=-60)
+        what = "coloured by class"
+    else:
+        centred = H - H.mean(0)
+        _, _, vt = np.linalg.svd(centred, full_matrices=False)
+        two = centred @ vt[:2].T
+        ax.scatter(two[:, 0], two[:, 1], c=colours, s=small, edgecolor=T.marker_edge, lw=0.3, zorder=3)
+        ax.set_xlabel("direction of h with the largest spread")
+        ax.set_ylabel("the next one")
+        what = "coloured by class"
+    ax.set_title(f"the cases at their hidden values,\n{what}", fontsize=T.panel_title_size)
+
+
 def draw_hidden(ax, S, F):
     """The cases at the values h of the last hidden layer. The output unit is a linear function of h: its boundary
     a = 0 is a point (one unit), a line (two) or a plane (three). With more units: the score a against the largest
@@ -256,12 +327,15 @@ def draw_hidden(ax, S, F):
         message(ax, T, "no hidden layer:\nthe output unit sees x itself")
         return
     H = np.asarray(F.out.hidden[-1][1], dtype=float)
-    v, b = output_weights(S, F.w)
     colours = point_colours(S)
     small = 10 if D.n > 40 else 40
+    label = "h" if len(S.model.hidden) == 1 else f"h{len(S.model.hidden)},"
+    if D.task == "multiclass":
+        draw_hidden_classes(ax, S, F, H, colours, small, label)
+        return
+    v, b = output_weights(S, F.w)
     binary = D.task == "binary"
     gh = [D.stats(H, c)[0] for c in range(D.G)]
-    label = "h" if len(S.model.hidden) == 1 else f"h{len(S.model.hidden)},"
     if m == 1:
         h = H[:, 0]
         lo, hi = window(h, minimum=0.6)

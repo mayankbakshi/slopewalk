@@ -33,19 +33,20 @@ WIDE_STRETCH = {"history": 3.0, "table": 0.5, "line": 1.0, "cases": 1.0, "moment
 class Layout:
     """Positions for a network with n_inputs inputs and the hidden layers `hidden` (a list of unit counts).
 
-    task "binary" ends each panel with a, the sigmoid, p and the loss box; "regression" with the prediction and the
-    loss box. style "standard": a figure 15 inches wide, two network panels per row (one for deep networks) and
+    task "binary" ends each panel with a, the sigmoid, p and the loss box; "multiclass" with a score a and a p for
+    each of the `outputs` classes, the softmax between them, and the loss box; "regression" with the prediction and
+    the loss box. style "standard": a figure 15 inches wide, two network panels per row (one for deep networks) and
     three lower panels per row. "wide": 27 inches, up to four network panels in a row (two for deep networks) and up
     to six lower panels in a row, each as wide as suits it, for wide screens. width (inches) overrides the width of
     either. The network panels keep their size and spacing whatever panels are below them.
     """
 
-    def __init__(self, n_inputs, hidden, task="binary", style="standard", width=None):
+    def __init__(self, n_inputs, hidden, task="binary", style="standard", width=None, outputs=1):
         if style not in LAYOUTS:
             raise ValueError(f"slopewalk: layout must be 'standard' or 'wide', not {style!r}.")
         if width is not None and not (isinstance(width, (int, float)) and 6 <= width <= 60):
             raise ValueError(f"slopewalk: width is the figure width in inches, between 6 and 60, not {width!r}.")
-        self.n_inputs, self.hidden, self.task, self.style = n_inputs, hidden, task, style
+        self.n_inputs, self.hidden, self.task, self.style, self.outputs = n_inputs, hidden, task, style, outputs
         self.width = float(width) if width is not None else WIDTH[style]
         self.text_scale = f = TEXT_SCALE[style]
         extra = 1.2 * (f - 1)  # larger text: the loss box moves right, clear of the box before it
@@ -93,9 +94,9 @@ class Layout:
 
     def row_height(self, with_sd=False, backprop=False):
         """Height of a panel row in inches: taller when a layer has more than 3 units (up to four times the usual,
-        for 12 units), by a fifth when the boxes carry a standard deviation line (groups of points), and by 40% when
-        the backward pass adds its boxes under the units."""
-        units = min(4.0, max(1.0, max(self.hidden, default=1) / 3))
+        for 12 units; the outputs count as a layer), by a fifth when the boxes carry a standard deviation line (groups
+        of points), and by 40% when the backward pass adds its boxes under the units."""
+        units = min(4.0, max(1.0, max(list(self.hidden) + [self.outputs]) / 3))
         return 2.9 * units * (1.2 if with_sd else 1.0) * (1.4 if backprop else 1.0) * self.text_scale
 
     def lower_rows(self, panels, n_weights=0):

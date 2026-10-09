@@ -168,7 +168,8 @@ def test_the_weight_moved_last_keeps_its_name(static):
 def test_colours_and_type_scale(static):
     """Class 1 in a red that reads as text, negative lines in an orange with 3:1 on white, one size for the titles
     of the panels below the networks."""
-    assert THEME.class_colour == {0: "#0969DA", 1: "#CF222E"} and THEME.negative == "#D1600A"
+    assert THEME.class_colour == {0: "#0969DA", 1: "#CF222E", 2: "#00796B", 3: "#B4237F"}
+    assert THEME.negative == "#D1600A"
     s = explore(make("tanh3"), *xor_centres(), views=("cases", "slice", "line", "hidden", "momentum", "backprop"))
     lower = s.fig.axes[4:]
     sizes = {ax.title.get_fontsize() for ax in lower if ax.get_title()} | {

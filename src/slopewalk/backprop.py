@@ -38,13 +38,14 @@ def backprop_stages(model):
     """The stages of the backward pass for this network, from the forward pass to the average over the cases."""
     L = len(model.layers)
     regression = model.task == "regression"
+    output = {
+        "binary": "at the output: δa = ∂ℓ/∂a = p - y",
+        "multiclass": "at the output: δak = ∂ℓ/∂ak = pk - yk (yk is 1 for the case's class, else 0)",
+        "regression": "at the output: δa = ∂ℓ/∂a = 2(ŷ - y)",
+    }[model.task]
     out = [
         Stage("forward", None, "forward pass: z, h and " + ("ŷ" if regression else "a and p") + " of every case"),
-        Stage(
-            "output",
-            L - 1,
-            "at the output: δa = ∂ℓ/∂a = " + ("2(ŷ - y)" if regression else "p - y"),
-        ),
+        Stage("output", L - 1, output),
         Stage("weights", L - 1, f"slopes of {layer_title(model, L - 1)}: δ of the unit × the input of the line"),
     ]
     for l in range(L - 2, -1, -1):
@@ -94,12 +95,17 @@ def backward_pass(model, X, y, w=None):
             h = layer.module(z) if layer.module is not None else z
             zs.append(z)
             outs.append(h)
-        a = zs[-1][:, 0]
-        d_out = torch.sigmoid(a) - y if model.task == "binary" else 2 * (a - y)
+        a = zs[-1]
+        if model.task == "multiclass":  # p - y for every class, with y one-hot
+            d_out = torch.softmax(a, dim=1) - nn.functional.one_hot(y.long(), a.shape[1]).to(a.dtype)
+        elif model.task == "binary":
+            d_out = torch.sigmoid(a) - y[:, None]
+        else:
+            d_out = 2 * (a - y[:, None])
         deltas = [None] * len(layers)
         dh = [None] * len(layers)
         deriv = [None] * len(layers)
-        deltas[-1] = d_out[:, None]
+        deltas[-1] = d_out
         for l in range(len(layers) - 2, -1, -1):
             dh[l] = deltas[l + 1] @ layers[l + 1].linear.weight
             deriv[l] = derivative(layers[l], zs[l], outs[l])
@@ -231,9 +237,10 @@ def overlay(ax, S, F, c, edges):
     reached = S.backprop_stages[1 : stage_index(S) + 1]
     tag = (lambda name: f"{name}\n") if c == 0 else (lambda name: "")  # the names once, in panel A
     for s in reached:
-        if s.kind == "output":
-            m, sd = D.stats(bp.delta[-1][:, 0], c)
-            box(ax, L.x_a, 1.2, tag("δa") + num(m, sd), T)
+        if s.kind == "output":  # under each score: one box, or one per class
+            for k, ty in enumerate(L.unit_ys(M.n_outputs)):
+                m, sd = D.stats(bp.delta[-1][:, k], c)
+                box(ax, L.x_a, ty, tag("δa" if M.n_outputs == 1 else f"δa{k}") + num(m, sd), T)
         elif s.kind in ("to_h", "delta"):
             l = s.layer
             XZ, XG, XH = L.blocks[l]
@@ -281,7 +288,9 @@ def derivation_lines(S, F, i):
     regression = S.task == "regression"
     out = []
     for s_idx, st in enumerate(S.backprop_stages):
-        if st.kind == "forward":
+        if S.task == "multiclass" and st.kind in ("forward", "output"):
+            out += [(s_idx, text) for text in class_lines(bp.z[-1][i], int(y), st.kind)]
+        elif st.kind == "forward":
             if regression:
                 out.append((s_idx, f"forward: ŷ = {a:+.3f}, y = {y:+.3f}"))
             else:
@@ -299,7 +308,7 @@ def derivation_lines(S, F, i):
             labels = M.input_labels(l)
             for k in M.layer_indices(l):
                 _, j, src = M.where[k]
-                unit = "a" if l == len(M.layers) - 1 else M.unit_name(l, j)
+                unit = output_name(M, j) if l == len(M.layers) - 1 else M.unit_name(l, j)
                 d = bp.delta[l][i, j]
                 if src < 0:
                     out.append((s_idx, f"{M.names[k]}: δ{unit} × 1 = {bp.grads[i, k]:+.3f}"))
@@ -319,7 +328,7 @@ def derivation_lines(S, F, i):
                 nm = M.unit_name(l, j)
                 if nxt.out_features == 1:
                     k = M.layer_indices(l + 1)[j]
-                    unit = "a" if l + 1 == len(M.layers) - 1 else M.unit_name(l + 1, 0)
+                    unit = output_name(M, 0) if l + 1 == len(M.layers) - 1 else M.unit_name(l + 1, 0)
                     d = bp.delta[l + 1][i, 0]
                     product = f"{Wn[0, j]:+.3f} × {factor(d)} = {bp.dh[l][i, j]:+.3f}"
                     out.append((s_idx, f"∂ℓ/∂h{nm} = {M.names[k]} × δ{unit} = {product}"))
@@ -345,6 +354,24 @@ def derivation_lines(S, F, i):
             mean = bp.grads[:, k].mean()
             out.append((s_idx, f"dR/d{M.names[k]} = mean over the {S.data.n} cases = {mean:+.4f}"))
     return out
+
+
+def output_name(model, j):
+    """The name of output unit j: a with one output, a0, a1, ... with one per class."""
+    return "a" if model.n_outputs == 1 else f"a{j}"
+
+
+def class_lines(a, y, kind):
+    """The lines of the forward and output stages for K classes: the scores a of one case and its class y."""
+    p = np.exp(a - a.max())
+    p /= p.sum()
+    if kind == "forward":
+        scores = ", ".join(f"{v:+.3f}" for v in a)
+        probabilities = ", ".join(f"{v:.3f}" for v in p)
+        return [f"forward: a = ({scores}), y = {y}", f"p = softmax(a) = ({probabilities})"]
+    return [
+        f"δa{k} = p{k} - {int(k == y)} = {p[k]:.3f} - {int(k == y)} = {p[k] - (k == y):+.3f}" for k in range(len(a))
+    ]
 
 
 def fitting_size(ax, T, texts, columns, floor=9.5):

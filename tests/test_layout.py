@@ -94,6 +94,19 @@ def test_rows_grow_with_units_and_groups(static):
     assert height == pytest.approx(2 * 4 * 2.9 + 4.2)  # 12 units: rows four times the usual height
 
 
+def five_centres(noise=0.0):
+    """The XOR centres and a fifth one of class 2 in the middle."""
+    from slopewalk import clusters
+
+    return clusters([(-1, 1), (1, 1), (-1, -1), (1, -1), (0, 0)], [1, 0, 0, 1, 2], noise=noise, n_per=100)
+
+
+def four_class_centres():
+    from slopewalk import clusters
+
+    return clusters([(-1, 1), (1, 1), (-1, -1), (1, -1)], [0, 1, 2, 3])
+
+
 MORE = {
     "xor_output_only": lambda: (make("tanh3"), *xor_centres(), dict(params="output")),
     "xor_all_views": lambda: (make("tanh3"), *xor_centres(), dict(views=("cases", "slice", "line", "hidden"))),
@@ -102,6 +115,9 @@ MORE = {
         *sine_points(),
         dict(task="regression"),
     ),
+    "three_classes": lambda: (make("three_classes"), *five_centres(), {}),
+    "three_classes_wide": lambda: (make("three_classes"), *five_centres(), dict(layout="wide")),
+    "four_classes": lambda: (make("softmax_only"), *four_class_centres(), {}),
 }
 
 
@@ -249,6 +265,19 @@ BOXES = {
     "regression": lambda: (nn.Sequential(nn.Linear(1, 3), nn.Tanh(), nn.Linear(3, 1)), *sine_points(), {}),
     "backprop_3": lambda: (make("tanh3"), *xor_centres(), {"views": "backprop", "backprop_step": 3}),
     "backprop_clusters_5": lambda: (make("tanh3"), *xor_centres(noise=0.35), {"views": "backprop", "backprop_step": 5}),
+    "three_classes": lambda: (make("three_classes"), *five_centres(), {}),
+    "three_classes_clusters": lambda: (make("three_classes"), *five_centres(0.35), {}),
+    "three_classes_backprop": lambda: (
+        make("three_classes"),
+        *five_centres(),
+        {"views": "backprop", "backprop_step": 3},
+    ),
+    "three_classes_backprop_clusters": lambda: (
+        make("three_classes"),
+        *five_centres(0.35),
+        {"views": "backprop", "backprop_step": 1},
+    ),
+    "four_classes": lambda: (make("softmax_only"), *four_class_centres(), {"views": "backprop", "backprop_step": 1}),
 }
 
 

@@ -97,7 +97,7 @@ class Session:
         M = self.model
         self.data = prepare(X, y, groups, n_inputs=M.n_inputs, dtype=M.dtype, task=task, n_outputs=M.n_outputs)
         self.task = self.model.task = self.data.task
-        self.layout = Layout(self.model.n_inputs, self.model.hidden, self.task, style=layout, width=width)
+        self.layout = Layout(M.n_inputs, M.hidden, self.task, style=layout, width=width, outputs=M.n_outputs)
         self.base_theme, self.theme_name = THEMES["light"], "light"
         self.set_theme(theme)
         self.title = title
@@ -160,7 +160,8 @@ class Session:
 
     def set_layout(self, style, width=None):
         """Switches the layout of the picture: "standard" or "wide" (the widgets also move the controls)."""
-        self.layout = Layout(self.model.n_inputs, self.model.hidden, self.task, style=style, width=width)
+        M = self.model
+        self.layout = Layout(M.n_inputs, M.hidden, self.task, style=style, width=width, outputs=M.n_outputs)
         self.theme = self.base_theme.scaled(self.layout.text_scale)
 
     def set_theme(self, theme):
@@ -279,7 +280,8 @@ class Session:
 
     def readouts(self, eta=None, w=None):
         """The numbers of the readout strip: R, the size of the gradient of the weights that move, the accuracy
-        (binary), the predicted change of R for the next step, and the last step's predicted and actual change."""
+        (classification), the predicted change of R for the next step, and the last step's predicted and actual
+        change."""
         eta = self.eta if eta is None else check_eta(eta)
         w = self.weights() if w is None else list(w)
         g = self.slopes(w)
@@ -288,7 +290,7 @@ class Session:
         out = {
             "R": self.risk(w),
             "grad_norm": math.sqrt(g2),
-            "accuracy": self.model.accuracy(self.data.X, self.data.y, w) if self.task == "binary" else None,
+            "accuracy": None if self.task == "regression" else self.model.accuracy(self.data.X, self.data.y, w),
             "eta": eta,
             "next_change": -eta * g2,
             "last": None if last is None else (last.predicted - last.before, last.actual - last.before),

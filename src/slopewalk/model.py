@@ -22,7 +22,7 @@ ACTIVATIONS = {
 SIGMOID = ACTIVATIONS[nn.Sigmoid]
 SUPPORTED = "nn.Linear with nn.Tanh, nn.ReLU or nn.Sigmoid between them"
 TASKS = ("binary", "multiclass", "regression")
-MAX_CLASSES = 6  # one colour per class in the picture
+MAX_CLASSES = 4  # one colour per class in the picture, none of them a colour that means something else
 BATCH_CELLS = 400_000  # risk_batch handles at most this many (weight vector, point) pairs at once
 
 Weight = namedtuple("Weight", "name layer unit input value")

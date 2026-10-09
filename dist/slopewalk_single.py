@@ -22,9 +22,10 @@ import torch.nn.functional as F
 from contextlib import contextmanager
 from matplotlib import patheffects
 from matplotlib.backends.backend_agg import FigureCanvasAgg
-from matplotlib.colors import LinearSegmentedColormap, to_rgba
+from matplotlib.colors import LinearSegmentedColormap, to_rgb, to_rgba
 from matplotlib.figure import Figure
 from matplotlib.font_manager import FontProperties
+from matplotlib.lines import Line2D
 from matplotlib.patches import BoxStyle, Rectangle
 
 __version__ = "0.1.0.dev0"
@@ -46,7 +47,7 @@ ACTIVATIONS = {
 SIGMOID = ACTIVATIONS[nn.Sigmoid]
 SUPPORTED = "nn.Linear with nn.Tanh, nn.ReLU or nn.Sigmoid between them"
 TASKS = ("binary", "multiclass", "regression")
-MAX_CLASSES = 6  # one colour per class in the picture
+MAX_CLASSES = 4  # one colour per class in the picture, none of them a colour that means something else
 BATCH_CELLS = 400_000  # risk_batch handles at most this many (weight vector, point) pairs at once
 
 Weight = namedtuple("Weight", "name layer unit input value")
@@ -595,19 +596,20 @@ WIDE_STRETCH = {"history": 3.0, "table": 0.5, "line": 1.0, "cases": 1.0, "moment
 class Layout:
     """Positions for a network with n_inputs inputs and the hidden layers `hidden` (a list of unit counts).
 
-    task "binary" ends each panel with a, the sigmoid, p and the loss box; "regression" with the prediction and the
-    loss box. style "standard": a figure 15 inches wide, two network panels per row (one for deep networks) and
+    task "binary" ends each panel with a, the sigmoid, p and the loss box; "multiclass" with a score a and a p for
+    each of the `outputs` classes, the softmax between them, and the loss box; "regression" with the prediction and
+    the loss box. style "standard": a figure 15 inches wide, two network panels per row (one for deep networks) and
     three lower panels per row. "wide": 27 inches, up to four network panels in a row (two for deep networks) and up
     to six lower panels in a row, each as wide as suits it, for wide screens. width (inches) overrides the width of
     either. The network panels keep their size and spacing whatever panels are below them.
     """
 
-    def __init__(self, n_inputs, hidden, task="binary", style="standard", width=None):
+    def __init__(self, n_inputs, hidden, task="binary", style="standard", width=None, outputs=1):
         if style not in LAYOUTS:
             raise ValueError(f"slopewalk: layout must be 'standard' or 'wide', not {style!r}.")
         if width is not None and not (isinstance(width, (int, float)) and 6 <= width <= 60):
             raise ValueError(f"slopewalk: width is the figure width in inches, between 6 and 60, not {width!r}.")
-        self.n_inputs, self.hidden, self.task, self.style = n_inputs, hidden, task, style
+        self.n_inputs, self.hidden, self.task, self.style, self.outputs = n_inputs, hidden, task, style, outputs
         self.width = float(width) if width is not None else WIDTH[style]
         self.text_scale = f = TEXT_SCALE[style]
         extra = 1.2 * (f - 1)  # larger text: the loss box moves right, clear of the box before it
@@ -655,9 +657,9 @@ class Layout:
 
     def row_height(self, with_sd=False, backprop=False):
         """Height of a panel row in inches: taller when a layer has more than 3 units (up to four times the usual,
-        for 12 units), by a fifth when the boxes carry a standard deviation line (groups of points), and by 40% when
-        the backward pass adds its boxes under the units."""
-        units = min(4.0, max(1.0, max(self.hidden, default=1) / 3))
+        for 12 units; the outputs count as a layer), by a fifth when the boxes carry a standard deviation line (groups
+        of points), and by 40% when the backward pass adds its boxes under the units."""
+        units = min(4.0, max(1.0, max(list(self.hidden) + [self.outputs]) / 3))
         return 2.9 * units * (1.2 if with_sd else 1.0) * (1.4 if backprop else 1.0) * self.text_scale
 
     def lower_rows(self, panels, n_weights=0):
@@ -762,16 +764,17 @@ def place_labels(edges, sizes, obstacles, defaults, pad=0.0):
 # ------------------------ draw.py ------------------------
 
 class Theme:
-    """Colours, fonts and sizes of the picture. Red is class 1 and blue class 0; green is the hidden layer; purple is
-    the backward pass; orange marks negative weights. Text in boxes is ink: a box carries its meaning in its border and
-    fill. Ratios are WCAG contrast against paper unless said otherwise.
+    """Colours, fonts and sizes of the picture. Red is class 1 and blue class 0 (with more classes, teal is class 2 and
+    magenta class 3); green is the hidden layer; purple is the backward pass; orange marks negative weights. Text in
+    boxes is ink: a box carries its meaning in its border and fill. Ratios are WCAG contrast against paper unless said
+    otherwise.
 
     Only the labels on the weight lines use edge_label_size, and only the weight lines use zorder 1.
     """
 
     paper, ink, muted = "#FFFFFF", "#1F2328", "#59636E"  # ink 15.8:1, muted 6.1:1
-    class_colour = {0: "#0969DA", 1: "#CF222E"}  # 5.2:1 and 5.4:1: panel titles, borders, markers
-    class_tint = {0: "#E3EFFD", 1: "#FDECEC"}  # box fills; the text on them is ink
+    class_colour = {0: "#0969DA", 1: "#CF222E", 2: "#00796B", 3: "#B4237F"}  # 5.2, 5.4, 5.3, 6.0:1: titles, marks
+    class_tint = {0: "#E3EFFD", 1: "#FDECEC", 2: "#DFF3F0", 3: "#FBEAF3"}  # box fills; the text on them is ink
     mixed_colour, mixed_tint = "#1F2328", "#EEF1F4"
     neutral_colour, neutral_tint = "#3D444D", "#EEF1F4"  # regression panels
     positive, negative, negative_text = "#1F2328", "#D1600A", "#B04800"  # lines 15.8:1 and 3.9:1, numbers 5.6:1
@@ -827,8 +830,8 @@ class DarkTheme(Theme):
     """The same picture for a dark notebook theme: light ink on dark paper. Ratios against #1E1E1E."""
 
     paper, ink, muted = "#1E1E1E", "#E6EDF3", "#9AA4AF"  # ink 14.1:1, muted 6.6:1
-    class_colour = {0: "#58A6FF", 1: "#FF7B72"}  # 6.6:1 and 6.6:1
-    class_tint = {0: "#1B2B40", 1: "#3D1F22"}
+    class_colour = {0: "#58A6FF", 1: "#FF7B72", 2: "#39C5BB", 3: "#F778BA"}  # 6.6, 6.6, 7.8 and 6.6:1
+    class_tint = {0: "#1B2B40", 1: "#3D1F22", 2: "#163431", 3: "#3B1E30"}
     mixed_colour, mixed_tint = "#E6EDF3", "#2B2F36"
     neutral_colour, neutral_tint = "#C9D1D9", "#2B2F36"
     positive, negative, negative_text = "#C9D1D9", "#F0883E", "#F0883E"  # lines and numbers 6.6:1
@@ -964,12 +967,13 @@ def box_obstacles(ax, renderer, skip_size):
 
 
 def group_style(S, c):
-    """(colour, tint, mixed, label) of group c: the class colours, black for mixed classes, grey for regression."""
+    """(colour, tint, mixed, label) of group c: the class colours, black for mixed classes, grey for regression. The
+    label of a mixed group is its most common class (the lower one in a tie)."""
     D, T = S.data, S.theme
     if D.task == "regression":
         return T.neutral_colour, T.neutral_tint, False, None
     labs = D.y[D.gsel[c]]
-    yi = int(round(float(labs.mean())))
+    yi = int(np.argmax(np.bincount(labs.numpy().astype(np.int64))))
     mixed = bool(labs.min() != labs.max())
     if mixed:
         return T.mixed_colour, T.mixed_tint, True, yi
@@ -1103,7 +1107,7 @@ def draw_case(ax, S, F, c, styles=None):
     for l, layer in enumerate(M.layers):
         last = l == len(M.layers) - 1
         tx = (L.x_a if last else L.blocks[l][0]) - BW
-        tys = np.array([1.2]) if last else L.unit_ys(layer.out_features)
+        tys = L.unit_ys(layer.out_features)  # one output unit sits at 1.2, the middle
         bias = (src_x if l == 0 else src_x + 0.45, 2.8)
         ax.text(*bias, "1", bbox=dict(boxstyle="circle", fc=T.node_fill, ec=T.node_edge), **node)
         sources = src + [(bias[0] + 0.1, bias[1] - 0.1)]
@@ -1147,7 +1151,9 @@ def draw_case(ax, S, F, c, styles=None):
     lead = f"{letter(c)}: {'mean of ' + str(npts) + ' points ' if npts > 1 else ''}{where}"
     change = f"change\nfrom start\n{lm - S.loss0[c]:+.3f}"
     loss_box = dict(boxstyle="round,pad=0.3", fc=tint, ec=col, lw=0.8)
-    if D.task == "regression":
+    if D.task == "multiclass":
+        title = draw_classes(ax, S, F, c, tag, obstacles, arrow, (lead, change, loss_box))
+    elif D.task == "regression":
         box_a = dict(fontsize=T.node_size, ha="center", va="center", zorder=5, bbox=T.value_box, color=T.ink)
         ax.text(L.x_a, 1.2, tag("ŷ") + num(am, as_), **box_a)
         ax.annotate("", xy=(L.x_loss - 0.42 * L.text_scale, 1.2), xytext=(L.x_a + BW, 1.2), arrowprops=arrow)
@@ -1212,14 +1218,102 @@ def draw_case(ax, S, F, c, styles=None):
     return edges, obstacles
 
 
+def draw_classes(ax, S, F, c, tag, obstacles, arrow, parts):
+    """The output of network panel c for K classes: a score box a0, a1, ... per class, the softmax over all of them,
+    a p box per class, and the loss box. The p box of the group's own class has the class colours: its p is the one
+    the loss takes (loss = -log p of the case's class). Returns the panel title."""
+    M, D, L, T = S.model, S.data, S.layout, S.theme
+    lead, change, loss_box = parts
+    col, tint, mixed, yi = group_style(S, c)
+    tys = L.unit_ys(M.n_outputs)
+    (am, as_), (pm, ps), (lm, _) = D.stats(F.out.a, c), D.stats(F.out.p, c), D.stats(F.out.loss, c)
+    box = dict(fontsize=T.node_size, ha="center", va="center", zorder=5, bbox=T.value_box, color=T.ink)
+    half = 0.31  # the softmax box: as wide as a glyph, as tall as the scores
+    lo, hi = tys[-1] - 0.25, tys[0] + 0.25
+    ax.add_patch(Rectangle((L.x_sigmoid - half, lo), 2 * half, hi - lo, fc=T.glyph_fill, ec=T.glyph_edge, lw=0.8))
+    ax.text(
+        L.x_sigmoid,
+        (lo + hi) / 2,
+        "softmax",
+        rotation=90,
+        fontsize=T.glyph_name_size,
+        ha="center",
+        va="center",
+        color=T.curve,
+        zorder=3,
+    )
+    obstacles.append((L.x_sigmoid - half, lo, L.x_sigmoid + half, hi))
+    for k, ty in enumerate(tys):
+        ax.text(L.x_a, ty, tag(f"a{k}") + num(am[k], as_[k]), **box)
+        ax.annotate("", xy=(L.x_sigmoid - half, ty), xytext=(L.x_a + BW, ty), arrowprops=arrow)
+        ax.annotate("", xy=(L.x_p - BW, ty), xytext=(L.x_sigmoid + half, ty), arrowprops=arrow)
+        own = not mixed and k == yi
+        style = dict(box, bbox=dict(T.value_box, fc=tint, ec=col, lw=1.6)) if own else box
+        ax.text(L.x_p, ty, tag(f"p{k}") + num(pm[k], ps[k], sign=False), **style)
+    ytxt = "y mixed" if mixed else f"y = {yi}"
+    ax.text(
+        L.x_loss,
+        1.2,
+        f"{ytxt}\nloss {lm:.3f}\n{change}",
+        fontsize=T.node_size,
+        ha="center",
+        va="center",
+        color=T.ink,
+        bbox=loss_box,
+    )
+    what = "classes mixed" if mixed else f"class {yi}"
+    return f"{lead}, {what}:  loss {lm:.3f}"
+
+
 # ---------------------------------------------------------------- the input plane
 
 
 def net_on(S, points, w):
-    """The network's output (score or prediction) on an array of points at the weights w; leaves the network at w."""
+    """The network's output on an array of points at the weights w: the score or the prediction (one number per
+    point), or the scores of the classes (multiclass: a row per point). Leaves the network at w."""
     S.model.set_weights(w)
     with torch.no_grad():
-        return S.model.net(torch.as_tensor(points, dtype=S.model.dtype)).reshape(-1).numpy()
+        out = S.model.net(torch.as_tensor(points, dtype=S.model.dtype))
+    return out.numpy() if out.shape[1] > 1 else out.reshape(-1).numpy()
+
+
+def softmax(A):
+    """The probabilities of the classes from their scores, along the last axis."""
+    E = np.exp(A - A.max(-1, keepdims=True))
+    return E / E.sum(-1, keepdims=True)
+
+
+def class_shading(T, A):
+    """An RGB image of a grid of scores A (ny x nx x K): at each point the colour of the class with the largest score,
+    the stronger the surer, in five bands as in the binary picture: paper where all classes are equally likely, a share
+    plane_alpha of the class colour where one class is certain."""
+    K = A.shape[-1]
+    P = softmax(A)
+    sure = (P.max(-1) - 1 / K) / (1 - 1 / K)
+    band = (np.minimum(np.floor(sure * 5), 4) + 0.5) / 5
+    colours = np.array([to_rgb(T.class_colour[k]) for k in range(K)])
+    share = (T.plane_alpha * band)[..., None]
+    return np.asarray(to_rgb(T.paper)) * (1 - share) + colours[P.argmax(-1)] * share
+
+
+def class_boundaries(ax, U1, U2, A, **style):
+    """The boundaries between the classes over a grid of scores A (ny x nx x K): where class k's score equals the
+    largest of the others, for each k (a boundary between two classes is drawn once for each)."""
+    K = A.shape[-1]
+    for k in range(K):
+        d = A[..., k] - np.delete(A, k, axis=-1).max(-1)
+        if d.min() < 0 < d.max():
+            ax.contour(U1, U2, d, levels=[0.0], **style)
+
+
+def class_legend(ax, S):
+    """A legend of the class colours."""
+    T = S.theme
+    handles = [
+        Line2D([], [], marker="o", ls="none", color=T.class_colour[k], mec=T.marker_edge, label=f"class {k}")
+        for k in range(S.data.n_classes)
+    ]
+    ax.legend(handles=handles, fontsize=T.legend_size, loc="best")
 
 
 def start_values(S, key, points):
@@ -1273,6 +1367,10 @@ def draw_input_plane(ax, S, F):
     moved = bool(F.changed)
     X, y = D.X.numpy(), D.y.numpy()
     gx = [D.stats(X, c)[0] for c in range(D.G)]
+    if D.task == "multiclass" and D.d <= 2:
+        draw_class_plane(ax, S, F, gx)
+        S.model.set_weights(w)
+        return
     if D.d == 1:
         u = line_grid(S)
         a = net_on(S, u[:, None], w)
@@ -1350,6 +1448,55 @@ def draw_input_plane(ax, S, F):
     S.model.set_weights(w)
 
 
+def draw_class_plane(ax, S, F, gx):
+    """Multiclass. Two inputs: the most likely class over the plane, shaded by how sure the network is, with the
+    boundaries between the classes and, once the weights moved, the starting ones (dashed). One input: p of each class
+    against x1, each case on the curve of its own class, so that its height is the p its loss takes."""
+    D, T = S.data, S.theme
+    w = F.w
+    moved = bool(F.changed)
+    X, y = D.X.numpy(), D.y.numpy()
+    K = D.n_classes
+    colours = [T.class_colour[int(v)] for v in y]
+    if D.d == 1:
+        u = line_grid(S)
+        P = softmax(net_on(S, u[:, None], w))
+        if moved:
+            P0 = softmax(start_values(S, "line", u[:, None]))
+            for k in range(K):
+                ax.plot(u, P0[:, k], "--", color=T.class_colour[k], lw=1.0, alpha=0.6)
+        for k in range(K):
+            ax.plot(u, P[:, k], color=T.class_colour[k], lw=2, label=f"p{k}")
+        own = F.out.p[np.arange(D.n), y.astype(np.int64)]
+        ax.scatter(X[:, 0], own, c=colours, s=18, edgecolor=T.marker_edge, lw=0.3, zorder=3)
+        draw_group_marks(ax, S, [float(v[0]) for v in gx], [float(D.stats(own, c)[0]) for c in range(D.G)], size=110)
+        ax.set_ylim(-0.08, 1.08)
+        ax.set_xlabel("x1")
+        ax.set_ylabel("p")
+        ax.legend(fontsize=T.legend_size, loc="best")
+        ax.set_title("p of each class against x1;\neach case on the curve of its class", fontsize=T.panel_title_size)
+        return
+    P1, P2, grid = plane_grid(S)
+    A = net_on(S, grid, w).reshape(*P1.shape, K)
+    lo, hi = float(P1[0, 0]), float(P1[0, -1])
+    ax.imshow(class_shading(T, A), extent=(lo, hi, lo, hi), origin="lower", interpolation="bilinear", zorder=0)
+    class_boundaries(ax, P1, P2, A, colors=T.boundary)
+    if moved:
+        A0 = start_values(S, "plane", grid).reshape(*P1.shape, K)
+        class_boundaries(ax, P1, P2, A0, colors=T.start_colour, linestyles="--", linewidths=1.0)
+    if D.n > D.G:
+        ax.scatter(X[:, 0], X[:, 1], c=colours, s=4)
+    for c in range(D.G):
+        yi = group_style(S, c)[3]
+        ax.scatter(*gx[c], s=160, color=T.class_colour[yi], edgecolor=T.marker_edge, zorder=3)
+        ax.text(gx[c][0] + 0.15, gx[c][1] + 0.15, letter(c), fontsize=T.letter_size, path_effects=halo(T), color=T.ink)
+    class_legend(ax, S)
+    ax.set_xlim(lo, hi)
+    ax.set_ylim(lo, hi)
+    ax.set_aspect("equal")
+    ax.set_title("the most likely class and the boundaries", fontsize=T.panel_title_size)
+
+
 # ---------------------------------------------------------------- R over the steps
 
 
@@ -1412,6 +1559,42 @@ def width_share(ax):
     return sum(ratios[spec.colspan.start : spec.colspan.stop]) / sum(ratios)
 
 
+TABLE_SHARES = (0.17, 0.18, 0.39, 0.26)  # the columns' shares of a block of the table
+TABLE_HEADERS = (  # the longest that fit
+    ("weight", "value", "change of R for +0.1", "slope dR/dw"),
+    ("weight", "value", "ΔR for +0.1", "dR/dw"),
+    ("w", "value", "ΔR", "dR/dw"),
+)
+
+
+def table_fit(ax, rows, block_inches, most):
+    """The font, headers and column shares of a block of the table that is block_inches wide, with the font at most
+    `most` points (what the rows allow). The usual shares with the longest headers that fit at that font; when none
+    fit, shares in proportion to what each column needs, with the headers that allow the largest font."""
+    renderer = get_renderer(ax.figure)
+    dpi = ax.figure.dpi
+
+    def inches(text, size, **font):  # the width of a text at a font size, in inches
+        if renderer is None:
+            return 0.6 * size / 72 * len(text)
+        props = FontProperties(size=size, **font)
+        return renderer.get_text_width_height_descent(text, props, ismath=False)[0] / dpi
+
+    cells = [max(inches(r[c], 10, family="monospace" if c else None) for r in rows) / 10 for c in range(4)]
+
+    def needs(headers):  # inches per point of font, per column: numbers right-aligned with a margin, headers centred
+        heads = [inches(h, 9, weight="bold") / 10 for h in headers]
+        return [max(cell / 0.8, head / 0.9) for cell, head in zip(cells, heads)]
+
+    for headers in TABLE_HEADERS:
+        if all(n * most <= s * block_inches for n, s in zip(needs(headers), TABLE_SHARES)):
+            return most, list(headers), list(TABLE_SHARES)
+    options = [(min(most, block_inches / sum(needs(h))), h) for h in TABLE_HEADERS]
+    size, headers = max(options, key=lambda o: o[0])  # the first of the largest: the longer headers in a tie
+    need = needs(headers)
+    return size, list(headers), [n / sum(need) for n in need]
+
+
 def draw_slope_table(ax, S, F):
     """A table with one row per weight: its value, the change of R when it alone grows by 0.1, and the slope dR/dw.
 
@@ -1429,23 +1612,20 @@ def draw_slope_table(ax, S, F):
     n_blocks = len(blocks)
     space = BOTTOM_HEIGHT * 72 * 0.8  # points of the panel's height for the rows; the title and margins take the rest
     rows_needed = max(len(b) for b in blocks) + 1  # the header and the longest block
-    fontsize = max(8.0, min(T.table_size, space / rows_needed / T.table_leading))  # smaller only to fit the rows
-    block_inches = ax.figure.get_figwidth() * width_share(ax) / n_blocks - PANEL_GAP
-    short = block_inches < 0.42 * fontsize  # the long headers need about 0.42 in of block per point of font
-    headers = (
-        ["weight", "value", "ΔR for +0.1", "dR/dw"]
-        if short
-        else ["weight", "value", "change of R for +0.1", "slope dR/dw"]
-    )
-    ax.set_title("Change of R when one weight grows by 0.1,\nand the slope dR/dw", fontsize=T.panel_title_size)
     gap = 0.03
     width = (1 - gap * (n_blocks - 1)) / n_blocks
+    block_inches = (ax.figure.get_figwidth() * width_share(ax) - PANEL_GAP) * width
+    fontsize, headers, shares = table_fit(
+        ax, rows, block_inches, min(T.table_size, space / rows_needed / T.table_leading)
+    )
+    fontsize = max(8.0, fontsize)
+    ax.set_title("Change of R when one weight grows by 0.1,\nand the slope dR/dw", fontsize=T.panel_title_size)
     for b, block in enumerate(blocks):
         height = min(1.0, fontsize * T.table_leading * (len(block) + 1) / space)
         tbl = ax.table(
             cellText=block,
             colLabels=headers,
-            colWidths=[0.17, 0.18, 0.39, 0.26],
+            colWidths=shares,
             cellLoc="right",
             colLoc="center",
             bbox=[b * (width + gap), 1 - height, width, height],
@@ -1483,10 +1663,10 @@ def message(ax, T, text):
 
 
 def point_colours(S):
-    """A colour per case: its class colour (binary) or a colour for its target y (regression)."""
+    """A colour per case: its class colour (classification) or a colour for its target y (regression)."""
     D, T = S.data, S.theme
     y = D.y.numpy()
-    if D.task == "binary":
+    if D.task in ("binary", "multiclass"):
         return [T.class_colour[int(v)] for v in y]
     import matplotlib
 
@@ -1538,7 +1718,7 @@ def draw_cases(ax, S, F):
     ax.set_xticklabels([letter(c) for c in range(D.G)])
     ax.set_xlim(-0.6, D.G - 0.4)
     ax.set_ylabel("slope of the case's own loss")
-    formula = "(p - y) da/dw" if D.task == "binary" else "2(ŷ - y) dŷ/dw"
+    formula = {"binary": "(p - y) da/dw", "multiclass": "Σk (pk - yk) dak/dw", "regression": "2(ŷ - y) dŷ/dw"}[D.task]
     title = f"each case's slope along {name}, {formula};\nbars: group means; dashed: the average"
     ax.set_title(title, fontsize=T.panel_title_size)
     ax.legend(fontsize=T.legend_size, loc="best")
@@ -1709,6 +1889,77 @@ def output_weights(S, w):
     return v[:-1], float(v[-1])
 
 
+def output_layer(S, w):
+    """The output layer as a matrix (one row per class, one column per unit of the last hidden layer) and its biases."""
+    k = S.model.layer_indices(len(S.model.layers) - 1)
+    V = np.asarray([w[i] for i in k], dtype=float).reshape(S.model.n_outputs, -1)
+    return V[:, :-1], V[:, -1]
+
+
+def draw_hidden_classes(ax, S, F, H, colours, small, label):
+    """draw_hidden for K classes. One unit: p of each class against h, each case on the curve of its class. Two
+    units: the most likely class over the (h1, h2) plane, with the boundaries. Three: the cases in 3-D; more: along
+    the two directions in which h varies most; both coloured by class, without boundaries."""
+    D, T = S.data, S.theme
+    m = H.shape[1]
+    V, b = output_layer(S, F.w)
+    if m == 1:
+        lo, hi = window(H[:, 0], minimum=0.6)
+        u = np.linspace(lo, hi, 101)
+        P = softmax(u[:, None] * V[None, :, 0] + b)
+        for k in range(D.n_classes):
+            ax.plot(u, P[:, k], color=T.class_colour[k], lw=1.5, label=f"p{k}")
+        own = F.out.p[np.arange(D.n), D.y.numpy().astype(np.int64)]
+        ax.scatter(H[:, 0], own, c=colours, s=small, edgecolor=T.marker_edge, lw=0.3, zorder=3)
+        ax.set_xlabel(f"{label}1")
+        ax.set_ylabel("p of each class; each case on its own")
+        ax.legend(fontsize=T.legend_size, loc="best")
+        what = "p of each class"
+    elif m == 2:
+        x0, x1 = window(H[:, 0], minimum=0.6), window(H[:, 1], minimum=0.6)
+        U1, U2 = np.meshgrid(np.linspace(*x0, 81), np.linspace(*x1, 81))
+        A = U1[..., None] * V[:, 0] + U2[..., None] * V[:, 1] + b
+        ax.imshow(class_shading(T, A), extent=(*x0, *x1), origin="lower", aspect="auto", interpolation="bilinear")
+        class_boundaries(ax, U1, U2, A, colors=T.boundary)
+        ax.scatter(H[:, 0], H[:, 1], c=colours, s=small, edgecolor=T.marker_edge, lw=0.3, zorder=3)
+        gh = [D.stats(H, c)[0] for c in range(D.G)]
+        for c in range(D.G):
+            ax.text(
+                gh[c][0],
+                gh[c][1],
+                f"  {letter(c)}",
+                fontsize=T.letter_size,
+                zorder=4,
+                path_effects=halo(T),
+                color=T.ink,
+            )
+        ax.set_xlim(*x0)
+        ax.set_ylim(*x1)
+        ax.set_xlabel(f"{label}1")
+        ax.set_ylabel(f"{label}2")
+        what = "the most likely class"
+    elif m == 3 and hasattr(ax, "set_zlim"):
+        ax.scatter(
+            H[:, 0], H[:, 1], H[:, 2], c=colours, s=small, edgecolor=T.marker_edge, linewidths=0.3, depthshade=False
+        )
+        for q in range(3):
+            getattr(ax, f"set_{'xyz'[q]}lim")(*window(H[:, q], minimum=0.6))
+        ax.set_xlabel(f"{label}1")
+        ax.set_ylabel(f"{label}2")
+        ax.set_zlabel(f"{label}3")
+        ax.view_init(elev=20, azim=-60)
+        what = "coloured by class"
+    else:
+        centred = H - H.mean(0)
+        _, _, vt = np.linalg.svd(centred, full_matrices=False)
+        two = centred @ vt[:2].T
+        ax.scatter(two[:, 0], two[:, 1], c=colours, s=small, edgecolor=T.marker_edge, lw=0.3, zorder=3)
+        ax.set_xlabel("direction of h with the largest spread")
+        ax.set_ylabel("the next one")
+        what = "coloured by class"
+    ax.set_title(f"the cases at their hidden values,\n{what}", fontsize=T.panel_title_size)
+
+
 def draw_hidden(ax, S, F):
     """The cases at the values h of the last hidden layer. The output unit is a linear function of h: its boundary
     a = 0 is a point (one unit), a line (two) or a plane (three). With more units: the score a against the largest
@@ -1719,12 +1970,15 @@ def draw_hidden(ax, S, F):
         message(ax, T, "no hidden layer:\nthe output unit sees x itself")
         return
     H = np.asarray(F.out.hidden[-1][1], dtype=float)
-    v, b = output_weights(S, F.w)
     colours = point_colours(S)
     small = 10 if D.n > 40 else 40
+    label = "h" if len(S.model.hidden) == 1 else f"h{len(S.model.hidden)},"
+    if D.task == "multiclass":
+        draw_hidden_classes(ax, S, F, H, colours, small, label)
+        return
+    v, b = output_weights(S, F.w)
     binary = D.task == "binary"
     gh = [D.stats(H, c)[0] for c in range(D.G)]
-    label = "h" if len(S.model.hidden) == 1 else f"h{len(S.model.hidden)},"
     if m == 1:
         h = H[:, 0]
         lo, hi = window(h, minimum=0.6)
@@ -1854,13 +2108,14 @@ def backprop_stages(model):
     """The stages of the backward pass for this network, from the forward pass to the average over the cases."""
     L = len(model.layers)
     regression = model.task == "regression"
+    output = {
+        "binary": "at the output: δa = ∂ℓ/∂a = p - y",
+        "multiclass": "at the output: δak = ∂ℓ/∂ak = pk - yk (yk is 1 for the case's class, else 0)",
+        "regression": "at the output: δa = ∂ℓ/∂a = 2(ŷ - y)",
+    }[model.task]
     out = [
         Stage("forward", None, "forward pass: z, h and " + ("ŷ" if regression else "a and p") + " of every case"),
-        Stage(
-            "output",
-            L - 1,
-            "at the output: δa = ∂ℓ/∂a = " + ("2(ŷ - y)" if regression else "p - y"),
-        ),
+        Stage("output", L - 1, output),
         Stage("weights", L - 1, f"slopes of {layer_title(model, L - 1)}: δ of the unit × the input of the line"),
     ]
     for l in range(L - 2, -1, -1):
@@ -1910,12 +2165,17 @@ def backward_pass(model, X, y, w=None):
             h = layer.module(z) if layer.module is not None else z
             zs.append(z)
             outs.append(h)
-        a = zs[-1][:, 0]
-        d_out = torch.sigmoid(a) - y if model.task == "binary" else 2 * (a - y)
+        a = zs[-1]
+        if model.task == "multiclass":  # p - y for every class, with y one-hot
+            d_out = torch.softmax(a, dim=1) - nn.functional.one_hot(y.long(), a.shape[1]).to(a.dtype)
+        elif model.task == "binary":
+            d_out = torch.sigmoid(a) - y[:, None]
+        else:
+            d_out = 2 * (a - y[:, None])
         deltas = [None] * len(layers)
         dh = [None] * len(layers)
         deriv = [None] * len(layers)
-        deltas[-1] = d_out[:, None]
+        deltas[-1] = d_out
         for l in range(len(layers) - 2, -1, -1):
             dh[l] = deltas[l + 1] @ layers[l + 1].linear.weight
             deriv[l] = derivative(layers[l], zs[l], outs[l])
@@ -2047,9 +2307,10 @@ def overlay(ax, S, F, c, edges):
     reached = S.backprop_stages[1 : stage_index(S) + 1]
     tag = (lambda name: f"{name}\n") if c == 0 else (lambda name: "")  # the names once, in panel A
     for s in reached:
-        if s.kind == "output":
-            m, sd = D.stats(bp.delta[-1][:, 0], c)
-            box(ax, L.x_a, 1.2, tag("δa") + num(m, sd), T)
+        if s.kind == "output":  # under each score: one box, or one per class
+            for k, ty in enumerate(L.unit_ys(M.n_outputs)):
+                m, sd = D.stats(bp.delta[-1][:, k], c)
+                box(ax, L.x_a, ty, tag("δa" if M.n_outputs == 1 else f"δa{k}") + num(m, sd), T)
         elif s.kind in ("to_h", "delta"):
             l = s.layer
             XZ, XG, XH = L.blocks[l]
@@ -2097,7 +2358,9 @@ def derivation_lines(S, F, i):
     regression = S.task == "regression"
     out = []
     for s_idx, st in enumerate(S.backprop_stages):
-        if st.kind == "forward":
+        if S.task == "multiclass" and st.kind in ("forward", "output"):
+            out += [(s_idx, text) for text in class_lines(bp.z[-1][i], int(y), st.kind)]
+        elif st.kind == "forward":
             if regression:
                 out.append((s_idx, f"forward: ŷ = {a:+.3f}, y = {y:+.3f}"))
             else:
@@ -2115,7 +2378,7 @@ def derivation_lines(S, F, i):
             labels = M.input_labels(l)
             for k in M.layer_indices(l):
                 _, j, src = M.where[k]
-                unit = "a" if l == len(M.layers) - 1 else M.unit_name(l, j)
+                unit = output_name(M, j) if l == len(M.layers) - 1 else M.unit_name(l, j)
                 d = bp.delta[l][i, j]
                 if src < 0:
                     out.append((s_idx, f"{M.names[k]}: δ{unit} × 1 = {bp.grads[i, k]:+.3f}"))
@@ -2135,7 +2398,7 @@ def derivation_lines(S, F, i):
                 nm = M.unit_name(l, j)
                 if nxt.out_features == 1:
                     k = M.layer_indices(l + 1)[j]
-                    unit = "a" if l + 1 == len(M.layers) - 1 else M.unit_name(l + 1, 0)
+                    unit = output_name(M, 0) if l + 1 == len(M.layers) - 1 else M.unit_name(l + 1, 0)
                     d = bp.delta[l + 1][i, 0]
                     product = f"{Wn[0, j]:+.3f} × {factor(d)} = {bp.dh[l][i, j]:+.3f}"
                     out.append((s_idx, f"∂ℓ/∂h{nm} = {M.names[k]} × δ{unit} = {product}"))
@@ -2161,6 +2424,24 @@ def derivation_lines(S, F, i):
             mean = bp.grads[:, k].mean()
             out.append((s_idx, f"dR/d{M.names[k]} = mean over the {S.data.n} cases = {mean:+.4f}"))
     return out
+
+
+def output_name(model, j):
+    """The name of output unit j: a with one output, a0, a1, ... with one per class."""
+    return "a" if model.n_outputs == 1 else f"a{j}"
+
+
+def class_lines(a, y, kind):
+    """The lines of the forward and output stages for K classes: the scores a of one case and its class y."""
+    p = np.exp(a - a.max())
+    p /= p.sum()
+    if kind == "forward":
+        scores = ", ".join(f"{v:+.3f}" for v in a)
+        probabilities = ", ".join(f"{v:.3f}" for v in p)
+        return [f"forward: a = ({scores}), y = {y}", f"p = softmax(a) = ({probabilities})"]
+    return [
+        f"δa{k} = p{k} - {int(k == y)} = {p[k]:.3f} - {int(k == y)} = {p[k] - (k == y):+.3f}" for k in range(len(a))
+    ]
 
 
 def fitting_size(ax, T, texts, columns, floor=9.5):
@@ -2451,6 +2732,9 @@ VIEW_HELP = {
 LOOK = {  # where to look in the picture at each stage of the backward pass
     "forward": "The picture shows the forward pass. Press next stage to start at the output.",
     "output": "Under a, the purple box is δa = p - y of each case.",
+    "output multiclass": "Under each score ak, the purple box is δak = pk - yk of each case: yk is 1 for the case's "
+    "class and 0 for the others.",
+    "output regression": "Under ŷ, the purple box is δa = 2(ŷ - y) of each case.",
     "weights": "On the purple lines, each number is δ of the unit times the input of its line.",
     "to_h": "The purple arrows carry δ back along the weights to each h.",
     "delta": "The purple tangents on the curves: their slope multiplies ∂ℓ/∂h to give δ.",
@@ -2913,7 +3197,8 @@ class Controller:
     def stage_words(self):
         """The message for the current stage of the backward pass: where to look in the picture."""
         S = self.session
-        return LOOK[S.backprop_stages[S.backprop_step].kind]
+        kind = S.backprop_stages[S.backprop_step].kind
+        return LOOK.get(f"{kind} {S.task}", LOOK[kind])
 
     def action_buttons(self):
         return [*self.buttons.values()] + ([self.bp_prev, self.bp_next] if "backprop" in self.kinds else [])
@@ -3205,7 +3490,7 @@ class Session:
         M = self.model
         self.data = prepare(X, y, groups, n_inputs=M.n_inputs, dtype=M.dtype, task=task, n_outputs=M.n_outputs)
         self.task = self.model.task = self.data.task
-        self.layout = Layout(self.model.n_inputs, self.model.hidden, self.task, style=layout, width=width)
+        self.layout = Layout(M.n_inputs, M.hidden, self.task, style=layout, width=width, outputs=M.n_outputs)
         self.base_theme, self.theme_name = THEMES["light"], "light"
         self.set_theme(theme)
         self.title = title
@@ -3268,7 +3553,8 @@ class Session:
 
     def set_layout(self, style, width=None):
         """Switches the layout of the picture: "standard" or "wide" (the widgets also move the controls)."""
-        self.layout = Layout(self.model.n_inputs, self.model.hidden, self.task, style=style, width=width)
+        M = self.model
+        self.layout = Layout(M.n_inputs, M.hidden, self.task, style=style, width=width, outputs=M.n_outputs)
         self.theme = self.base_theme.scaled(self.layout.text_scale)
 
     def set_theme(self, theme):
@@ -3387,7 +3673,8 @@ class Session:
 
     def readouts(self, eta=None, w=None):
         """The numbers of the readout strip: R, the size of the gradient of the weights that move, the accuracy
-        (binary), the predicted change of R for the next step, and the last step's predicted and actual change."""
+        (classification), the predicted change of R for the next step, and the last step's predicted and actual
+        change."""
         eta = self.eta if eta is None else check_eta(eta)
         w = self.weights() if w is None else list(w)
         g = self.slopes(w)
@@ -3396,7 +3683,7 @@ class Session:
         out = {
             "R": self.risk(w),
             "grad_norm": math.sqrt(g2),
-            "accuracy": self.model.accuracy(self.data.X, self.data.y, w) if self.task == "binary" else None,
+            "accuracy": None if self.task == "regression" else self.model.accuracy(self.data.X, self.data.y, w),
             "eta": eta,
             "next_change": -eta * g2,
             "last": None if last is None else (last.predicted - last.before, last.actual - last.before),

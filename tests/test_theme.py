@@ -92,14 +92,12 @@ def check_palette(T):
         (T.muted, T.paper),
         (T.note_text, T.paper),
         (T.derivation_text, T.paper),
-        (T.class_colour[0], T.paper),
-        (T.class_colour[1], T.paper),
+        *[(T.class_colour[k], T.paper) for k in T.class_colour],
+        *[(T.ink, T.class_tint[k]) for k in T.class_tint],
         (T.negative_text, T.paper),
         (T.backprop_colour, T.paper),
         (T.backprop_colour, T.backprop_tint),
         (T.frozen_text, T.frozen_fill),
-        (T.ink, T.class_tint[0]),
-        (T.ink, T.class_tint[1]),
         (T.ink, T.mixed_tint),
         (T.ink, T.neutral_tint),
         (T.ink, T.value_box["fc"]),
@@ -118,8 +116,7 @@ def check_palette(T):
         T.path_colour,
         T.prediction_colour,
         T.start_colour,
-        T.class_colour[0],
-        T.class_colour[1],
+        *T.class_colour.values(),
     ]
     low = [(a, b, round(contrast(a, b), 2)) for a, b in text_on if contrast(a, b) < 4.5]
     low += [(a, T.paper, round(contrast(a, T.paper), 2)) for a in lines if contrast(a, T.paper) < 3.0]
@@ -165,7 +162,7 @@ def test_dark_pictures_have_no_dark_text(monkeypatch):
     import torch.nn as nn
     from helpers import make
 
-    from slopewalk import explore, sine_points, xor_centres
+    from slopewalk import clusters, explore, sine_points, xor_centres
     from slopewalk.draw import DARK_THEME, THEME
 
     monkeypatch.setenv("NB_STATIC", "1")
@@ -178,6 +175,13 @@ def test_dark_pictures_have_no_dark_text(monkeypatch):
         lambda t: explore(make("tanh3"), *xor_centres(noise=0.35), views="backprop", backprop_step=5, theme=t),
         lambda t: explore(
             nn.Sequential(nn.Linear(1, 3), nn.Tanh(), nn.Linear(3, 1)), *sine_points(), task="regression", theme=t
+        ),
+        lambda t: explore(
+            make("three_classes"),
+            *clusters([(-1, 1), (1, 1), (0, -1)], [0, 1, 2], noise=0.3, n_per=30),
+            views=("backprop", "cases", "hidden"),
+            backprop_step=1,
+            theme=t,
         ),
     ]
     for name, T in (("dark", DARK_THEME), ("light", THEME)):
@@ -212,3 +216,26 @@ def test_theme_option_switch_and_layout(monkeypatch):
     with pytest.raises(ValueError, match="theme must be 'light' or 'dark'"):
         explore(make("tanh3"), *xor_centres(), theme="purple")
     plt.close("all")
+
+
+def test_class_colours_differ_from_the_other_meanings():
+    """Classes 2 and 3 take hues that no other part of the picture uses: at least 25 degrees from the hidden layer,
+    the negative weights, the backward pass and momentum, and from each other class."""
+    import colorsys
+
+    from slopewalk.draw import DARK_THEME, THEME
+
+    def hue(c):
+        return colorsys.rgb_to_hls(*to_rgb(c))[0] * 360
+
+    def apart(a, b):
+        d = abs(hue(a) - hue(b)) % 360
+        return min(d, 360 - d)
+
+    for T in (THEME, DARK_THEME):
+        assert sorted(T.class_colour) == sorted(T.class_tint) == [0, 1, 2, 3]
+        others = [T.hidden, T.negative, T.backprop_colour, T.momentum_colour]
+        for k in (2, 3):
+            c = T.class_colour[k]
+            assert all(apart(c, o) >= 25 for o in others), (k, c)
+            assert all(apart(c, d) >= 25 for j, d in T.class_colour.items() if j != k), (k, c)
