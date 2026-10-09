@@ -9,7 +9,7 @@ Every function takes (ax, S, F) like the panels in draw.py.
 
 import numpy as np
 
-from .draw import LETTER_HALO, letter
+from .draw import halo, letter
 
 VIEWS = ("backprop", "cases", "slice", "line", "hidden", "momentum")
 
@@ -63,13 +63,13 @@ def draw_cases(ax, S, F):
             v[idx][order],
             s=40 if m <= 8 else 10,
             c=[colours[i] for i in idx[order]],
-            edgecolor="k",
+            edgecolor=T.marker_edge,
             lw=0.3,
             zorder=3,
         )
-        ax.hlines(float(v[idx].mean()), c - 0.32, c + 0.32, color="k", lw=2, zorder=4)
+        ax.hlines(float(v[idx].mean()), c - 0.32, c + 0.32, color=T.ink, lw=2, zorder=4)
     avg = float(v.mean())
-    ax.axhline(0.0, color="0.8", lw=0.8, zorder=0)
+    ax.axhline(0.0, color=T.zero_line, lw=0.8, zorder=0)
     ax.axhline(avg, ls="--", color=T.hidden, lw=1.5, zorder=2, label=f"average {avg:+.4f} = dR/d{name}")
     ax.set_xticks(range(D.G))
     ax.set_xticklabels([letter(c) for c in range(D.G)])
@@ -122,9 +122,9 @@ def draw_slice(ax, S, F):
         W = np.repeat(w[None, :], len(u), axis=0)
         W[:, a] = u
         R = M.risk_batch(D.X, D.y, W)
-        ax.plot(u, R, color="k", lw=1.8, label="R")
+        ax.plot(u, R, color=T.ink, lw=1.8, label="R")
         ax.plot(u, F.R + F.g[a] * (u - w[a]), "--", color=T.hidden, lw=1.2, label=f"tangent, slope {F.g[a]:+.3f}")
-        ax.plot([w[a]], [F.R], "o", color="k", zorder=5)
+        ax.plot([w[a]], [F.R], "o", color=T.ink, zorder=5)
         if w0[a] != w[a]:
             ax.axvline(w0[a], color=T.start_colour, ls=":", lw=1, label="start")
         span = float(R.max() - R.min()) or 1.0
@@ -145,8 +145,8 @@ def draw_slice(ax, S, F):
     R = M.risk_batch(D.X, D.y, W).reshape(n, n)
     levels = np.unique(np.quantile(R, [0.0, 0.01, 0.04, 0.09, 0.16, 0.25, 0.36, 0.49, 0.64, 0.81, 1.0]))
     if len(levels) > 1:
-        ax.contourf(A, B, R, levels=levels, cmap="Greys_r", alpha=0.35)
-        ax.contour(A, B, R, levels=levels, colors="0.35", linewidths=0.6)
+        ax.contourf(A, B, R, levels=levels, cmap=T.landscape_cmap, alpha=0.35)
+        ax.contour(A, B, R, levels=levels, colors=T.landscape_line, linewidths=0.6)
     if look:
         for key, colour, style, label in (
             ("gd", T.gd_colour, "o-", "next steps, gradient descent"),
@@ -155,9 +155,9 @@ def draw_slice(ax, S, F):
             p = look[key]["path"][:, idx]
             ax.plot(p[:, 0], p[:, 1], style, color=colour, ms=2.5, lw=1.2, label=label, zorder=3)
     if len(path) > 1:
-        ax.plot(path[:, 0], path[:, 1], "o-", color="0.1", ms=3, lw=1.2, label="steps taken", zorder=4)
-    ax.plot([w0[a]], [w0[b]], "o", mfc="white", mec="k", ms=7, label="start", zorder=5)
-    ax.plot([w[a]], [w[b]], "o", color="k", ms=6, zorder=6)
+        ax.plot(path[:, 0], path[:, 1], "o-", color=T.path_colour, ms=3, lw=1.2, label="steps taken", zorder=4)
+    ax.plot([w0[a]], [w0[b]], "o", mfc=T.paper, mec=T.marker_edge, ms=7, label="start", zorder=5)
+    ax.plot([w[a]], [w[b]], "o", color=T.ink, ms=6, zorder=6)
     g = np.array([F.g[a], F.g[b]])
     norm = float(np.hypot(*g))
     if norm > 0:
@@ -199,11 +199,11 @@ def draw_line(ax, S, F):
     R_eta = float(M.risk_batch(D.X, D.y, (w - eta * g)[None, :])[0])
     pred = F.R - eta * g2
     tangent = F.R - ts * g2
-    ax.plot(ts, R, color="k", lw=1.8, label="R along the step")
+    ax.plot(ts, R, color=T.ink, lw=1.8, label="R along the step")
     ax.plot(ts, tangent, "--", color=T.hidden, lw=1.2, label="first-order prediction")
-    ax.axvline(eta, color="0.7", lw=0.8, zorder=0)
-    ax.plot([eta], [R_eta], "o", color="k", ms=6, zorder=5, label=f"step of eta: R {R_eta:.4f}")
-    ax.plot([eta], [pred], "o", mfc="white", mec=T.hidden, ms=7, zorder=5, label=f"predicted: {pred:.4f}")
+    ax.axvline(eta, color=T.reference_line, lw=0.8, zorder=0)
+    ax.plot([eta], [R_eta], "o", color=T.ink, ms=6, zorder=5, label=f"step of eta: R {R_eta:.4f}")
+    ax.plot([eta], [pred], "o", mfc=T.paper, mec=T.hidden, ms=7, zorder=5, label=f"predicted: {pred:.4f}")
     best = int(np.argmin(R))
     if 0 < best < len(ts) - 1:  # a minimum inside the range shown, not R still falling at its end
         ax.plot(
@@ -267,13 +267,13 @@ def draw_hidden(ax, S, F):
         a = v[0] * u + b
         if binary:
             ax.plot(u, 1 / (1 + np.exp(-a)), color=T.neutral_colour, lw=1.5, label="p = sigmoid(a)")
-            ax.scatter(h, D.y.numpy(), c=colours, s=small, edgecolor="k", lw=0.3, zorder=3)
+            ax.scatter(h, D.y.numpy(), c=colours, s=small, edgecolor=T.marker_edge, lw=0.3, zorder=3)
             if v[0] != 0 and lo < -b / v[0] < hi:
-                ax.axvline(-b / v[0], color="k", lw=1, label="boundary a = 0")
+                ax.axvline(-b / v[0], color=T.boundary, lw=1, label="boundary a = 0")
             ax.set_ylabel("p, and the class of each case")
         else:
             ax.plot(u, a, color=T.neutral_colour, lw=1.5, label="prediction")
-            ax.scatter(h, D.y.numpy(), c=colours, s=small, edgecolor="k", lw=0.3, zorder=3)
+            ax.scatter(h, D.y.numpy(), c=colours, s=small, edgecolor=T.marker_edge, lw=0.3, zorder=3)
             ax.set_ylabel("y")
         ax.set_xlabel(f"{label}1")
         ax.legend(fontsize=T.legend_size, loc="best")
@@ -285,18 +285,20 @@ def draw_hidden(ax, S, F):
             P = 1 / (1 + np.exp(-a))
             ax.contourf(U1, U2, P, levels=np.linspace(0, 1, 11), cmap=T.plane_cmap, alpha=0.4)
             if P.min() < 0.5 < P.max():
-                ax.contour(U1, U2, P, levels=[0.5], colors="k")
+                ax.contour(U1, U2, P, levels=[0.5], colors=T.boundary)
         else:
             ax.contour(U1, U2, a, levels=10, cmap=T.value_cmap, linewidths=0.8)
-        ax.scatter(H[:, 0], H[:, 1], c=colours, s=small, edgecolor="k", lw=0.3, zorder=3)
+        ax.scatter(H[:, 0], H[:, 1], c=colours, s=small, edgecolor=T.marker_edge, lw=0.3, zorder=3)
         for c in range(D.G):
-            ax.text(gh[c][0], gh[c][1], f"  {letter(c)}", fontsize=T.letter_size, zorder=4, path_effects=LETTER_HALO)
+            ax.text(gh[c][0], gh[c][1], f"  {letter(c)}", fontsize=T.letter_size, zorder=4, path_effects=halo(T))
         ax.set_xlim(*x0)
         ax.set_ylim(*x1)
         ax.set_xlabel(f"{label}1")
         ax.set_ylabel(f"{label}2")
     elif m == 3 and hasattr(ax, "set_zlim"):
-        ax.scatter(H[:, 0], H[:, 1], H[:, 2], c=colours, s=small, edgecolor="k", linewidths=0.3, depthshade=False)
+        ax.scatter(
+            H[:, 0], H[:, 1], H[:, 2], c=colours, s=small, edgecolor=T.marker_edge, linewidths=0.3, depthshade=False
+        )
         r = [window(H[:, i], minimum=0.6) for i in range(3)]
         if binary and np.any(v != 0):
             i = int(np.argmax(np.abs(v)))  # solve the plane for the coordinate with the largest weight
@@ -305,7 +307,7 @@ def draw_hidden(ax, S, F):
             Gi = np.clip(-(v[j] * Gj + v[k] * Gk + b) / v[i], *r[i])
             coords = [None, None, None]
             coords[i], coords[j], coords[k] = Gi, Gj, Gk
-            ax.plot_surface(*coords, color="0.5", alpha=0.25, linewidth=0)
+            ax.plot_surface(*coords, color=T.plane_surface, alpha=0.25, linewidth=0)
         for q in range(3):
             getattr(ax, f"set_{'xyz'[q]}lim")(*r[q])
         ax.set_xlabel(f"{label}1")
@@ -319,9 +321,9 @@ def draw_hidden(ax, S, F):
         rest = rest - rest.mean(0)
         _, _, vt = np.linalg.svd(rest, full_matrices=False)
         other = rest @ vt[0]
-        ax.scatter(a, other, c=colours, s=small, edgecolor="k", lw=0.3, zorder=3)
+        ax.scatter(a, other, c=colours, s=small, edgecolor=T.marker_edge, lw=0.3, zorder=3)
         if binary:
-            ax.axvline(0.0, color="k", lw=1)
+            ax.axvline(0.0, color=T.boundary, lw=1)
         ax.set_xlabel("a = output unit's score" if binary else "prediction")
         ax.set_ylabel("largest other direction of h")
     what = "the boundary a = 0" if binary else "coloured by y"

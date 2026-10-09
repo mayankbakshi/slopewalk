@@ -714,6 +714,12 @@ class Theme:
     table_size, table_row_height = 10, 0.058  # row height as a fraction of the panel
     table_edge, table_head, table_highlight = "0.8", "#F2F2F2", "#FFF1D6"
     backprop_colour, backprop_tint, backprop_size = "#7B1FA2", "#F3E5F5", 9  # the backward pass
+    # surfaces and neutral marks: every colour of the picture lives in this class, so that a theme can change them all
+    paper, ink, marker_edge, boundary = "white", "black", "k", "k"
+    note_text, derivation_text, derivation_muted, point_neutral = "0.25", "0.2", "0.5", "0.25"
+    glyph_fill, glyph_edge, node_fill, label_backing = "white", "0.75", "white", "white"
+    reference_line, zero_line, landscape_line, plane_surface, path_colour = "0.7", "0.8", "0.35", "0.5", "0.1"
+    landscape_cmap = "Greys_r"
     network_sizes = ("edge_label_size", "glyph_name_size", "value_size", "node_size", "title_size", "backprop_size")
 
     def scaled(self, factor):
@@ -727,7 +733,9 @@ class Theme:
 THEME = Theme()
 
 
-LETTER_HALO = [patheffects.withStroke(linewidth=3, foreground="white")]  # group letters stay legible over points
+def halo(T):
+    """An outline in the background colour, so that group letters stay legible over points."""
+    return [patheffects.withStroke(linewidth=3, foreground=T.paper)]
 
 
 def letter(c):
@@ -749,7 +757,7 @@ def glyph(ax, xc, yc, act, m, sd, T, height=0.5):
     """
     name, f, lim = act[:3]
     w_, h_ = 0.62, height
-    ax.add_patch(Rectangle((xc - w_ / 2, yc - h_ / 2), w_, h_, fc="white", ec="0.75", lw=0.8, zorder=2))
+    ax.add_patch(Rectangle((xc - w_ / 2, yc - h_ / 2), w_, h_, fc=T.glyph_fill, ec=T.glyph_edge, lw=0.8, zorder=2))
     u = np.linspace(-lim, lim, 100)
 
     def fx(t):
@@ -898,7 +906,7 @@ def draw_edge_labels(ax, S, F, edges, obstacles, spec=None):
             zorder=3,
             color=colour,
             fontweight="bold" if hot else "normal",
-            bbox=dict(boxstyle="round,pad=0.08", fc="white", ec="none", alpha=0.9),
+            bbox=dict(boxstyle="round,pad=0.08", fc=T.label_backing, ec="none", alpha=0.9),
         )
     return mode
 
@@ -931,7 +939,7 @@ def draw_case(ax, S, F, c, styles=None):
         tx = (L.x_a if last else L.blocks[l][0]) - BW
         tys = np.array([1.2]) if last else L.unit_ys(layer.out_features)
         bias = (src_x if l == 0 else src_x + 0.45, 2.8)
-        ax.text(*bias, "1", bbox=dict(boxstyle="circle", fc="white", ec=T.node_edge), **node)
+        ax.text(*bias, "1", color=T.ink, bbox=dict(boxstyle="circle", fc=T.node_fill, ec=T.node_edge), **node)
         sources = src + [(bias[0] + 0.1, bias[1] - 0.1)]
         ns, nt = len(sources), len(tys)
         for j, ty in enumerate(tys):
@@ -1081,8 +1089,8 @@ def draw_group_marks(ax, S, xs, ys, size=160):
     for c in range(D.G):
         col, _, _, yi = group_style(S, c)
         face = "white" if D.task == "regression" else T.class_colour[yi]
-        ax.scatter(xs[c], ys[c], s=size, color=face, edgecolor="k", zorder=4)
-        ax.text(xs[c], ys[c], f"  {letter(c)}", fontsize=T.letter_size, va="bottom", zorder=5, path_effects=LETTER_HALO)
+        ax.scatter(xs[c], ys[c], s=size, color=face, edgecolor=T.marker_edge, zorder=4)
+        ax.text(xs[c], ys[c], f"  {letter(c)}", fontsize=T.letter_size, va="bottom", zorder=5, path_effects=halo(T))
 
 
 def draw_input_plane(ax, S, F):
@@ -1105,14 +1113,14 @@ def draw_input_plane(ax, S, F):
         ax.plot(u, out, color=T.neutral_colour, lw=2, label="p for class 1" if D.task == "binary" else "prediction")
         if D.task == "binary":
             colours = [T.class_colour[int(v)] for v in y]
-            ax.scatter(X[:, 0], y, c=colours, s=18, edgecolor="k", lw=0.3, zorder=3)
-            ax.axhline(0.5, color="0.7", lw=0.8, zorder=0)
+            ax.scatter(X[:, 0], y, c=colours, s=18, edgecolor=T.marker_edge, lw=0.3, zorder=3)
+            ax.axhline(0.5, color=T.reference_line, lw=0.8, zorder=0)
             gy = [float(D.stats(y, c)[0]) for c in range(D.G)]
             ax.set_ylim(-0.08, 1.08)
             ax.set_ylabel("p")
             ax.set_title("p for class 1 against x1", fontsize=T.panel_title_size)
         else:
-            ax.scatter(X[:, 0], y, s=18, color="0.25", zorder=3)
+            ax.scatter(X[:, 0], y, s=18, color=T.point_neutral, zorder=3)
             gy = [float(D.stats(y, c)[0]) for c in range(D.G)]
             ax.set_ylabel("y")
             ax.set_title("prediction and the points", fontsize=T.panel_title_size)
@@ -1132,7 +1140,7 @@ def draw_input_plane(ax, S, F):
         P = 1 / (1 + np.exp(-a))
         ax.contourf(P1, P2, P, levels=np.linspace(0, 1, 11), cmap=T.plane_cmap, alpha=0.5)
         if P.min() < 0.5 < P.max():
-            ax.contour(P1, P2, P, levels=[0.5], colors="k")
+            ax.contour(P1, P2, P, levels=[0.5], colors=T.boundary)
         if moved:
             a0 = start_values(S, "plane", grid).reshape(P1.shape)
             if a0.min() < 0 < a0.max():
@@ -1141,8 +1149,8 @@ def draw_input_plane(ax, S, F):
             ax.scatter(X[:, 0], X[:, 1], c=[T.class_colour[int(v)] for v in y], s=4)
         for c in range(D.G):
             yi = group_style(S, c)[3]
-            ax.scatter(*gx[c], s=160, color=T.class_colour[yi], edgecolor="k", zorder=3)
-            ax.text(gx[c][0] + 0.15, gx[c][1] + 0.15, letter(c), fontsize=T.letter_size, path_effects=LETTER_HALO)
+            ax.scatter(*gx[c], s=160, color=T.class_colour[yi], edgecolor=T.marker_edge, zorder=3)
+            ax.text(gx[c][0] + 0.15, gx[c][1] + 0.15, letter(c), fontsize=T.letter_size, path_effects=halo(T))
         ax.set_title("p for class 1 and the boundary", fontsize=T.panel_title_size)
     else:
         lo, hi = float(min(a.min(), y.min())), float(max(a.max(), y.max()))
@@ -1156,12 +1164,12 @@ def draw_input_plane(ax, S, F):
             vmin=cs.norm.vmin,
             vmax=cs.norm.vmax,
             s=18,
-            edgecolor="k",
+            edgecolor=T.marker_edge,
             lw=0.4,
             zorder=3,
         )
         for c in range(D.G):
-            ax.text(gx[c][0] + 0.15, gx[c][1] + 0.15, letter(c), fontsize=T.letter_size, path_effects=LETTER_HALO)
+            ax.text(gx[c][0] + 0.15, gx[c][1] + 0.15, letter(c), fontsize=T.letter_size, path_effects=halo(T))
         ax.set_title("prediction over the input plane; points coloured by y", fontsize=T.panel_title_size)
     ax.set_aspect("equal")
     S.model.set_weights(w)
@@ -1181,7 +1189,7 @@ def draw_history(ax, S, F):
         predicted = [(k, v) for k, v in predicted if v > 0]
     if predicted:
         ks, vs = zip(*predicted)
-        ax.plot(ks, vs, "o", mfc="white", mec=T.prediction_colour, ms=6, ls="none", label="first-order prediction")
+        ax.plot(ks, vs, "o", mfc=T.paper, mec=T.prediction_colour, ms=6, ls="none", label="first-order prediction")
         ax.legend(fontsize=T.legend_size, loc="lower left")
     ax.set_xlabel("gradient steps taken")
     ax.set_ylabel("R")
@@ -1204,7 +1212,14 @@ def draw_history(ax, S, F):
             f"last step: predicted {last.predicted - last.before:+.4f}, actual {last.actual - last.before:+.4f}"
         )
     ax.text(
-        0.98, 0.97, "\n".join(notes), transform=ax.transAxes, ha="right", va="top", fontsize=T.note_size, color="0.25"
+        0.98,
+        0.97,
+        "\n".join(notes),
+        transform=ax.transAxes,
+        ha="right",
+        va="top",
+        fontsize=T.note_size,
+        color=T.note_text,
     )
 
 
@@ -1260,7 +1275,9 @@ def draw_slope_table(ax, S, F):
         tbl.set_fontsize(fontsize)
         for (r, c), cell in tbl.get_celld().items():
             cell.set_edgecolor(T.table_edge)
+            cell.set_facecolor(T.paper)
             text = cell.get_text()
+            text.set_color(T.ink)
             if r == 0:
                 cell.set_facecolor(T.table_head)
                 text.set_fontweight("bold")
@@ -1329,13 +1346,13 @@ def draw_cases(ax, S, F):
             v[idx][order],
             s=40 if m <= 8 else 10,
             c=[colours[i] for i in idx[order]],
-            edgecolor="k",
+            edgecolor=T.marker_edge,
             lw=0.3,
             zorder=3,
         )
-        ax.hlines(float(v[idx].mean()), c - 0.32, c + 0.32, color="k", lw=2, zorder=4)
+        ax.hlines(float(v[idx].mean()), c - 0.32, c + 0.32, color=T.ink, lw=2, zorder=4)
     avg = float(v.mean())
-    ax.axhline(0.0, color="0.8", lw=0.8, zorder=0)
+    ax.axhline(0.0, color=T.zero_line, lw=0.8, zorder=0)
     ax.axhline(avg, ls="--", color=T.hidden, lw=1.5, zorder=2, label=f"average {avg:+.4f} = dR/d{name}")
     ax.set_xticks(range(D.G))
     ax.set_xticklabels([letter(c) for c in range(D.G)])
@@ -1388,9 +1405,9 @@ def draw_slice(ax, S, F):
         W = np.repeat(w[None, :], len(u), axis=0)
         W[:, a] = u
         R = M.risk_batch(D.X, D.y, W)
-        ax.plot(u, R, color="k", lw=1.8, label="R")
+        ax.plot(u, R, color=T.ink, lw=1.8, label="R")
         ax.plot(u, F.R + F.g[a] * (u - w[a]), "--", color=T.hidden, lw=1.2, label=f"tangent, slope {F.g[a]:+.3f}")
-        ax.plot([w[a]], [F.R], "o", color="k", zorder=5)
+        ax.plot([w[a]], [F.R], "o", color=T.ink, zorder=5)
         if w0[a] != w[a]:
             ax.axvline(w0[a], color=T.start_colour, ls=":", lw=1, label="start")
         span = float(R.max() - R.min()) or 1.0
@@ -1411,8 +1428,8 @@ def draw_slice(ax, S, F):
     R = M.risk_batch(D.X, D.y, W).reshape(n, n)
     levels = np.unique(np.quantile(R, [0.0, 0.01, 0.04, 0.09, 0.16, 0.25, 0.36, 0.49, 0.64, 0.81, 1.0]))
     if len(levels) > 1:
-        ax.contourf(A, B, R, levels=levels, cmap="Greys_r", alpha=0.35)
-        ax.contour(A, B, R, levels=levels, colors="0.35", linewidths=0.6)
+        ax.contourf(A, B, R, levels=levels, cmap=T.landscape_cmap, alpha=0.35)
+        ax.contour(A, B, R, levels=levels, colors=T.landscape_line, linewidths=0.6)
     if look:
         for key, colour, style, label in (
             ("gd", T.gd_colour, "o-", "next steps, gradient descent"),
@@ -1421,9 +1438,9 @@ def draw_slice(ax, S, F):
             p = look[key]["path"][:, idx]
             ax.plot(p[:, 0], p[:, 1], style, color=colour, ms=2.5, lw=1.2, label=label, zorder=3)
     if len(path) > 1:
-        ax.plot(path[:, 0], path[:, 1], "o-", color="0.1", ms=3, lw=1.2, label="steps taken", zorder=4)
-    ax.plot([w0[a]], [w0[b]], "o", mfc="white", mec="k", ms=7, label="start", zorder=5)
-    ax.plot([w[a]], [w[b]], "o", color="k", ms=6, zorder=6)
+        ax.plot(path[:, 0], path[:, 1], "o-", color=T.path_colour, ms=3, lw=1.2, label="steps taken", zorder=4)
+    ax.plot([w0[a]], [w0[b]], "o", mfc=T.paper, mec=T.marker_edge, ms=7, label="start", zorder=5)
+    ax.plot([w[a]], [w[b]], "o", color=T.ink, ms=6, zorder=6)
     g = np.array([F.g[a], F.g[b]])
     norm = float(np.hypot(*g))
     if norm > 0:
@@ -1465,11 +1482,11 @@ def draw_line(ax, S, F):
     R_eta = float(M.risk_batch(D.X, D.y, (w - eta * g)[None, :])[0])
     pred = F.R - eta * g2
     tangent = F.R - ts * g2
-    ax.plot(ts, R, color="k", lw=1.8, label="R along the step")
+    ax.plot(ts, R, color=T.ink, lw=1.8, label="R along the step")
     ax.plot(ts, tangent, "--", color=T.hidden, lw=1.2, label="first-order prediction")
-    ax.axvline(eta, color="0.7", lw=0.8, zorder=0)
-    ax.plot([eta], [R_eta], "o", color="k", ms=6, zorder=5, label=f"step of eta: R {R_eta:.4f}")
-    ax.plot([eta], [pred], "o", mfc="white", mec=T.hidden, ms=7, zorder=5, label=f"predicted: {pred:.4f}")
+    ax.axvline(eta, color=T.reference_line, lw=0.8, zorder=0)
+    ax.plot([eta], [R_eta], "o", color=T.ink, ms=6, zorder=5, label=f"step of eta: R {R_eta:.4f}")
+    ax.plot([eta], [pred], "o", mfc=T.paper, mec=T.hidden, ms=7, zorder=5, label=f"predicted: {pred:.4f}")
     best = int(np.argmin(R))
     if 0 < best < len(ts) - 1:  # a minimum inside the range shown, not R still falling at its end
         ax.plot(
@@ -1533,13 +1550,13 @@ def draw_hidden(ax, S, F):
         a = v[0] * u + b
         if binary:
             ax.plot(u, 1 / (1 + np.exp(-a)), color=T.neutral_colour, lw=1.5, label="p = sigmoid(a)")
-            ax.scatter(h, D.y.numpy(), c=colours, s=small, edgecolor="k", lw=0.3, zorder=3)
+            ax.scatter(h, D.y.numpy(), c=colours, s=small, edgecolor=T.marker_edge, lw=0.3, zorder=3)
             if v[0] != 0 and lo < -b / v[0] < hi:
-                ax.axvline(-b / v[0], color="k", lw=1, label="boundary a = 0")
+                ax.axvline(-b / v[0], color=T.boundary, lw=1, label="boundary a = 0")
             ax.set_ylabel("p, and the class of each case")
         else:
             ax.plot(u, a, color=T.neutral_colour, lw=1.5, label="prediction")
-            ax.scatter(h, D.y.numpy(), c=colours, s=small, edgecolor="k", lw=0.3, zorder=3)
+            ax.scatter(h, D.y.numpy(), c=colours, s=small, edgecolor=T.marker_edge, lw=0.3, zorder=3)
             ax.set_ylabel("y")
         ax.set_xlabel(f"{label}1")
         ax.legend(fontsize=T.legend_size, loc="best")
@@ -1551,18 +1568,20 @@ def draw_hidden(ax, S, F):
             P = 1 / (1 + np.exp(-a))
             ax.contourf(U1, U2, P, levels=np.linspace(0, 1, 11), cmap=T.plane_cmap, alpha=0.4)
             if P.min() < 0.5 < P.max():
-                ax.contour(U1, U2, P, levels=[0.5], colors="k")
+                ax.contour(U1, U2, P, levels=[0.5], colors=T.boundary)
         else:
             ax.contour(U1, U2, a, levels=10, cmap=T.value_cmap, linewidths=0.8)
-        ax.scatter(H[:, 0], H[:, 1], c=colours, s=small, edgecolor="k", lw=0.3, zorder=3)
+        ax.scatter(H[:, 0], H[:, 1], c=colours, s=small, edgecolor=T.marker_edge, lw=0.3, zorder=3)
         for c in range(D.G):
-            ax.text(gh[c][0], gh[c][1], f"  {letter(c)}", fontsize=T.letter_size, zorder=4, path_effects=LETTER_HALO)
+            ax.text(gh[c][0], gh[c][1], f"  {letter(c)}", fontsize=T.letter_size, zorder=4, path_effects=halo(T))
         ax.set_xlim(*x0)
         ax.set_ylim(*x1)
         ax.set_xlabel(f"{label}1")
         ax.set_ylabel(f"{label}2")
     elif m == 3 and hasattr(ax, "set_zlim"):
-        ax.scatter(H[:, 0], H[:, 1], H[:, 2], c=colours, s=small, edgecolor="k", linewidths=0.3, depthshade=False)
+        ax.scatter(
+            H[:, 0], H[:, 1], H[:, 2], c=colours, s=small, edgecolor=T.marker_edge, linewidths=0.3, depthshade=False
+        )
         r = [window(H[:, i], minimum=0.6) for i in range(3)]
         if binary and np.any(v != 0):
             i = int(np.argmax(np.abs(v)))  # solve the plane for the coordinate with the largest weight
@@ -1571,7 +1590,7 @@ def draw_hidden(ax, S, F):
             Gi = np.clip(-(v[j] * Gj + v[k] * Gk + b) / v[i], *r[i])
             coords = [None, None, None]
             coords[i], coords[j], coords[k] = Gi, Gj, Gk
-            ax.plot_surface(*coords, color="0.5", alpha=0.25, linewidth=0)
+            ax.plot_surface(*coords, color=T.plane_surface, alpha=0.25, linewidth=0)
         for q in range(3):
             getattr(ax, f"set_{'xyz'[q]}lim")(*r[q])
         ax.set_xlabel(f"{label}1")
@@ -1585,9 +1604,9 @@ def draw_hidden(ax, S, F):
         rest = rest - rest.mean(0)
         _, _, vt = np.linalg.svd(rest, full_matrices=False)
         other = rest @ vt[0]
-        ax.scatter(a, other, c=colours, s=small, edgecolor="k", lw=0.3, zorder=3)
+        ax.scatter(a, other, c=colours, s=small, edgecolor=T.marker_edge, lw=0.3, zorder=3)
         if binary:
-            ax.axvline(0.0, color="k", lw=1)
+            ax.axvline(0.0, color=T.boundary, lw=1)
         ax.set_xlabel("a = output unit's score" if binary else "prediction")
         ax.set_ylabel("largest other direction of h")
     what = "the boundary a = 0" if binary else "coloured by y"
@@ -1986,7 +2005,7 @@ def draw_derivation(ax, S, F):
             transform=ax.transAxes,
             fontsize=T.note_size,
             va="top",
-            color=T.backprop_colour if current else ("0.5" if s is None else "0.2"),
+            color=T.backprop_colour if current else (T.derivation_muted if s is None else T.derivation_text),
             fontweight="bold" if current else "normal",
         )
 

@@ -41,6 +41,12 @@ class Theme:
     table_size, table_row_height = 10, 0.058  # row height as a fraction of the panel
     table_edge, table_head, table_highlight = "0.8", "#F2F2F2", "#FFF1D6"
     backprop_colour, backprop_tint, backprop_size = "#7B1FA2", "#F3E5F5", 9  # the backward pass
+    # surfaces and neutral marks: every colour of the picture lives in this class, so that a theme can change them all
+    paper, ink, marker_edge, boundary = "white", "black", "k", "k"
+    note_text, derivation_text, derivation_muted, point_neutral = "0.25", "0.2", "0.5", "0.25"
+    glyph_fill, glyph_edge, node_fill, label_backing = "white", "0.75", "white", "white"
+    reference_line, zero_line, landscape_line, plane_surface, path_colour = "0.7", "0.8", "0.35", "0.5", "0.1"
+    landscape_cmap = "Greys_r"
     network_sizes = ("edge_label_size", "glyph_name_size", "value_size", "node_size", "title_size", "backprop_size")
 
     def scaled(self, factor):
@@ -54,7 +60,9 @@ class Theme:
 THEME = Theme()
 
 
-LETTER_HALO = [patheffects.withStroke(linewidth=3, foreground="white")]  # group letters stay legible over points
+def halo(T):
+    """An outline in the background colour, so that group letters stay legible over points."""
+    return [patheffects.withStroke(linewidth=3, foreground=T.paper)]
 
 
 def letter(c):
@@ -76,7 +84,7 @@ def glyph(ax, xc, yc, act, m, sd, T, height=0.5):
     """
     name, f, lim = act[:3]
     w_, h_ = 0.62, height
-    ax.add_patch(Rectangle((xc - w_ / 2, yc - h_ / 2), w_, h_, fc="white", ec="0.75", lw=0.8, zorder=2))
+    ax.add_patch(Rectangle((xc - w_ / 2, yc - h_ / 2), w_, h_, fc=T.glyph_fill, ec=T.glyph_edge, lw=0.8, zorder=2))
     u = np.linspace(-lim, lim, 100)
 
     def fx(t):
@@ -225,7 +233,7 @@ def draw_edge_labels(ax, S, F, edges, obstacles, spec=None):
             zorder=3,
             color=colour,
             fontweight="bold" if hot else "normal",
-            bbox=dict(boxstyle="round,pad=0.08", fc="white", ec="none", alpha=0.9),
+            bbox=dict(boxstyle="round,pad=0.08", fc=T.label_backing, ec="none", alpha=0.9),
         )
     return mode
 
@@ -258,7 +266,7 @@ def draw_case(ax, S, F, c, styles=None):
         tx = (L.x_a if last else L.blocks[l][0]) - BW
         tys = np.array([1.2]) if last else L.unit_ys(layer.out_features)
         bias = (src_x if l == 0 else src_x + 0.45, 2.8)
-        ax.text(*bias, "1", bbox=dict(boxstyle="circle", fc="white", ec=T.node_edge), **node)
+        ax.text(*bias, "1", color=T.ink, bbox=dict(boxstyle="circle", fc=T.node_fill, ec=T.node_edge), **node)
         sources = src + [(bias[0] + 0.1, bias[1] - 0.1)]
         ns, nt = len(sources), len(tys)
         for j, ty in enumerate(tys):
@@ -408,8 +416,8 @@ def draw_group_marks(ax, S, xs, ys, size=160):
     for c in range(D.G):
         col, _, _, yi = group_style(S, c)
         face = "white" if D.task == "regression" else T.class_colour[yi]
-        ax.scatter(xs[c], ys[c], s=size, color=face, edgecolor="k", zorder=4)
-        ax.text(xs[c], ys[c], f"  {letter(c)}", fontsize=T.letter_size, va="bottom", zorder=5, path_effects=LETTER_HALO)
+        ax.scatter(xs[c], ys[c], s=size, color=face, edgecolor=T.marker_edge, zorder=4)
+        ax.text(xs[c], ys[c], f"  {letter(c)}", fontsize=T.letter_size, va="bottom", zorder=5, path_effects=halo(T))
 
 
 def draw_input_plane(ax, S, F):
@@ -432,14 +440,14 @@ def draw_input_plane(ax, S, F):
         ax.plot(u, out, color=T.neutral_colour, lw=2, label="p for class 1" if D.task == "binary" else "prediction")
         if D.task == "binary":
             colours = [T.class_colour[int(v)] for v in y]
-            ax.scatter(X[:, 0], y, c=colours, s=18, edgecolor="k", lw=0.3, zorder=3)
-            ax.axhline(0.5, color="0.7", lw=0.8, zorder=0)
+            ax.scatter(X[:, 0], y, c=colours, s=18, edgecolor=T.marker_edge, lw=0.3, zorder=3)
+            ax.axhline(0.5, color=T.reference_line, lw=0.8, zorder=0)
             gy = [float(D.stats(y, c)[0]) for c in range(D.G)]
             ax.set_ylim(-0.08, 1.08)
             ax.set_ylabel("p")
             ax.set_title("p for class 1 against x1", fontsize=T.panel_title_size)
         else:
-            ax.scatter(X[:, 0], y, s=18, color="0.25", zorder=3)
+            ax.scatter(X[:, 0], y, s=18, color=T.point_neutral, zorder=3)
             gy = [float(D.stats(y, c)[0]) for c in range(D.G)]
             ax.set_ylabel("y")
             ax.set_title("prediction and the points", fontsize=T.panel_title_size)
@@ -459,7 +467,7 @@ def draw_input_plane(ax, S, F):
         P = 1 / (1 + np.exp(-a))
         ax.contourf(P1, P2, P, levels=np.linspace(0, 1, 11), cmap=T.plane_cmap, alpha=0.5)
         if P.min() < 0.5 < P.max():
-            ax.contour(P1, P2, P, levels=[0.5], colors="k")
+            ax.contour(P1, P2, P, levels=[0.5], colors=T.boundary)
         if moved:
             a0 = start_values(S, "plane", grid).reshape(P1.shape)
             if a0.min() < 0 < a0.max():
@@ -468,8 +476,8 @@ def draw_input_plane(ax, S, F):
             ax.scatter(X[:, 0], X[:, 1], c=[T.class_colour[int(v)] for v in y], s=4)
         for c in range(D.G):
             yi = group_style(S, c)[3]
-            ax.scatter(*gx[c], s=160, color=T.class_colour[yi], edgecolor="k", zorder=3)
-            ax.text(gx[c][0] + 0.15, gx[c][1] + 0.15, letter(c), fontsize=T.letter_size, path_effects=LETTER_HALO)
+            ax.scatter(*gx[c], s=160, color=T.class_colour[yi], edgecolor=T.marker_edge, zorder=3)
+            ax.text(gx[c][0] + 0.15, gx[c][1] + 0.15, letter(c), fontsize=T.letter_size, path_effects=halo(T))
         ax.set_title("p for class 1 and the boundary", fontsize=T.panel_title_size)
     else:
         lo, hi = float(min(a.min(), y.min())), float(max(a.max(), y.max()))
@@ -483,12 +491,12 @@ def draw_input_plane(ax, S, F):
             vmin=cs.norm.vmin,
             vmax=cs.norm.vmax,
             s=18,
-            edgecolor="k",
+            edgecolor=T.marker_edge,
             lw=0.4,
             zorder=3,
         )
         for c in range(D.G):
-            ax.text(gx[c][0] + 0.15, gx[c][1] + 0.15, letter(c), fontsize=T.letter_size, path_effects=LETTER_HALO)
+            ax.text(gx[c][0] + 0.15, gx[c][1] + 0.15, letter(c), fontsize=T.letter_size, path_effects=halo(T))
         ax.set_title("prediction over the input plane; points coloured by y", fontsize=T.panel_title_size)
     ax.set_aspect("equal")
     S.model.set_weights(w)
@@ -508,7 +516,7 @@ def draw_history(ax, S, F):
         predicted = [(k, v) for k, v in predicted if v > 0]
     if predicted:
         ks, vs = zip(*predicted)
-        ax.plot(ks, vs, "o", mfc="white", mec=T.prediction_colour, ms=6, ls="none", label="first-order prediction")
+        ax.plot(ks, vs, "o", mfc=T.paper, mec=T.prediction_colour, ms=6, ls="none", label="first-order prediction")
         ax.legend(fontsize=T.legend_size, loc="lower left")
     ax.set_xlabel("gradient steps taken")
     ax.set_ylabel("R")
@@ -531,7 +539,14 @@ def draw_history(ax, S, F):
             f"last step: predicted {last.predicted - last.before:+.4f}, actual {last.actual - last.before:+.4f}"
         )
     ax.text(
-        0.98, 0.97, "\n".join(notes), transform=ax.transAxes, ha="right", va="top", fontsize=T.note_size, color="0.25"
+        0.98,
+        0.97,
+        "\n".join(notes),
+        transform=ax.transAxes,
+        ha="right",
+        va="top",
+        fontsize=T.note_size,
+        color=T.note_text,
     )
 
 
@@ -587,7 +602,9 @@ def draw_slope_table(ax, S, F):
         tbl.set_fontsize(fontsize)
         for (r, c), cell in tbl.get_celld().items():
             cell.set_edgecolor(T.table_edge)
+            cell.set_facecolor(T.paper)
             text = cell.get_text()
+            text.set_color(T.ink)
             if r == 0:
                 cell.set_facecolor(T.table_head)
                 text.set_fontweight("bold")

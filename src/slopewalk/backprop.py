@@ -377,6 +377,6 @@ def draw_derivation(ax, S, F):
             transform=ax.transAxes,
             fontsize=T.note_size,
             va="top",
-            color=T.backprop_colour if current else ("0.5" if s is None else "0.2"),
+            color=T.backprop_colour if current else (T.derivation_muted if s is None else T.derivation_text),
             fontweight="bold" if current else "normal",
         )
