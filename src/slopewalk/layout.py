@@ -25,7 +25,7 @@ WIDE_BASE = {
     "line": 5.0,
     "cases": 5.0,
     "momentum": 5.0,
-    "backprop": 9.0,
+    "backprop": 10.5,
 }
 WIDE_STRETCH = {"history": 3.0, "table": 0.5, "line": 1.0, "cases": 1.0, "momentum": 1.0, "backprop": 1.0}
 

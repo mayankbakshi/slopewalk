@@ -516,7 +516,7 @@ WIDE_BASE = {
     "line": 5.0,
     "cases": 5.0,
     "momentum": 5.0,
-    "backprop": 9.0,
+    "backprop": 10.5,
 }
 WIDE_STRETCH = {"history": 3.0, "table": 0.5, "line": 1.0, "cases": 1.0, "momentum": 1.0, "backprop": 1.0}
 
@@ -712,10 +712,11 @@ class Theme:
     gd_colour, momentum_colour = "#59636E", "#9A6700"  # gradient descent solid, momentum dashed
     value_box = dict(boxstyle="round,pad=0.25", fc="#F6F8FA", ec="#C4CBD3", lw=0.8)
     edge_label_size, glyph_name_size, value_size, node_size, title_size, suptitle_size = 8.5, 8, 9.5, 10, 11.5, 13
-    note_size = 9.5  # notes inside panels, and the lines of the backward pass
-    panel_title_size, legend_size, letter_size = 10.5, 8, 11  # the panels below the networks
+    note_size = 11  # notes inside panels, and the lines of the worked example (smaller only if they do not fit)
+    panel_title_size, legend_size, letter_size = 12, 9.5, 12  # the panels below the networks
+    tick_size, axis_label_size = 10.5, 11
     plane_alpha, value_cmap = 0.4, "viridis"
-    table_size, table_row_height = 10, 0.058  # row height as a fraction of the panel
+    table_size, table_leading = 12, 1.45  # the table's largest font; a row is table_leading times the font
     table_edge, table_head, table_highlight = "#D0D7DE", "#EEF1F4", "#FFF4C2"
     backprop_colour, backprop_tint, backprop_size = "#7A45D6", "#F4EFFC", 9  # 5.8:1, and 5.1:1 on its tint
     # surfaces and neutral marks: every colour of the picture lives in this class, so that a theme can change them all
@@ -935,6 +936,14 @@ def draw_shared_note(ax, S):
     """Network panels after the first: their lines carry no numbers, because the weights are those of panel A."""
     T = S.theme
     ax.text(0.01, 0.02, "weights as in A", transform=ax.transAxes, fontsize=T.glyph_name_size, color=T.curve)
+
+
+def style_panel(ax, T):
+    """The panels below the networks: the sizes of their tick labels and axis labels."""
+    ax.tick_params(labelsize=T.tick_size)
+    axes = [ax.xaxis, ax.yaxis] + ([ax.zaxis] if hasattr(ax, "zaxis") else [])
+    for axis in axes:
+        axis.label.set_size(T.axis_label_size)
 
 
 def draw_case(ax, S, F, c, styles=None):
@@ -1269,17 +1278,21 @@ def draw_slope_table(ax, S, F):
     per_block = max(TABLE_ROWS, -(-len(rows) // 2))  # at most two blocks, taller ones for many weights
     blocks = [rows[i : i + per_block] for i in range(0, len(rows), per_block)]
     n_blocks = len(blocks)
-    share = width_share(ax)
-    short = n_blocks > 1 or ax.figure.get_figwidth() * share < 4.8  # narrow panels and two blocks: short headers
-    fontsize = T.table_size if not short else max(T.table_size - 2, 8)
+    space = BOTTOM_HEIGHT * 72 * 0.8  # points of the panel's height for the rows; the title and margins take the rest
+    rows_needed = max(len(b) for b in blocks) + 1  # the header and the longest block
+    fontsize = max(8.0, min(T.table_size, space / rows_needed / T.table_leading))  # smaller only to fit the rows
+    block_inches = ax.figure.get_figwidth() * width_share(ax) / n_blocks - PANEL_GAP
+    short = block_inches < 0.42 * fontsize  # the long headers need about 0.42 in of block per point of font
     headers = (
-        ["w", "value", "R, +0.1", "slope"] if short else ["weight", "value", "change of R for +0.1", "slope dR/dw"]
+        ["weight", "value", "ΔR for +0.1", "dR/dw"]
+        if short
+        else ["weight", "value", "change of R for +0.1", "slope dR/dw"]
     )
     ax.set_title("Change of R when one weight grows by 0.1,\nand the slope dR/dw", fontsize=T.panel_title_size)
     gap = 0.03
     width = (1 - gap * (n_blocks - 1)) / n_blocks
     for b, block in enumerate(blocks):
-        height = min(1.0, T.table_row_height * (len(block) + 1))
+        height = min(1.0, fontsize * T.table_leading * (len(block) + 1) / space)
         tbl = ax.table(
             cellText=block,
             colLabels=headers,
@@ -1988,8 +2001,25 @@ def derivation_lines(S, F, i):
         elif st.kind == "average":
             k = M.layer_indices(len(M.layers) - 1)[0]
             mean = bp.grads[:, k].mean()
-            out.append((s_idx, f"dR/dw = average over the {S.data.n} cases, e.g. dR/d{M.names[k]} = {mean:+.4f}"))
+            out.append((s_idx, f"dR/d{M.names[k]} = mean over the {S.data.n} cases = {mean:+.4f}"))
     return out
+
+
+def fitting_size(ax, T, texts, columns, floor=9.5):
+    """The largest font from T.note_size down to floor (in half points) at which the longest text, in bold, fits its
+    column of the panel. Measured in inches from the panel's share of the figure, so the same in every frame."""
+    renderer = get_renderer(ax.figure)
+    if renderer is None or not texts:
+        return T.note_size
+    column = (ax.figure.get_figwidth() * width_share(ax) - PANEL_GAP) / columns * 0.96
+    size = T.note_size
+    while size > floor:
+        props = FontProperties(size=size, weight="bold")
+        longest = max(renderer.get_text_width_height_descent(t, props, ismath=False)[0] for t in texts)
+        if longest / ax.figure.dpi <= column:
+            break
+        size -= 0.5
+    return size
 
 
 def draw_derivation(ax, S, F):
@@ -2014,6 +2044,7 @@ def draw_derivation(ax, S, F):
     dy = 0.96 / per_column
     if len(lines) > most:
         shown = [(None, "... (earlier steps above)")] + shown[1:]
+    fontsize = fitting_size(ax, T, [t for _, t in derivation_lines(S, F, i)], columns)
     for n, (s, text) in enumerate(shown):
         current = s == step
         col, row = divmod(n, per_column)
@@ -2022,7 +2053,7 @@ def draw_derivation(ax, S, F):
             0.98 - row * dy,
             text,
             transform=ax.transAxes,
-            fontsize=T.note_size,
+            fontsize=fontsize,
             va="top",
             color=T.backprop_colour if current else (T.derivation_muted if s is None else T.derivation_text),
             fontweight="bold" if current else "normal",
@@ -2146,6 +2177,8 @@ class Picture:
         for name in self.panels[3:]:
             drawers[name](self.axes[name], S, F)
             S.model.set_weights(F.w)
+        for ax in self.axes.values():
+            style_panel(ax, S.theme)
         if not self.laid_out:
             self.layout()
         shared = shared_labels(F)  # the weights are the same in every panel: the first panel carries their labels

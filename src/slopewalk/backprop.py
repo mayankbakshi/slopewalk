@@ -12,8 +12,10 @@ from collections import namedtuple
 import numpy as np
 import torch
 import torch.nn as nn
+from matplotlib.font_manager import FontProperties
 
-from .draw import letter, num
+from .draw import get_renderer, letter, num, width_share
+from .layout import PANEL_GAP
 
 Stage = namedtuple("Stage", "kind layer text")  # kind: forward, output, weights, to_h, delta, average
 Backward = namedtuple("Backward", "inputs z out delta dh deriv grads")  # per case, as numpy arrays
@@ -341,8 +343,25 @@ def derivation_lines(S, F, i):
         elif st.kind == "average":
             k = M.layer_indices(len(M.layers) - 1)[0]
             mean = bp.grads[:, k].mean()
-            out.append((s_idx, f"dR/dw = average over the {S.data.n} cases, e.g. dR/d{M.names[k]} = {mean:+.4f}"))
+            out.append((s_idx, f"dR/d{M.names[k]} = mean over the {S.data.n} cases = {mean:+.4f}"))
     return out
+
+
+def fitting_size(ax, T, texts, columns, floor=9.5):
+    """The largest font from T.note_size down to floor (in half points) at which the longest text, in bold, fits its
+    column of the panel. Measured in inches from the panel's share of the figure, so the same in every frame."""
+    renderer = get_renderer(ax.figure)
+    if renderer is None or not texts:
+        return T.note_size
+    column = (ax.figure.get_figwidth() * width_share(ax) - PANEL_GAP) / columns * 0.96
+    size = T.note_size
+    while size > floor:
+        props = FontProperties(size=size, weight="bold")
+        longest = max(renderer.get_text_width_height_descent(t, props, ismath=False)[0] for t in texts)
+        if longest / ax.figure.dpi <= column:
+            break
+        size -= 0.5
+    return size
 
 
 def draw_derivation(ax, S, F):
@@ -367,6 +386,7 @@ def draw_derivation(ax, S, F):
     dy = 0.96 / per_column
     if len(lines) > most:
         shown = [(None, "... (earlier steps above)")] + shown[1:]
+    fontsize = fitting_size(ax, T, [t for _, t in derivation_lines(S, F, i)], columns)
     for n, (s, text) in enumerate(shown):
         current = s == step
         col, row = divmod(n, per_column)
@@ -375,7 +395,7 @@ def draw_derivation(ax, S, F):
             0.98 - row * dy,
             text,
             transform=ax.transAxes,
-            fontsize=T.note_size,
+            fontsize=fontsize,
             va="top",
             color=T.backprop_colour if current else (T.derivation_muted if s is None else T.derivation_text),
             fontweight="bold" if current else "normal",
