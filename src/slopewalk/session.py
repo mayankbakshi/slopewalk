@@ -429,9 +429,9 @@ def explore(
     row), or "auto" (the default): wide where the sliders run, standard in Colab, whose notebooks have a fixed width,
     and for still pictures. The controls are under the picture in both. width: the figure width in inches.
     backprop_step: with the view "backprop", the stage of the backward pass drawn (0: the forward pass; a step above
-    0 switches the view on); backprop_case: the group whose case the worked example follows ("A" or 0 is the first).
-    theme: "light" (the default) or "dark", the colours of the picture for a light or a dark notebook theme; the
-    controls follow the notebook's own theme.
+    0 switches the view on); backprop_case: the group whose case the Worked example follows ("A" or 0 is the first).
+    theme: "light" (the default) or "dark", the colours of the picture and its controls, for a light or a dark
+    notebook theme.
 
     Draws one copy of the network per group (every value a mean ± standard deviation over the group), with each
     weight on its line, the units as z, activation and h, then the output and the loss with its change from the

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The controls take the colours of the picture: with `theme="dark"` or the dark switch they are dark too (background, text, buttons, sliders, tabs, drop-down lists), whatever the notebook's own theme; with light, they are light. The colours come from the picture's palette.
+- The panel of the backward pass is headed "Worked example" in the colour of the backward pass, with the case after it and the stage on the line below; the case picker is called Worked example too.
 - Dark mode: `explore(..., theme="dark")` and a light/dark switch under the controls draw the picture in light ink on dark paper (#1E1E1E). Every colour of the picture is now in `Theme` (a test fails on any colour written elsewhere), and both palettes are checked: text at 4.5:1 or more on every surface it sits on, lines at 3:1, and every text a picture shows at 3:1 or more against its background.
 - A calmer palette: class colours #0969DA and #CF222E, ink #1F2328, negative weights #D1600A. Text in boxes is ink, and a box carries its meaning in its border and fill; green marks the hidden layer only.
 - Larger text below the networks: the table at up to 12 pt and the worked example and notes at 11 pt, made smaller only when they would not fit; panel titles 12 pt, legends 9.5 pt, tick labels 10.5 pt.

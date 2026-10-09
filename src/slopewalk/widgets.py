@@ -9,12 +9,13 @@ import math
 import os
 from contextlib import contextmanager
 
+from .draw import THEMES
 from .picture import LIVE_DPI, Picture
 from .views import VIEWS
 
-# The look of the control area in one place. Text takes the host's colour, so light and dark themes both work;
-# quiet text is the same colour at a lower opacity. The two colours of the last step's change keep at least 3.9:1 on
-# white and on dark backgrounds (#1E1E1E, #111111), enough for the large text they are used for.
+# The look of the control area in one place. Text takes the colour of the root box, which the colours switch sets
+# (see control_css); quiet text is the same colour at a lower opacity. The two colours of the last step's change keep
+# at least 3.9:1 on white and on dark backgrounds (#1E1E1E, #111111), enough for the large text they are used for.
 UI = {
     "quiet": "opacity:0.72",
     "text": "font-size:14px",
@@ -32,6 +33,11 @@ UI = {
     "column": "270px",  # the narrowest column of the slider grid
     "gap": "16px",
 }
+# The controls take the colours of the picture: the root box carries the class slopewalk-light or slopewalk-dark, and
+# control_css sets for each the CSS variables from which ipywidgets 7 and 8 take their colours, so that the controls
+# match the picture whatever the notebook's own theme. The accent is the primary button, the active slider handle and
+# the focus ring (pressed, normal, focus); white text on the normal accent has 4.6:1 in both.
+CONTROL_ACCENT = {"light": ("#0D47A1", "#1976D2", "#64B5F6"), "dark": ("#1158C7", "#1F6FEB", "#58A6FF")}
 TITLES = {"core": "Weights and steps", "backprop": "Backpropagation", "views": "Views"}
 VIEW_LABELS = {
     "backprop": "backward pass",
@@ -58,7 +64,7 @@ LOOK = {  # where to look in the picture at each stage of the backward pass
 }
 HINTS = {
     "core": "Press gradient step to move every weight against its slope. Drag a slider to change one weight.",
-    "backprop": "Step from the output back to the first layer. The worked example below the networks writes out the "
+    "backprop": "Step from the output back to the first layer. The Worked example below the networks writes out the "
     "numbers for one case.",
     "views": "Tick a box to add a view under the network.",
 }
@@ -85,6 +91,73 @@ def name_ranges(names):
             parts.append(f"w{start}" if start == k else f"w{start} to w{k}")
             start = None
     return ", ".join(parts)
+
+
+def dropdown_arrow(colour):
+    """The arrow of a drop-down list in the given colour, as a CSS url of an SVG."""
+    svg = (
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 18 18'>"
+        f"<path fill='{colour}' d='M5.2 5.9 9 9.7l3.8-3.8 1.2 1.2-5 5-5-5z'/></svg>"
+    )
+    return 'url("data:image/svg+xml;utf8,' + svg.replace("<", "%3C").replace(">", "%3E").replace("#", "%23") + '")'
+
+
+def control_css():
+    """A style element with the colours of the controls for each theme of the picture. ipywidgets resolves its own
+    variables (--jp-widgets-color and the rest) once, at the root of the page, so the box sets those as well as the
+    base colours; the slider handle of ipywidgets 8 has fixed colours and gets a rule of its own."""
+    rules = []
+    for name, T in THEMES.items():
+        pressed, accent, focus = CONTROL_ACCENT[name]
+        edge = T.value_box["ec"]
+        values = {
+            "color-scheme": name,
+            "background-color": T.paper,
+            "color": T.ink,
+            "padding": "4px 8px",
+            "--jp-layout-color0": T.paper,
+            "--jp-layout-color1": T.paper,
+            "--jp-layout-color2": T.table_head,
+            "--jp-layout-color3": edge,
+            "--jp-ui-font-color0": T.ink,
+            "--jp-ui-font-color1": T.ink,
+            "--jp-ui-font-color2": T.muted,
+            "--jp-content-font-color1": T.ink,
+            "--jp-ui-inverse-font-color0": "#FFFFFF",
+            "--jp-ui-inverse-font-color1": "#FFFFFF",
+            "--jp-border-color1": edge,
+            "--jp-border-color2": T.table_edge,
+            "--jp-brand-color0": pressed,
+            "--jp-brand-color1": accent,
+            "--jp-brand-color2": focus,
+            "--jp-widgets-color": T.ink,
+            "--jp-widgets-label-color": T.ink,
+            "--jp-widgets-readout-color": T.ink,
+            "--jp-widgets-input-color": T.ink,
+            "--jp-widgets-input-background-color": T.value_box["fc"],
+            "--jp-widgets-input-border-color": edge,
+            "--jp-widgets-input-focus-border-color": focus,
+            "--jp-widgets-slider-handle-border-color": edge,
+            "--jp-widgets-slider-handle-background-color": T.paper if name == "light" else T.ink,
+            "--jp-widgets-slider-active-handle-color": accent,
+            "--jp-widgets-dropdown-arrow": dropdown_arrow(T.ink),
+        }
+        rules.append(f".slopewalk-{name}{{" + ";".join(f"{k}:{v}" for k, v in values.items()) + "}")
+        handle = ", ".join(f".slopewalk-{name} .{c} .noUi-handle" for c in ("widget-slider", "jupyter-widget-slider"))
+        rules.append(
+            f"{handle}{{background:var(--jp-widgets-slider-handle-background-color);"
+            "border-color:var(--jp-widgets-slider-handle-border-color)}"
+        )
+    return "<style>" + "".join(rules) + "</style>"
+
+
+def theme_class(S):
+    """The class of the root box for the session's colours: light or dark, by the brightness of the paper."""
+    from matplotlib.colors import to_rgb
+
+    if S.theme_name in THEMES:
+        return f"slopewalk-{S.theme_name}"
+    return "slopewalk-dark" if sum(to_rgb(S.theme.paper)) < 1.5 else "slopewalk-light"
 
 
 def span(text, *styles):
@@ -207,7 +280,7 @@ class Controller:
                 value=S.theme_name if S.theme_name in ("light", "dark") else "light",
                 style={"button_width": "80px"},
             ),
-            "the colours of the picture: light, or dark for a dark notebook theme",
+            "the colours of the picture and the controls: light, or dark for a dark notebook theme",
         )
         self.theme_pick.observe(self.on_theme, names="value")
 
@@ -260,14 +333,24 @@ class Controller:
         # the picture first, then the status, the controls, and last the layout of the picture
         self.picture_box = self.out if self.use_output else self.image
         tail = [] if self.use_output else [self.out]
-        self.root = widgets.VBox([self.picture_box, self.status, self.controls, self.layout_row, *tail])
+        self.style = widgets.HTML(control_css(), layout=widgets.Layout(display="none"))
+        self.root = widgets.VBox([self.style, self.picture_box, self.status, self.controls, self.layout_row, *tail])
         self.root.layout.width = "100%"
+        self.paint()
         self.arrange(S.layout.style)
         self.widgets = [self.root]
         self.update_buttons()
         self.say(self.stage_words() if "backprop" in S.views else "")
 
     # ---------------------------------------------------------------- building
+
+    def paint(self):
+        """The controls in the colours of the picture: the root box gets the class of the session's theme."""
+        wanted = theme_class(self.session)
+        for name in THEMES:
+            if f"slopewalk-{name}" != wanted:
+                self.root.remove_class(f"slopewalk-{name}")
+        self.root.add_class(wanted)
 
     def arrange(self, style):
         """The picture takes the full width in the wide layout; in the standard one it keeps its own width."""
@@ -309,7 +392,7 @@ class Controller:
         return widgets.HBox([pick, holder])
 
     def backprop_tab(self, widgets):
-        """Previous and next stage, the stage, and the case of the worked example below the networks."""
+        """Previous and next stage, the stage, and the case of the Worked example below the networks."""
         S = self.session
         n = len(S.backprop_stages)
         self.bp_prev = tip(widgets.Button(description="previous stage"), "the stage before")
@@ -330,11 +413,11 @@ class Controller:
         self.bp_case = widgets.Dropdown(
             options=letters,
             value=letters[S.backprop_case],
-            description="worked example",
+            description="Worked example",
             style={"description_width": UI["setting_label"]},
             layout=widgets.Layout(width=UI["short"]),
         )
-        tip(self.bp_case, "the case whose numbers the worked example writes out (in a group: the one nearest its mean)")
+        tip(self.bp_case, "the case whose numbers the Worked example writes out (in a group: the one nearest its mean)")
         self.bp_prev.on_click(lambda _: setattr(self.bp_step, "value", max(0, self.bp_step.value - 1)))
         self.bp_next.on_click(lambda _: setattr(self.bp_step, "value", min(n - 1, self.bp_step.value + 1)))
         self.bp_step.observe(self.on_backprop, names="value")
@@ -515,8 +598,9 @@ class Controller:
         self.say(f"Layout {change['new']}: {where}.")
 
     def on_theme(self, change):
-        """Switches the colours of the picture: a new figure."""
+        """Switches the colours of the picture and the controls: a new figure."""
         self.session.set_theme(change["new"])
+        self.paint()
         self.picture = None
         self.redraw()
         where = "for a dark notebook theme" if change["new"] == "dark" else "for a light notebook theme"

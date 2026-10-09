@@ -57,7 +57,7 @@ def test_widgets_are_built(live):
     assert "next step, eta 0.7: predicted change" in C.readout.value and "none yet" in C.readout.value
     assert isinstance(C.image, ipywidgets.Image) and C.image.value[:8] == b"\x89PNG\r\n\x1a\n"
     (root,) = C.widgets  # the picture first, then the status, the controls, and last the layout of the picture
-    assert list(root.children) == [C.image, C.status, C.controls, C.layout_row, C.out]
+    assert list(root.children) == [C.style, C.image, C.status, C.controls, C.layout_row, C.out]
     assert list(C.status.children) == [C.readout, C.message]
     assert C.image.layout.width == "100%"  # the default layout outside Colab is wide: the picture at the full width
     for html in (C.message.value, C.readout.value, hint.value):
@@ -72,7 +72,7 @@ def test_standard_layout_has_the_same_order(live):
     net, X, y = logistic_start()
     C = explore(net, X, y, layout="standard").controller
     (root,) = C.widgets
-    assert list(root.children) == [C.image, C.status, C.controls, C.layout_row, C.out]
+    assert list(root.children) == [C.style, C.image, C.status, C.controls, C.layout_row, C.out]
     assert C.image.layout.width == ""  # the picture keeps its own width
 
 
@@ -82,7 +82,7 @@ def test_layout_switch(live):
     assert C.layout_pick.value == "wide" and s.fig.get_size_inches()[0] == 27
     C.layout_pick.value = "standard"
     assert s.layout.style == "standard" and s.fig.get_size_inches()[0] == 15
-    order = [C.image, C.status, C.controls, C.layout_row, C.out]
+    order = [C.style, C.image, C.status, C.controls, C.layout_row, C.out]
     assert list(C.root.children) == order and "Layout standard" in C.message.value
     assert C.image.layout.width == ""
     C.layout_pick.value = "wide"
@@ -261,7 +261,7 @@ def test_tabs_appear_only_when_asked_for(live):
     assert titles(C) == ["Weights and steps", "Views"] and C.tabs.selected_index == 0
     C = explore(make("tanh3"), X, y, groups, views=("backprop", "line"), case_slopes="w10").controller
     assert titles(C) == ["Weights and steps", "Backpropagation", "Views"]
-    assert list(C.root.children) == [C.image, C.status, C.tabs, C.layout_row, C.out]  # the tabs under the picture
+    assert list(C.root.children) == [C.style, C.image, C.status, C.tabs, C.layout_row, C.out]  # tabs under the picture
     assert C.view_boxes["line"].value and C.view_boxes["cases"].value and not C.view_boxes["slice"].value
 
 
@@ -332,9 +332,9 @@ def test_buttons_are_disabled_while_working(live, monkeypatch):
     assert not any(b.disabled for name, b in C.buttons.items() if name != "back one step")
 
 
-def test_text_follows_the_host_colour(live):
-    """No fixed text colours in the control area, so dark themes work; only the change of the last step is
-    coloured, in colours that keep 3:1 on light and dark backgrounds."""
+def test_text_takes_the_colour_of_the_root(live):
+    """No fixed text colours in the control area: text takes the colour of the root box, set by the theme; only the
+    change of the last step is coloured, in colours that keep 3:1 on light and dark backgrounds."""
     s = explore(make("tanh3"), *xor_centres(), views=("backprop", "slice"))
     C = s.controller
     C.buttons["gradient step"].click()
@@ -407,5 +407,32 @@ def test_backprop_wording(live):
     s = explore(make("tanh3"), *xor_centres(), views="backprop")
     C = s.controller
     hint = C.tabs.children[1].children[0].value
-    assert "worked example below the networks" in hint and "under the picture" not in hint
-    assert C.tabs.get_title(1) == "Backpropagation" and C.bp_case.description == "worked example"
+    assert "Worked example below the networks" in hint and "under the picture" not in hint
+    assert C.tabs.get_title(1) == "Backpropagation" and C.bp_case.description == "Worked example"
+
+
+def test_controls_follow_the_colours_switch(live):
+    """The root box carries the class of the picture's colours, and the style sets the colours of ipywidgets for both
+    themes from the picture's palette; the switch changes the class."""
+    from slopewalk.draw import DARK_THEME, THEME
+    from slopewalk.widgets import control_css
+
+    s = explore(make("tanh3"), *xor_centres())
+    C = s.controller
+    assert "slopewalk-light" in C.root._dom_classes and "slopewalk-dark" not in C.root._dom_classes
+    assert C.style in C.root.children and C.style.layout.display == "none" and C.style.value == control_css()
+    css = control_css()
+    for name, T in (("light", THEME), ("dark", DARK_THEME)):
+        rule = css[css.index(f".slopewalk-{name}{{") :]
+        rule = rule[: rule.index("}")]
+        assert f"background-color:{T.paper}" in rule and f"--jp-widgets-color:{T.ink}" in rule
+        assert f"--jp-layout-color1:{T.paper}" in rule and f"color-scheme:{name}" in rule
+        for var in ("--jp-ui-font-color1", "--jp-widgets-label-color", "--jp-widgets-readout-color"):
+            assert f"{var}:{T.ink}" in rule
+    C.theme_pick.value = "dark"
+    assert "slopewalk-dark" in C.root._dom_classes and "slopewalk-light" not in C.root._dom_classes
+    assert s.theme_name == "dark"
+    C.theme_pick.value = "light"
+    assert C.root._dom_classes.count("slopewalk-light") == 1 and "slopewalk-dark" not in C.root._dom_classes
+    dark = explore(make("tanh3"), *xor_centres(), theme="dark").controller
+    assert "slopewalk-dark" in dark.root._dom_classes

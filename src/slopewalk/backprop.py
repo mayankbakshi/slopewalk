@@ -365,8 +365,8 @@ def fitting_size(ax, T, texts, columns, floor=9.5):
 
 
 def draw_derivation(ax, S, F):
-    """The worked example: the backward pass of one case, step by step; the stages reached so far, the current one in
-    bold."""
+    """The Worked example: the backward pass of one case, step by step; the stages reached so far, the current one in
+    bold. Its heading, "Worked example" in the colour of the backward pass, sits above the title of the stage."""
     T = S.theme
     ax.axis("off")
     c = max(0, min(S.backprop_case, S.data.G - 1))
@@ -378,11 +378,26 @@ def draw_derivation(ax, S, F):
     most = per_column * columns
     shown = lines[-most:]
     if S.data.gsel[c].sum() == 1:
-        head = f"worked example: case {letter(c)}"
+        case = f": case {letter(c)}"
     else:
-        head = f"worked example: the case nearest the mean of group {letter(c)}"
-    title = f"{head}\nstage {step} of {len(S.backprop_stages) - 1}: {stage.text}"
-    ax.set_title(title, fontsize=T.panel_title_size, loc="left")
+        case = f": the case nearest the mean of group {letter(c)}"
+    title = ax.set_title(
+        f"stage {step} of {len(S.backprop_stages) - 1}: {stage.text}", fontsize=T.panel_title_size, loc="left"
+    )
+    # the heading above the title: "Worked example" in the colour of the backward pass, then the case in ink
+    head = ax.annotate(
+        "Worked example",
+        xy=(0, 1),
+        xycoords=title,
+        xytext=(0, 3),
+        textcoords="offset points",
+        ha="left",
+        va="bottom",
+        fontsize=T.panel_title_size,
+        fontweight="bold",
+        color=T.backprop_colour,
+    )
+    ax.annotate(case, xy=(1, 0), xycoords=head, ha="left", va="bottom", fontsize=T.panel_title_size, color=T.ink)
     dy = 0.96 / per_column
     if len(lines) > most:
         shown = [(None, "... (earlier steps above)")] + shown[1:]

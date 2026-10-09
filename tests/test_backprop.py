@@ -136,9 +136,33 @@ def test_pictures_of_every_stage(static):
             len(labels)
             == {"forward": 13, "output": 0, "weights": 4 if k == 2 else 9, "to_h": 3, "delta": 0, "average": 13}[kind]
         )
-        derivation = [ax for ax in fig.axes if ax.get_title(loc="left").startswith("worked example: case A")]
+        derivation = [ax for ax in fig.axes if heading(ax).startswith("Worked example: case A")]
         assert len(derivation) == 1 and f"stage {k} of 6" in derivation[0].get_title(loc="left")
         plt.close("all")
+
+
+def heading(ax):
+    """The heading of the Worked example panel, "Worked example" and its case, or "" for the other panels."""
+    texts = [t.get_text() for t in ax.texts]
+    return "Worked example" + texts[texts.index("Worked example") + 1] if "Worked example" in texts else ""
+
+
+def test_worked_example_heading(static):
+    """The heading: Worked example in the colour of the backward pass and in bold, the case after it in ink, the stage
+    below."""
+    s = explore(reference_net(40), *XOR, views="backprop", backprop_step=1)
+    ax = [a for a in s.fig.axes if heading(a)][0]
+    head = [t for t in ax.texts if t.get_text() == "Worked example"][0]
+    case = ax.texts[ax.texts.index(head) + 1]
+    assert head.get_color() == s.theme.backprop_colour and head.get_fontweight() == "bold"
+    assert case.get_text() == ": case A" and case.get_color() == s.theme.ink
+    assert ax.get_title(loc="left").startswith("stage 1 of 6: at the output")
+    renderer = s.fig.canvas.get_renderer()
+    above = head.get_window_extent(renderer)
+    title = ax._left_title.get_window_extent(renderer)
+    after = case.get_window_extent(renderer)
+    assert above.y0 >= title.y1 and after.x0 >= above.x1 - 1 and abs(after.y0 - above.y0) < 1
+    assert above.y1 <= s.fig.bbox.y1  # inside the figure
 
 
 def test_slope_labels_are_the_group_means(static):
@@ -152,7 +176,7 @@ def test_slope_labels_are_the_group_means(static):
 def test_options(static):
     s = explore(reference_net(40), *XOR, backprop_step=3, backprop_case="C")
     assert "backprop" in s.views and s.backprop_step == 3 and s.backprop_case == 2
-    assert any(ax.get_title(loc="left").startswith("worked example: case C") for ax in s.fig.axes)
+    assert any(heading(ax).startswith("Worked example: case C") for ax in s.fig.axes)
     with pytest.raises(ValueError, match="backprop_step must be a whole number from 0 to 6"):
         explore(reference_net(40), *XOR, backprop_step=7)
     with pytest.raises(ValueError, match="is not a group"):
@@ -162,7 +186,7 @@ def test_options(static):
 def test_the_derivation_is_the_widest_lower_panel(static):
     for style, share in (("wide", 0.3), ("standard", 1.0)):
         s = explore(reference_net(40), *XOR, views="backprop", layout=style, backprop_step=1)
-        ax = [a for a in s.fig.axes if a.get_title(loc="left").startswith("worked example: case A")][0]
+        ax = [a for a in s.fig.axes if heading(a).startswith("Worked example: case A")][0]
         others = [a for a in s.fig.axes[4:] if a is not ax]
         assert width_share(ax) >= share and all(width_share(a) < width_share(ax) for a in others)
         plt.close("all")
@@ -198,8 +222,7 @@ def test_widget_controls(monkeypatch):
     C.bp_prev.click()
     assert s.backprop_step == 1
     C.bp_case.value = "D"
-    titles = [ax.get_title(loc="left") for ax in s.fig.axes]
-    assert s.backprop_case == 3 and any(t.startswith("worked example: case D") for t in titles)
+    assert s.backprop_case == 3 and any(heading(ax).startswith("Worked example: case D") for ax in s.fig.axes)
     png = C.image.value
     C.tabs.selected_index = 0  # the other tab: the backward pass stays in the picture, which does not change
     assert "backprop" in s.views and s.backprop_step == 1 and C.image.value == png
