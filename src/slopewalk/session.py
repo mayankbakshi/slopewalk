@@ -418,8 +418,9 @@ def explore(
     """Gradient descent by hand on `net`, with inputs X (n x d) and labels y.
 
     net: nn.Sequential of nn.Linear layers with nn.Tanh, nn.ReLU, nn.Sigmoid or nothing between them, ending in
-    nn.Linear(..., 1). Its output is the score a of class 1 (labels 0 or 1; R is the average log loss) or, with
-    task="regression", the prediction (R is the mean squared error).
+    nn.Linear(..., 1) or nn.Linear(..., K). One output is the score a of class 1 (labels 0 or 1; R is the average log
+    loss) or, with task="regression", the prediction (R is the mean squared error). K outputs, for K classes up to 4,
+    are the scores of the classes (labels 0 to K-1; R is the average cross-entropy; task="multiclass").
     groups: a number per point; one panel per group. None: one panel per point (up to 8 points), else one per class.
     eta: the step size of the gradient step buttons (a slider).
     params: the weights that move: a list of names such as ["w10", "w11"], "output" or "layer:k". The others are

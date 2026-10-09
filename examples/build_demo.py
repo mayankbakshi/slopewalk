@@ -1,4 +1,4 @@
-"""Builds slopewalk_demo.ipynb: six uses of slopewalk. Run from this folder: python build_demo.py"""
+"""Builds slopewalk_demo.ipynb: thirteen uses of slopewalk. Run from this folder: python build_demo.py"""
 
 import nbformat as nbf
 
@@ -140,7 +140,7 @@ Image("run.gif")
 md(r"""
 ## 11. Backpropagation step by step
 
-The view `backprop` draws the backward pass one stage at a time, from the output back to the first layer: $\delta_a = p - y$ at the output, the slopes of the output weights ($\delta_a$ times the input of each line), $\partial \ell / \partial h_j = w_j \delta_a$, $\delta_j = \tanh'(z_j)\, \partial \ell / \partial h_j$, and the slopes of the first-layer weights. `previous stage` and `next stage` step through the stages; the worked example below the networks writes out the numbers for one case. The last stage: the average over the cases is the slope column of the table.
+The view `backprop` draws the backward pass one stage at a time, from the output back to the first layer: $\delta_a = p - y$ at the output, the slopes of the output weights ($\delta_a$ times the input of each line), $\partial \ell / \partial h_j = w_j \delta_a$, $\delta_j = \tanh'(z_j)\, \partial \ell / \partial h_j$, and the slopes of the first-layer weights. `previous stage` and `next stage` step through the stages; the Worked example below the networks writes out the numbers for one case. The last stage: the average over the cases is the slope column of the table.
 """)
 code(r"""
 torch.manual_seed(0)
@@ -157,6 +157,17 @@ code(r"""
 torch.manual_seed(0)
 net = nn.Sequential(nn.Linear(2, 3), nn.Tanh(), nn.Linear(3, 1))
 explore(net, X, y, groups, eta=0.5, layout="wide", views=("slice", "line"))
+""")
+md(r"""
+## 13. More than two classes
+
+A network that ends with `nn.Linear(..., K)` gives one score per class, for up to 4 classes with the labels 0 to K-1. Each panel shows the scores $a_0, a_1, a_2$, the softmax, and $p$ for each class; the $p$ of the case's own class has its class colours, since the loss is $-\log$ of that $p$. R is the average cross-entropy, as `F.cross_entropy`. The input plane shows the most likely class, shaded by how sure the network is. Here the four XOR centres keep their classes and a fifth centre in the middle is class 2.
+""")
+code(r"""
+torch.manual_seed(0)
+net = nn.Sequential(nn.Linear(2, 3), nn.Tanh(), nn.Linear(3, 3))
+X, y, groups = clusters([(-1, 1), (1, 1), (-1, -1), (1, -1), (0, 0)], [1, 0, 0, 1, 2])
+explore(net, X, y, groups, eta=0.5)
 """)
 nb = nbf.v4.new_notebook()
 nb["cells"] = cells

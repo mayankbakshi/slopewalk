@@ -21,7 +21,7 @@ X, y, groups = clusters([(-1, 1), (1, 1), (-1, -1), (1, -1)], [1, 0, 0, 1])   # 
 explore(net, X, y, groups)
 ```
 
-1. `explore(net, X, y, groups=None, eta=1.0, title=None)`: `X` holds the inputs (n x d), `y` the classes (0 or 1). One panel per group of points; without `groups`, one panel per point (up to 8 points) or per class.
+1. `explore(net, X, y, groups=None, eta=1.0, title=None)`: `X` holds the inputs (n x d), `y` the classes (0 or 1; 0 to K-1 for a network with K outputs, see below). One panel per group of points; without `groups`, one panel per point (up to 8 points) or per class.
 2. `clusters(centers, labels, noise=0.0, n_per=50, seed=0)`: the centres themselves (`noise = 0`), or `n_per` points around each centre with standard deviation `noise`. Returns `X, y, groups`.
 3. `xor_centres(noise=0.0, n_per=50, seed=0)`, `two_points()` and `sine_points(n=16, noise=0.1, seed=0)` (for regression): the built-in examples, as `X, y, groups`.
 4. `weight_table(net)`: name, layer, unit, input and value of every weight, in the order of the names.
@@ -48,16 +48,16 @@ With the backward pass on, the widgets have buttons to step back and forth throu
 
 ## What it draws
 
-1. One copy of the network per point or group (red: class 1; blue: class 0). With several points in a group, every value is a mean ± standard deviation over the group.
+1. One copy of the network per point or group (red: class 1; blue: class 0; with more classes, teal: class 2 and magenta: class 3). With several points in a group, every value is a mean ± standard deviation over the group.
 2. Each weight and bias on its line (line width: its size; dark: positive; orange: negative). The weights are the same for every case, so the first panel carries their numbers and the others show the lines only, marked "weights as in A". Names `w1, w2, ...` on the lines for networks with at most 9 weights; otherwise the values only. A weight moved by hand since the last step has a bold label, and the one moved last keeps its name. Blue is kept for class 0. The slider groups say which inputs each unit's weights belong to.
-3. Each unit as pre-activation z, activation function (a small curve; dot: the value of z; shaded: the group's spread) and value h. Then the score a, the sigmoid, p for class 1, and the log loss with its change since the start.
-4. Below: the boundary p = 0.5 in the input plane (two inputs; dashed: the boundary at the start; one input: p against x1), R (the average log loss) over the gradient steps taken with the first-order prediction of each step (hollow markers), and a table with each weight's value, the change of R for +0.1 and the slope dR/dw from `R.backward()`.
+3. Each unit as pre-activation z, activation function (a small curve; dot: the value of z; shaded: the group's spread) and value h. Then the score a, the sigmoid, p for class 1, and the log loss with its change since the start. With K classes: a score a0, a1, ... per class, one softmax box over them, p for each class, and the cross-entropy; the p of the group's own class has its class colours, since the loss is −log of that p.
+4. Below: the boundary p = 0.5 in the input plane (two inputs; dashed: the boundary at the start; one input: p against x1; with K classes, the most likely class over the plane, shaded by how sure the network is, with the boundaries between the classes, or with one input p of each class against x1), R (the average log loss) over the gradient steps taken with the first-order prediction of each step (hollow markers), and a table with each weight's value, the change of R for +0.1 and the slope dR/dw from `R.backward()`.
 5. The extra views, in rows of three below:
-   - `backprop`: backpropagation step by step, from the output back to the first layer. The stages: δa = ∂ℓ/∂a at the output (p − y, or 2(ŷ − y)); the slopes of the output weights (δ × the input of the line); then for each hidden layer ∂ℓ/∂h (the sum over the next units of weight × δ), δ = act′(z) × ∂ℓ/∂h (with the tangent drawn on the activation curve), and the slopes of that layer's weights; finally the average over the cases, which is the slope column of the table. Each stage adds its values under the boxes of every network panel, and a text panel writes out the numbers for one case;
+   - `backprop`: backpropagation step by step, from the output back to the first layer. The stages: δa = ∂ℓ/∂a at the output (p − y; pk − yk for each class k, with yk 1 for the case's class and 0 otherwise; or 2(ŷ − y)); the slopes of the output weights (δ × the input of the line); then for each hidden layer ∂ℓ/∂h (the sum over the next units of weight × δ), δ = act′(z) × ∂ℓ/∂h (with the tangent drawn on the activation curve), and the slopes of that layer's weights; finally the average over the cases, which is the slope column of the table. Each stage adds its values under the boxes of every network panel, and a text panel writes out the numbers for one case;
    - `cases`: each case's slope of its own loss along one weight, by group, and their average, which is dR/dw;
    - `slice`: R over one or two weights with the others fixed, the start, the path of the steps and the direction of −∇R;
    - `line`: R along the next step, w − t·∇R, with the tangent line (the first-order prediction) and where the step of eta lands;
-   - `hidden`: each case at its values in the last hidden layer, with the output unit's boundary (a line for two units, a plane for three);
+   - `hidden`: each case at its values in the last hidden layer, with the output unit's boundary (a line for two units, a plane for three); with K classes, the most likely class over (h1, h2) for two units, and the cases coloured by class otherwise;
    - `momentum`: R over the next steps of gradient descent and of momentum (each step keeps the share beta of the last one).
 
 Under the picture, the status shows R and the change of R in the last action in large type (green when R went down, red when it went up). The last action is a step, ten steps, back one step or a slider move, and the note under the change says which; for steps it adds the first-order prediction. Then come the predicted change for the next step, the size of the gradient and the accuracy. One sentence says what the last action did (for example "w10 changed from 0.49 to 0.70: R went from 0.5680 to 0.5619, down 0.0061.").
@@ -71,7 +71,7 @@ Changing tabs leaves the picture as it is.
 
 ## Supported networks
 
-`nn.Sequential` of `nn.Linear` layers (with bias) with `nn.Tanh`, `nn.ReLU`, `nn.Sigmoid` or nothing between them, ending in `nn.Linear(..., 1)`: its output is the score a of class 1, and R is the cross-entropy, as `F.binary_cross_entropy_with_logits`; with `task="regression"` it is the prediction and R the mean squared error, as `F.mse_loss`. The network must be on the CPU in float32 or float64. Anything else, and points with NaN, the wrong shape or labels other than 0 and 1, raise `ValueError` with the reason.
+`nn.Sequential` of `nn.Linear` layers (with bias) with `nn.Tanh`, `nn.ReLU`, `nn.Sigmoid` or nothing between them, ending in `nn.Linear(..., 1)`: its output is the score a of class 1, and R is the cross-entropy, as `F.binary_cross_entropy_with_logits`; with `task="regression"` it is the prediction and R the mean squared error, as `F.mse_loss`. A network that ends in `nn.Linear(..., K)` (K from 2 to 4) has one score per class: the labels are 0 to K-1, and R is the cross-entropy, as `F.cross_entropy`. The task follows from the outputs (`task="multiclass"` for K outputs). The network must be on the CPU in float32 or float64. Anything else, and points with NaN, the wrong shape or labels that do not fit the outputs, raise `ValueError` with the reason.
 
 Weight names: layer by layer, unit by unit, each unit's incoming weights in the order of its inputs, then its bias. For `nn.Sequential(nn.Linear(2, 3), nn.Tanh(), nn.Linear(3, 1))` this gives w1, w2, w3 (unit 1: x1, x2, bias), w4 to w6 (unit 2), w7 to w9 (unit 3), w10 to w12 (output weights) and w13 (output bias). Rows grow with the number of units up to 12 per layer; beyond that the drawing gets crowded and the values move from the lines to the table.
 
@@ -81,7 +81,7 @@ Weight names: layer by layer, unit by unit, each unit's incoming weights in the 
 2. Jupyter or VS Code: install the package and ipywidgets once (`%pip install ipywidgets`, then restart the kernel).
 3. Without ipywidgets the cell draws the starting picture and says how to get the sliders. With the environment variable `NB_STATIC=1` (used to make HTML copies of notebooks) it draws the starting picture only.
 
-`examples/slopewalk_demo.ipynb` shows twelve uses, including the views, regression, a recorded run, backpropagation step by step and the wide layout.
+`examples/slopewalk_demo.ipynb` shows thirteen uses, including the views, regression, a recorded run, backpropagation step by step, the wide layout and three classes.
 
 ## Development
 
