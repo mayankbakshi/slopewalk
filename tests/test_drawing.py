@@ -88,11 +88,11 @@ def test_line_colours_widths_and_labels(static):
     assert [t.get_text() for t in labels] == ["w1 = 0.50", "w2 = -0.50", "w3 = 0.00"]
     assert [t.get_color() for t in labels] == [THEME.positive, THEME.negative_text, THEME.positive]
     assert all(t.get_fontweight() == "normal" for t in labels)
-    s.draw([0.6, -0.5, 0.0])  # a changed weight: blue and bold
+    s.draw([0.6, -0.5, 0.0])  # a weight moved by hand: its sign colour, and a bold label
     ax = panels(s.fig)[0]
     lines, labels = weight_lines(ax), edge_texts(ax)
-    assert lines[0].get_color() == THEME.changed and lines[1].get_color() == THEME.negative
-    assert labels[0].get_text() == "w1 = 0.60" and labels[0].get_color() == THEME.changed
+    assert lines[0].get_color() == THEME.positive and lines[1].get_color() == THEME.negative
+    assert labels[0].get_text() == "w1 = 0.60" and labels[0].get_color() == THEME.positive
     assert labels[0].get_fontweight() == "bold" and labels[1].get_fontweight() == "normal"
     assert lines[0].get_linewidth() == pytest.approx(width(0.6))
 
@@ -177,3 +177,52 @@ def test_colours_and_type_scale(static):
     assert sizes == {THEME.panel_title_size}
     legends = {t.get_fontsize() for ax in lower if ax.get_legend() for t in ax.get_legend().get_texts()}
     assert legends == {THEME.legend_size}
+
+
+def test_lines_keep_their_sign_and_moved_weights_are_bold(static):
+    """Lines always show the sign of their weight; blue is kept for class 0. The weight moved by hand since the last
+    step has a bold label in panel A, with its name; a step clears it, step_back brings it back."""
+    s = explore(make("tanh3"), *xor_centres(), eta=0.5)
+    sign = lambda w: [THEME.positive if v >= 0 else THEME.negative for v in w]  # noqa: E731
+    colours = lambda fig: [[line.get_color() for line in weight_lines(ax)] for ax in panels(fig)]  # noqa: E731
+    bold = lambda fig: [t.get_text() for t in edge_texts(panels(fig)[0]) if t.get_fontweight() == "bold"]  # noqa: E731
+    s.step(1)
+    fig = s.draw()
+    assert all(panel == sign(s.weights()) for panel in colours(fig)) and bold(fig) == []
+    w = s.weights()
+    w[4] += 0.3  # what a slider does
+    s.model.set_weights(w)
+    s.last_moved = 4
+    fig = s.draw()
+    assert all(panel == sign(w) for panel in colours(fig)) and bold(fig) == [f"w5 = {w[4]:.2f}"]
+    s.step(1)
+    assert bold(s.draw()) == []
+    s.step_back()  # back to the weights with w5 moved by hand
+    assert len(bold(s.draw())) == 1
+
+
+def test_note_in_the_panels_without_numbers(static):
+    note = lambda ax: [t for t in ax.texts if t.get_text() == "weights as in A"]  # noqa: E731
+    s = explore(make("tanh3"), *xor_centres())
+    P = panels(s.fig)
+    assert not note(P[0]) and all(len(note(ax)) == 1 for ax in P[1:])
+    torch.manual_seed(0)
+    net = torch.nn.Sequential(torch.nn.Linear(2, 20), torch.nn.Tanh(), torch.nn.Linear(20, 1))  # 81 weights
+    crowded = explore(net, *xor_centres())
+    assert not any(note(ax) for ax in panels(crowded.fig))  # panel A has no numbers either: no note
+
+
+def test_r_axis_shows_progress(static):
+    s = explore(make("tanh3"), *xor_centres(), eta=0.5)
+    s.step(10)
+    ax = [a for a in s.draw().axes if a.get_title().startswith("R = ")][0]
+    lo, hi = ax.get_ylim()
+    values = list(s.history) + [p.predicted for p in s.predictions]
+    assert lo >= 0.0 and (max(values) - min(values)) >= 0.5 * (hi - lo)
+
+
+def test_group_letters_have_a_halo(static):
+    s = explore(make("tanh3"), *xor_centres(noise=0.35))
+    plane = [a for a in s.fig.axes if a.get_title().startswith("p for class 1")][0]
+    letters = [t for t in plane.texts if t.get_text().strip() in "ABCD" and t.get_text().strip()]
+    assert len(letters) == 4 and all(t.get_path_effects() for t in letters)

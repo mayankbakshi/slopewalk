@@ -50,7 +50,8 @@ def test_widgets_are_built(live):
     assert C.tabs is None  # no tabs unless the call asks for the backward pass or for extra views
     hint, row, panel, frozen = C.controls.children
     assert "Press gradient step" in hint.value and panel is C.panel and frozen is C.frozen_note
-    assert list(row.children) == [C.eta, *C.buttons.values()]  # eta and the step buttons in one row
+    assert list(row.children) == [C.eta, C.button_row]  # eta, then the step buttons as one group
+    assert list(C.button_row.children) == list(C.buttons.values()) and C.button_row.layout.flex_flow == "row nowrap"
     assert C.layout_pick in C.layout_row.children
     assert re.sub("<[^>]+>", "", C.message.value) == ""  # nothing to report before the first action
     assert "next step, eta 0.7: predicted change" in C.readout.value and "none yet" in C.readout.value
@@ -358,3 +359,52 @@ def test_a_slider_marks_its_weight(live):
     assert "w5 = 0.25" in labels
     C.buttons["gradient step"].click()
     assert s.last_moved is None
+
+
+def test_the_change_is_the_last_action(live):
+    """The large change in the status follows the last action: one step, ten steps, a slider move, back one step,
+    and reset; changing eta leaves it as it is."""
+    s = explore(make("tanh3"), *xor_centres(), eta=0.5)
+    C = s.controller
+    numbers = lambda: re.sub("<[^>]+>", " ", C.readout.value)  # noqa: E731
+    C.buttons["gradient step"].click()
+    p = s.predictions[-1]
+    assert C.action == pytest.approx((p.actual - p.before, C.action[1])) and C.action[1].startswith("one step")
+    R1 = s.history[-1]
+    C.buttons["10 steps"].click()
+    total = s.history[-1] - R1
+    predicted = sum(q.predicted - q.before for q in s.predictions[-10:])
+    assert C.action[0] == pytest.approx(total, abs=1e-6) and f"{total:+.4f}" in numbers()
+    assert C.action[1] == f"10 steps, predicted {predicted:+.4f}"
+    before = s.history[-1]
+    C.sliders[4].value += 0.3
+    assert C.action[1] == "w5 moved by hand" and C.action[0] == pytest.approx(s.risk() - before, abs=1e-6)
+    C.eta.value = 1.0
+    assert C.action[1] == "w5 moved by hand"  # eta does not change R
+    R_moved = s.risk()
+    C.buttons["back one step"].click()
+    assert C.action[1] == "back one step" and C.action[0] == pytest.approx(s.risk() - R_moved, abs=1e-6)
+    C.buttons["reset"].click()
+    assert C.action is None and "none yet" in C.readout.value
+    s.step(3)  # steps in code count as an action too
+    assert C.action[1].startswith("3 steps, predicted")
+
+
+def test_view_settings_follow_their_view(live):
+    s = explore(make("tanh3"), *xor_centres(), views="slice")
+    C = s.controller
+    assert all(not w.disabled for w in C.slice_pick) and C.case_pick.disabled and C.beta.disabled and C.ahead.disabled
+    C.view_boxes["momentum"].value = True
+    assert not C.beta.disabled and not C.ahead.disabled
+    C.view_boxes["slice"].value = False
+    assert all(w.disabled for w in C.slice_pick)
+    tab = C.tabs.children[C.kinds.index("views")]
+    slice_row = [row for row in tab.children if C.view_boxes["slice"] in getattr(row, "children", ())][0]
+    assert all(w in slice_row.children for w in C.slice_pick)  # the settings sit beside their checkbox
+
+
+def test_backprop_wording(live):
+    s = explore(make("tanh3"), *xor_centres(), views="backprop")
+    C = s.controller
+    hint = C.tabs.children[1].children[0].value
+    assert "text panel below the networks" in hint and "under the picture" not in hint

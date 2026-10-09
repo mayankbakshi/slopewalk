@@ -14,12 +14,12 @@ from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
 
 from .backprop import backward_pass, draw_derivation, label_spec, line_styles, overlay, shared_labels, stage_index
-from .draw import draw_case, draw_edge_labels, draw_history, draw_input_plane, draw_slope_table
+from .draw import draw_case, draw_edge_labels, draw_history, draw_input_plane, draw_shared_note, draw_slope_table
 from .layout import BOTTOM_HEIGHT, NET_GAP, PANEL_GAP
 from .views import VIEW_DRAWERS, VIEWS, needs_3d
 
 Frame = namedtuple(
-    "Frame", "w out R g deltas changed moving history predictions eta next_change cases lookahead bp stage"
+    "Frame", "w out R g deltas changed moving history predictions eta next_change cases lookahead bp stage by_hand"
 )
 LIVE_DPI = 100  # resolution of the picture shown by the widgets
 
@@ -38,7 +38,9 @@ def make_frame(S, w=None):
         deltas.append(M.risk(D.X, D.y, wk) - R)
     M.set_weights(w)
     moving = set(S.active)
-    changed = {k for k in range(len(w)) if abs(w[k] - S.w0[k]) > 1e-9}
+    changed = {k for k in range(len(w)) if abs(w[k] - S.w0[k]) > 1e-9}  # moved from the start in any way
+    ref = S.path[-1]  # the weights after the last step (or at the start): a difference was made by hand
+    by_hand = {k for k in range(len(w)) if abs(w[k] - ref[k]) > 1e-6 * max(1.0, abs(ref[k]))}
     next_change = -S.eta * float(sum(g[k] ** 2 for k in moving))
     cases = M.case_slopes(D.X, D.y) if "cases" in S.views else None
     lookahead = S.lookahead(w=w) if "momentum" in S.views else None
@@ -61,6 +63,7 @@ def make_frame(S, w=None):
         lookahead,
         bp,
         stage,
+        by_hand,
     )
 
 
@@ -134,9 +137,13 @@ class Picture:
         if not self.laid_out:
             self.layout()
         shared = shared_labels(F)  # the weights are the same in every panel: the first panel carries their labels
+        first = "none"
         for c, (ax, (edges, obstacles)) in enumerate(zip(self.case_axes, parts)):
             if c == 0 or not shared:
-                draw_edge_labels(ax, S, F, edges, obstacles, label_spec(S, F, c))
+                mode = draw_edge_labels(ax, S, F, edges, obstacles, label_spec(S, F, c))
+                first = mode if c == 0 else first
+            elif first != "none":
+                draw_shared_note(ax, S)
         S.model.set_weights(F.w)
         self.frame = F
         return self.fig

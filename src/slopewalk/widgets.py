@@ -58,7 +58,7 @@ LOOK = {  # where to look in the picture at each stage of the backward pass
 }
 HINTS = {
     "core": "Press gradient step to move every weight against its slope. Drag a slider to change one weight.",
-    "backprop": "Step from the output back to the first layer. The text under the picture follows one case.",
+    "backprop": "Step from the output back to the first layer. The text panel below the networks follows one case.",
     "views": "Tick a box to add a view under the network.",
 }
 BUTTONS = ("gradient step", "10 steps", "back one step", "reset")
@@ -90,19 +90,19 @@ def span(text, *styles):
     return f'<span style="{";".join(UI[s] for s in styles)}">{text}</span>'
 
 
-def readout_html(r):
-    """The status numbers: a row of labels, a row of values and a row of notes. R and the change of the last step
-    are large; the other numbers are smaller. The columns stay the same before and after the first step."""
-    if r["last"] is None:
+def readout_html(r, action=None):
+    """The status numbers: a row of labels, a row of values and a row of notes. R and the change of R in the last
+    action (a step, ten steps, back one step or a slider move; action: (change, note)) are large; the other numbers
+    are smaller. The columns stay the same before and after the first action."""
+    if action is None:
         change, note = span("none yet", "value", "quiet"), ""
     else:
-        predicted, actual = r["last"]
+        actual, note = action
         colour = UI["up"] if actual > 0 else UI["down"]
         change = f'<span style="{UI["big"]};color:{colour}">{actual:+.4f}</span>'
-        note = f"predicted {predicted:+.4f}"
     cells = [
         ("R", span(f"{r['R']:.4f}", "big"), ""),
-        ("change of R in the last step", change, note),
+        ("change of R in the last action", change, note),
         (f"next step, eta {r['eta']:g}: predicted change", span(f"{r['next_change']:+.4f}", "value"), ""),
         ("size of the gradient", span(f"{r['grad_norm']:.4f}", "value"), ""),
     ]
@@ -153,6 +153,8 @@ class Controller:
         self.depth = 0  # how many actions are running; the buttons are disabled while it is above 0
         self.picture = None
         self.last_R = None
+        self.action = None  # the change of R in the last action and a note on it, for the status
+        self.known = len(S.history)  # the length of the history when the controls last looked
         self.use_output = os.environ.get("SLOPEWALK_DISPLAY") == "output"  # fallback: the PNG through display()
         self.index = list(S.active)  # the weight of each slider
         self.sliders = []
@@ -214,8 +216,9 @@ class Controller:
         self.out = widgets.Output()
         self.status = widgets.VBox([self.readout, self.message], layout=widgets.Layout(margin="6px 0 8px 0"))
 
-        steps_row = widgets.HBox(
-            [self.eta, *self.buttons.values()],
+        self.button_row = widgets.HBox(list(self.buttons.values()), layout=widgets.Layout(flex_flow="row nowrap"))
+        steps_row = widgets.HBox(  # in a narrow window the buttons move below eta together
+            [self.eta, self.button_row],
             layout=widgets.Layout(align_items="center", flex_flow="row wrap", margin="0 0 12px 0"),
         )
         core = widgets.VBox([widgets.HTML(text_html(HINTS["core"])), steps_row, self.panel, self.frozen_note])
@@ -297,7 +300,7 @@ class Controller:
         return widgets.HBox([pick, holder])
 
     def backprop_tab(self, widgets):
-        """Previous and next stage, the stage and the case the text under the picture follows."""
+        """Previous and next stage, the stage and the case the text panel below the networks follows."""
         S = self.session
         n = len(S.backprop_stages)
         self.bp_prev = tip(widgets.Button(description="previous stage"), "the stage before")
@@ -322,7 +325,7 @@ class Controller:
             style={"description_width": "70px"},
             layout=widgets.Layout(width="190px"),
         )
-        tip(self.bp_case, "the group whose case the text under the picture follows")
+        tip(self.bp_case, "the group whose case the text panel below the networks follows")
         self.bp_prev.on_click(lambda _: setattr(self.bp_step, "value", max(0, self.bp_step.value - 1)))
         self.bp_next.on_click(lambda _: setattr(self.bp_step, "value", min(n - 1, self.bp_step.value + 1)))
         self.bp_step.observe(self.on_backprop, names="value")
@@ -350,15 +353,9 @@ class Controller:
             for v in VIEWS
             if v != "backprop"
         }
-        rows = [
-            widgets.HBox(
-                [box, widgets.HTML(span(VIEW_HELP[v], "small", "quiet"))], layout=widgets.Layout(align_items="center")
-            )
-            for v, box in self.view_boxes.items()
-        ]
 
-        def setting():  # the label column and width shared by the settings, each with its own layout
-            return dict(style={"description_width": UI["setting_label"]}, layout=widgets.Layout(width=UI["long"]))
+        def setting(label=UI["setting_label"], width=UI["long"]):  # each setting with its own layout
+            return dict(style={"description_width": label}, layout=widgets.Layout(width=width))
 
         self.case_pick = tip(
             widgets.Dropdown(options=names, value=names[S.case_weight], description="case slopes of", **setting()),
@@ -368,12 +365,15 @@ class Controller:
         b = S.slice_weights[1] if len(S.slice_weights) > 1 else None
         self.slice_pick = [
             tip(
-                widgets.Dropdown(options=names, value=names[a], description="slice over", **setting()),
+                widgets.Dropdown(options=names, value=names[a], description="slice over", **setting(width=UI["short"])),
                 "the first weight",
             ),
             tip(
                 widgets.Dropdown(
-                    options=["none"] + names, value="none" if b is None else names[b], description="and", **setting()
+                    options=["none"] + names,
+                    value="none" if b is None else names[b],
+                    description="and",
+                    **setting(label=UI["label"], width="190px"),
                 ),
                 "the second weight, or none for a curve over one weight",
             ),
@@ -401,12 +401,23 @@ class Controller:
         )
         for w in [*self.view_boxes.values(), self.case_pick, *self.slice_pick, self.beta, self.ahead, self.log_box]:
             w.observe(self.on_views, names="value")
-        columns = f"repeat(auto-fill, minmax({UI['long']}, 1fr))"
-        settings = widgets.GridBox(
-            [self.case_pick, *self.slice_pick, self.beta, self.ahead],
-            layout=widgets.Layout(grid_template_columns=columns, grid_gap=f"2px {UI['gap']}", margin="6px 0 0 0"),
-        )
-        return widgets.VBox([widgets.HTML(text_html(HINTS["views"])), *rows, self.log_box, settings])
+        self.settings = {"cases": [self.case_pick], "slice": self.slice_pick, "momentum": [self.beta, self.ahead]}
+        rows = [  # each view's checkbox, what it shows, and its settings in the same row
+            widgets.HBox(
+                [box, widgets.HTML(span(VIEW_HELP[v], "small", "quiet"), layout=widgets.Layout(width="460px"))]
+                + self.settings.get(v, []),
+                layout=widgets.Layout(align_items="center", flex_flow="row wrap"),
+            )
+            for v, box in self.view_boxes.items()
+        ]
+        self.update_settings()
+        return widgets.VBox([widgets.HTML(text_html(HINTS["views"])), *rows, self.log_box])
+
+    def update_settings(self):
+        """The settings of a view can be changed while the view is on."""
+        for v, controls in self.settings.items():
+            for w in controls:
+                w.disabled = not self.view_boxes[v].value
 
     # ---------------------------------------------------------------- state
 
@@ -460,6 +471,8 @@ class Controller:
         S = self.session
         if change is not None:
             S.last_moved = self.index[self.sliders.index(change["owner"])]
+            if before is not None:
+                self.action = (S.risk(self.values()) - before, f"{change['owner'].description} moved by hand")
         S.model.set_weights(self.values())
         self.redraw()
         if change is not None and before is not None:
@@ -508,11 +521,29 @@ class Controller:
         S.log_scale = bool(self.log_box.value)
         self.picture = None  # the panels changed: a new figure
         self.redraw()
+        self.update_settings()
         shown = [VIEW_LABELS[v] for v in S.views if v != "backprop"]
         self.say("Views: " + (", ".join(shown) if shown else "none") + ".")
 
+    def note_action(self):
+        """The last action, read from the history: k new steps, a step undone, or a fresh start."""
+        S = self.session
+        n = len(S.history)
+        if n == 1 and not S.predictions:
+            self.action = None
+        elif n > self.known and self.last_R is not None:
+            k = n - self.known
+            predicted = sum(p.predicted - p.before for p in S.predictions[-k:])
+            what = "one step" if k == 1 else f"{k} steps"
+            self.action = (S.history[-1] - self.last_R, f"{what}, predicted {predicted:+.4f}")
+        elif n < self.known and self.last_R is not None:
+            self.action = (S.risk() - self.last_R, "back one step")
+        self.known = n
+
     def sync(self):
-        """After steps, reset or record in code: the sliders show the network's weights, then one redraw."""
+        """After steps, back one step, reset or record, also in code: the status notes the action, the sliders show
+        the network's weights, then one redraw."""
+        self.note_action()
         self.busy = True
         try:
             w = self.session.weights()
@@ -579,7 +610,7 @@ class Controller:
             S.fig = self.picture.fig
             self.last_R = self.picture.frame.R
             png = self.picture.png()
-            self.readout.value = readout_html(S.readouts(self.eta.value, w))
+            self.readout.value = readout_html(S.readouts(self.eta.value, w), self.action)
             if self.use_output:
                 from IPython.display import Image, clear_output, display
 

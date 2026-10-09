@@ -8,6 +8,7 @@ import copy
 
 import numpy as np
 import torch
+from matplotlib import patheffects
 from matplotlib.font_manager import FontProperties
 from matplotlib.patches import BoxStyle, Rectangle
 
@@ -25,7 +26,7 @@ class Theme:
     class_tint = {0: "#E5ECFF", 1: "#FFE5E5"}
     mixed_colour, mixed_tint = "black", "#EEEEEE"
     neutral_colour, neutral_tint = "0.15", "#EEEEEE"  # regression panels
-    positive, negative, negative_text, changed = "black", "#E86A00", "#B35900", "tab:blue"  # lines 3.2:1 on white
+    positive, negative, negative_text = "black", "#E86A00", "#B35900"  # negative lines 3.2:1 on white
     line_width, line_slope, line_max = 1.0, 1.3, 7  # a weight's line: line_width + line_slope * |w|, at most line_max
     frozen_alpha, frozen_text, frozen_fill = 0.35, "0.55", "#F5F5F5"  # weights that do not move (params)
     hidden = "green"  # the h boxes, the dot and the band on the glyphs, the history line
@@ -51,6 +52,9 @@ class Theme:
 
 
 THEME = Theme()
+
+
+LETTER_HALO = [patheffects.withStroke(linewidth=3, foreground="white")]  # group letters stay legible over points
 
 
 def letter(c):
@@ -153,10 +157,10 @@ def group_style(S, c):
     return T.class_colour[yi], T.class_tint[yi], False, yi
 
 
-def weight_colour(T, k, w, changed, frozen):
-    if frozen:
-        return T.positive if w[k] >= 0 else T.negative
-    return T.changed if k in changed else (T.positive if w[k] >= 0 else T.negative)
+def weight_colour(T, k, w):
+    """The colour of a weight's line: its sign. Blue is kept for class 0; a weight moved by hand is marked by its
+    label instead (its name, in bold)."""
+    return T.positive if w[k] >= 0 else T.negative
 
 
 def label_variants(S, F, edges, spec):
@@ -207,8 +211,8 @@ def draw_edge_labels(ax, S, F, edges, obstacles, spec=None):
     mode, labels, positions = chosen
     for (k, _, _, _), label, (cx, cy) in zip(edges, labels, positions):
         frozen = k not in F.moving
-        hot = k in F.changed and not frozen and spec is None
-        colour = T.frozen_text if frozen else (T.changed if hot else (T.positive if w[k] >= 0 else T.negative_text))
+        hot = k in F.by_hand and not frozen and spec is None
+        colour = T.frozen_text if frozen else (T.positive if w[k] >= 0 else T.negative_text)
         if spec is not None:
             colour = spec[k][2]
         ax.text(
@@ -224,6 +228,12 @@ def draw_edge_labels(ax, S, F, edges, obstacles, spec=None):
             bbox=dict(boxstyle="round,pad=0.08", fc="white", ec="none", alpha=0.9),
         )
     return mode
+
+
+def draw_shared_note(ax, S):
+    """Network panels after the first: their lines carry no numbers, because the weights are those of panel A."""
+    T = S.theme
+    ax.text(0.01, 0.02, "weights as in A", transform=ax.transAxes, fontsize=T.glyph_name_size, color=T.curve)
 
 
 def draw_case(ax, S, F, c, styles=None):
@@ -343,9 +353,9 @@ def draw_case(ax, S, F, c, styles=None):
     ax.axis("off")
     for k, (sx, sy), (tx, ty), _ in edges:
         frozen = k not in F.moving
-        colour, alpha = weight_colour(T, k, w, F.changed, frozen), T.frozen_alpha if frozen else 1.0
+        colour, alpha = weight_colour(T, k, w), T.frozen_alpha if frozen else 1.0
         if styles is not None:
-            colour = styles[k][0] or weight_colour(T, k, w, set(), frozen)
+            colour = styles[k][0] or weight_colour(T, k, w)
             alpha = styles[k][1] * (T.frozen_alpha if frozen else 1.0)
         ax.plot(
             [sx, tx],
@@ -399,7 +409,7 @@ def draw_group_marks(ax, S, xs, ys, size=160):
         col, _, _, yi = group_style(S, c)
         face = "white" if D.task == "regression" else T.class_colour[yi]
         ax.scatter(xs[c], ys[c], s=size, color=face, edgecolor="k", zorder=4)
-        ax.text(xs[c], ys[c], f"  {letter(c)}", fontsize=T.letter_size, va="bottom", zorder=5)
+        ax.text(xs[c], ys[c], f"  {letter(c)}", fontsize=T.letter_size, va="bottom", zorder=5, path_effects=LETTER_HALO)
 
 
 def draw_input_plane(ax, S, F):
@@ -459,7 +469,7 @@ def draw_input_plane(ax, S, F):
         for c in range(D.G):
             yi = group_style(S, c)[3]
             ax.scatter(*gx[c], s=160, color=T.class_colour[yi], edgecolor="k", zorder=3)
-            ax.text(gx[c][0] + 0.15, gx[c][1] + 0.15, letter(c), fontsize=T.letter_size)
+            ax.text(gx[c][0] + 0.15, gx[c][1] + 0.15, letter(c), fontsize=T.letter_size, path_effects=LETTER_HALO)
         ax.set_title("p for class 1 and the boundary", fontsize=T.panel_title_size)
     else:
         lo, hi = float(min(a.min(), y.min())), float(max(a.max(), y.max()))
@@ -478,7 +488,7 @@ def draw_input_plane(ax, S, F):
             zorder=3,
         )
         for c in range(D.G):
-            ax.text(gx[c][0] + 0.15, gx[c][1] + 0.15, letter(c), fontsize=T.letter_size)
+            ax.text(gx[c][0] + 0.15, gx[c][1] + 0.15, letter(c), fontsize=T.letter_size, path_effects=LETTER_HALO)
         ax.set_title("prediction over the input plane; points coloured by y", fontsize=T.panel_title_size)
     ax.set_aspect("equal")
     S.model.set_weights(w)
@@ -507,9 +517,10 @@ def draw_history(ax, S, F):
         positive = [v for v in values if v > 0] or [1.0]
         ax.set_yscale("log")
         ax.set_ylim(min(positive) * 0.7, max(positive) * 1.4)
-    else:
-        floor = 1.1 if S.task == "binary" else 0.0
-        ax.set_ylim(min(0.0, min(values)), max(floor, max(values) * 1.05))
+    else:  # fitted to the values, so that progress shows; R is never below 0
+        lo, hi = min(values), max(values)
+        pad = 0.12 * (hi - lo) if hi > lo else max(0.1 * abs(hi), 0.01)
+        ax.set_ylim(max(0.0, lo - pad), hi + pad)
     ax.set_title(f"R = {F.R:.4f}", fontsize=T.panel_title_size)
     if len(history) < 12:
         ax.set_xticks(range(len(history)))

@@ -9,7 +9,7 @@ Every function takes (ax, S, F) like the panels in draw.py.
 
 import numpy as np
 
-from .draw import letter
+from .draw import LETTER_HALO, letter
 
 VIEWS = ("backprop", "cases", "slice", "line", "hidden", "momentum")
 
@@ -290,7 +290,7 @@ def draw_hidden(ax, S, F):
             ax.contour(U1, U2, a, levels=10, cmap=T.value_cmap, linewidths=0.8)
         ax.scatter(H[:, 0], H[:, 1], c=colours, s=small, edgecolor="k", lw=0.3, zorder=3)
         for c in range(D.G):
-            ax.text(gh[c][0], gh[c][1], f"  {letter(c)}", fontsize=T.letter_size, zorder=4)
+            ax.text(gh[c][0], gh[c][1], f"  {letter(c)}", fontsize=T.letter_size, zorder=4, path_effects=LETTER_HALO)
         ax.set_xlim(*x0)
         ax.set_ylim(*x1)
         ax.set_xlabel(f"{label}1")

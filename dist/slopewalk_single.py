@@ -20,6 +20,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from contextlib import contextmanager
+from matplotlib import patheffects
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
 from matplotlib.font_manager import FontProperties
@@ -698,7 +699,7 @@ class Theme:
     class_tint = {0: "#E5ECFF", 1: "#FFE5E5"}
     mixed_colour, mixed_tint = "black", "#EEEEEE"
     neutral_colour, neutral_tint = "0.15", "#EEEEEE"  # regression panels
-    positive, negative, negative_text, changed = "black", "#E86A00", "#B35900", "tab:blue"  # lines 3.2:1 on white
+    positive, negative, negative_text = "black", "#E86A00", "#B35900"  # negative lines 3.2:1 on white
     line_width, line_slope, line_max = 1.0, 1.3, 7  # a weight's line: line_width + line_slope * |w|, at most line_max
     frozen_alpha, frozen_text, frozen_fill = 0.35, "0.55", "#F5F5F5"  # weights that do not move (params)
     hidden = "green"  # the h boxes, the dot and the band on the glyphs, the history line
@@ -724,6 +725,9 @@ class Theme:
 
 
 THEME = Theme()
+
+
+LETTER_HALO = [patheffects.withStroke(linewidth=3, foreground="white")]  # group letters stay legible over points
 
 
 def letter(c):
@@ -826,10 +830,10 @@ def group_style(S, c):
     return T.class_colour[yi], T.class_tint[yi], False, yi
 
 
-def weight_colour(T, k, w, changed, frozen):
-    if frozen:
-        return T.positive if w[k] >= 0 else T.negative
-    return T.changed if k in changed else (T.positive if w[k] >= 0 else T.negative)
+def weight_colour(T, k, w):
+    """The colour of a weight's line: its sign. Blue is kept for class 0; a weight moved by hand is marked by its
+    label instead (its name, in bold)."""
+    return T.positive if w[k] >= 0 else T.negative
 
 
 def label_variants(S, F, edges, spec):
@@ -880,8 +884,8 @@ def draw_edge_labels(ax, S, F, edges, obstacles, spec=None):
     mode, labels, positions = chosen
     for (k, _, _, _), label, (cx, cy) in zip(edges, labels, positions):
         frozen = k not in F.moving
-        hot = k in F.changed and not frozen and spec is None
-        colour = T.frozen_text if frozen else (T.changed if hot else (T.positive if w[k] >= 0 else T.negative_text))
+        hot = k in F.by_hand and not frozen and spec is None
+        colour = T.frozen_text if frozen else (T.positive if w[k] >= 0 else T.negative_text)
         if spec is not None:
             colour = spec[k][2]
         ax.text(
@@ -897,6 +901,12 @@ def draw_edge_labels(ax, S, F, edges, obstacles, spec=None):
             bbox=dict(boxstyle="round,pad=0.08", fc="white", ec="none", alpha=0.9),
         )
     return mode
+
+
+def draw_shared_note(ax, S):
+    """Network panels after the first: their lines carry no numbers, because the weights are those of panel A."""
+    T = S.theme
+    ax.text(0.01, 0.02, "weights as in A", transform=ax.transAxes, fontsize=T.glyph_name_size, color=T.curve)
 
 
 def draw_case(ax, S, F, c, styles=None):
@@ -1016,9 +1026,9 @@ def draw_case(ax, S, F, c, styles=None):
     ax.axis("off")
     for k, (sx, sy), (tx, ty), _ in edges:
         frozen = k not in F.moving
-        colour, alpha = weight_colour(T, k, w, F.changed, frozen), T.frozen_alpha if frozen else 1.0
+        colour, alpha = weight_colour(T, k, w), T.frozen_alpha if frozen else 1.0
         if styles is not None:
-            colour = styles[k][0] or weight_colour(T, k, w, set(), frozen)
+            colour = styles[k][0] or weight_colour(T, k, w)
             alpha = styles[k][1] * (T.frozen_alpha if frozen else 1.0)
         ax.plot(
             [sx, tx],
@@ -1072,7 +1082,7 @@ def draw_group_marks(ax, S, xs, ys, size=160):
         col, _, _, yi = group_style(S, c)
         face = "white" if D.task == "regression" else T.class_colour[yi]
         ax.scatter(xs[c], ys[c], s=size, color=face, edgecolor="k", zorder=4)
-        ax.text(xs[c], ys[c], f"  {letter(c)}", fontsize=T.letter_size, va="bottom", zorder=5)
+        ax.text(xs[c], ys[c], f"  {letter(c)}", fontsize=T.letter_size, va="bottom", zorder=5, path_effects=LETTER_HALO)
 
 
 def draw_input_plane(ax, S, F):
@@ -1132,7 +1142,7 @@ def draw_input_plane(ax, S, F):
         for c in range(D.G):
             yi = group_style(S, c)[3]
             ax.scatter(*gx[c], s=160, color=T.class_colour[yi], edgecolor="k", zorder=3)
-            ax.text(gx[c][0] + 0.15, gx[c][1] + 0.15, letter(c), fontsize=T.letter_size)
+            ax.text(gx[c][0] + 0.15, gx[c][1] + 0.15, letter(c), fontsize=T.letter_size, path_effects=LETTER_HALO)
         ax.set_title("p for class 1 and the boundary", fontsize=T.panel_title_size)
     else:
         lo, hi = float(min(a.min(), y.min())), float(max(a.max(), y.max()))
@@ -1151,7 +1161,7 @@ def draw_input_plane(ax, S, F):
             zorder=3,
         )
         for c in range(D.G):
-            ax.text(gx[c][0] + 0.15, gx[c][1] + 0.15, letter(c), fontsize=T.letter_size)
+            ax.text(gx[c][0] + 0.15, gx[c][1] + 0.15, letter(c), fontsize=T.letter_size, path_effects=LETTER_HALO)
         ax.set_title("prediction over the input plane; points coloured by y", fontsize=T.panel_title_size)
     ax.set_aspect("equal")
     S.model.set_weights(w)
@@ -1180,9 +1190,10 @@ def draw_history(ax, S, F):
         positive = [v for v in values if v > 0] or [1.0]
         ax.set_yscale("log")
         ax.set_ylim(min(positive) * 0.7, max(positive) * 1.4)
-    else:
-        floor = 1.1 if S.task == "binary" else 0.0
-        ax.set_ylim(min(0.0, min(values)), max(floor, max(values) * 1.05))
+    else:  # fitted to the values, so that progress shows; R is never below 0
+        lo, hi = min(values), max(values)
+        pad = 0.12 * (hi - lo) if hi > lo else max(0.1 * abs(hi), 0.01)
+        ax.set_ylim(max(0.0, lo - pad), hi + pad)
     ax.set_title(f"R = {F.R:.4f}", fontsize=T.panel_title_size)
     if len(history) < 12:
         ax.set_xticks(range(len(history)))
@@ -1545,7 +1556,7 @@ def draw_hidden(ax, S, F):
             ax.contour(U1, U2, a, levels=10, cmap=T.value_cmap, linewidths=0.8)
         ax.scatter(H[:, 0], H[:, 1], c=colours, s=small, edgecolor="k", lw=0.3, zorder=3)
         for c in range(D.G):
-            ax.text(gh[c][0], gh[c][1], f"  {letter(c)}", fontsize=T.letter_size, zorder=4)
+            ax.text(gh[c][0], gh[c][1], f"  {letter(c)}", fontsize=T.letter_size, zorder=4, path_effects=LETTER_HALO)
         ax.set_xlim(*x0)
         ax.set_ylim(*x1)
         ax.set_xlabel(f"{label}1")
@@ -1977,7 +1988,7 @@ def draw_derivation(ax, S, F):
 # ------------------------ picture.py ------------------------
 
 Frame = namedtuple(
-    "Frame", "w out R g deltas changed moving history predictions eta next_change cases lookahead bp stage"
+    "Frame", "w out R g deltas changed moving history predictions eta next_change cases lookahead bp stage by_hand"
 )
 LIVE_DPI = 100  # resolution of the picture shown by the widgets
 
@@ -1996,7 +2007,9 @@ def make_frame(S, w=None):
         deltas.append(M.risk(D.X, D.y, wk) - R)
     M.set_weights(w)
     moving = set(S.active)
-    changed = {k for k in range(len(w)) if abs(w[k] - S.w0[k]) > 1e-9}
+    changed = {k for k in range(len(w)) if abs(w[k] - S.w0[k]) > 1e-9}  # moved from the start in any way
+    ref = S.path[-1]  # the weights after the last step (or at the start): a difference was made by hand
+    by_hand = {k for k in range(len(w)) if abs(w[k] - ref[k]) > 1e-6 * max(1.0, abs(ref[k]))}
     next_change = -S.eta * float(sum(g[k] ** 2 for k in moving))
     cases = M.case_slopes(D.X, D.y) if "cases" in S.views else None
     lookahead = S.lookahead(w=w) if "momentum" in S.views else None
@@ -2019,6 +2032,7 @@ def make_frame(S, w=None):
         lookahead,
         bp,
         stage,
+        by_hand,
     )
 
 
@@ -2092,9 +2106,13 @@ class Picture:
         if not self.laid_out:
             self.layout()
         shared = shared_labels(F)  # the weights are the same in every panel: the first panel carries their labels
+        first = "none"
         for c, (ax, (edges, obstacles)) in enumerate(zip(self.case_axes, parts)):
             if c == 0 or not shared:
-                draw_edge_labels(ax, S, F, edges, obstacles, label_spec(S, F, c))
+                mode = draw_edge_labels(ax, S, F, edges, obstacles, label_spec(S, F, c))
+                first = mode if c == 0 else first
+            elif first != "none":
+                draw_shared_note(ax, S)
         S.model.set_weights(F.w)
         self.frame = F
         return self.fig
@@ -2186,7 +2204,7 @@ LOOK = {  # where to look in the picture at each stage of the backward pass
 }
 HINTS = {
     "core": "Press gradient step to move every weight against its slope. Drag a slider to change one weight.",
-    "backprop": "Step from the output back to the first layer. The text under the picture follows one case.",
+    "backprop": "Step from the output back to the first layer. The text panel below the networks follows one case.",
     "views": "Tick a box to add a view under the network.",
 }
 BUTTONS = ("gradient step", "10 steps", "back one step", "reset")
@@ -2218,19 +2236,19 @@ def span(text, *styles):
     return f'<span style="{";".join(UI[s] for s in styles)}">{text}</span>'
 
 
-def readout_html(r):
-    """The status numbers: a row of labels, a row of values and a row of notes. R and the change of the last step
-    are large; the other numbers are smaller. The columns stay the same before and after the first step."""
-    if r["last"] is None:
+def readout_html(r, action=None):
+    """The status numbers: a row of labels, a row of values and a row of notes. R and the change of R in the last
+    action (a step, ten steps, back one step or a slider move; action: (change, note)) are large; the other numbers
+    are smaller. The columns stay the same before and after the first action."""
+    if action is None:
         change, note = span("none yet", "value", "quiet"), ""
     else:
-        predicted, actual = r["last"]
+        actual, note = action
         colour = UI["up"] if actual > 0 else UI["down"]
         change = f'<span style="{UI["big"]};color:{colour}">{actual:+.4f}</span>'
-        note = f"predicted {predicted:+.4f}"
     cells = [
         ("R", span(f"{r['R']:.4f}", "big"), ""),
-        ("change of R in the last step", change, note),
+        ("change of R in the last action", change, note),
         (f"next step, eta {r['eta']:g}: predicted change", span(f"{r['next_change']:+.4f}", "value"), ""),
         ("size of the gradient", span(f"{r['grad_norm']:.4f}", "value"), ""),
     ]
@@ -2281,6 +2299,8 @@ class Controller:
         self.depth = 0  # how many actions are running; the buttons are disabled while it is above 0
         self.picture = None
         self.last_R = None
+        self.action = None  # the change of R in the last action and a note on it, for the status
+        self.known = len(S.history)  # the length of the history when the controls last looked
         self.use_output = os.environ.get("SLOPEWALK_DISPLAY") == "output"  # fallback: the PNG through display()
         self.index = list(S.active)  # the weight of each slider
         self.sliders = []
@@ -2342,8 +2362,9 @@ class Controller:
         self.out = widgets.Output()
         self.status = widgets.VBox([self.readout, self.message], layout=widgets.Layout(margin="6px 0 8px 0"))
 
-        steps_row = widgets.HBox(
-            [self.eta, *self.buttons.values()],
+        self.button_row = widgets.HBox(list(self.buttons.values()), layout=widgets.Layout(flex_flow="row nowrap"))
+        steps_row = widgets.HBox(  # in a narrow window the buttons move below eta together
+            [self.eta, self.button_row],
             layout=widgets.Layout(align_items="center", flex_flow="row wrap", margin="0 0 12px 0"),
         )
         core = widgets.VBox([widgets.HTML(text_html(HINTS["core"])), steps_row, self.panel, self.frozen_note])
@@ -2425,7 +2446,7 @@ class Controller:
         return widgets.HBox([pick, holder])
 
     def backprop_tab(self, widgets):
-        """Previous and next stage, the stage and the case the text under the picture follows."""
+        """Previous and next stage, the stage and the case the text panel below the networks follows."""
         S = self.session
         n = len(S.backprop_stages)
         self.bp_prev = tip(widgets.Button(description="previous stage"), "the stage before")
@@ -2450,7 +2471,7 @@ class Controller:
             style={"description_width": "70px"},
             layout=widgets.Layout(width="190px"),
         )
-        tip(self.bp_case, "the group whose case the text under the picture follows")
+        tip(self.bp_case, "the group whose case the text panel below the networks follows")
         self.bp_prev.on_click(lambda _: setattr(self.bp_step, "value", max(0, self.bp_step.value - 1)))
         self.bp_next.on_click(lambda _: setattr(self.bp_step, "value", min(n - 1, self.bp_step.value + 1)))
         self.bp_step.observe(self.on_backprop, names="value")
@@ -2478,15 +2499,9 @@ class Controller:
             for v in VIEWS
             if v != "backprop"
         }
-        rows = [
-            widgets.HBox(
-                [box, widgets.HTML(span(VIEW_HELP[v], "small", "quiet"))], layout=widgets.Layout(align_items="center")
-            )
-            for v, box in self.view_boxes.items()
-        ]
 
-        def setting():  # the label column and width shared by the settings, each with its own layout
-            return dict(style={"description_width": UI["setting_label"]}, layout=widgets.Layout(width=UI["long"]))
+        def setting(label=UI["setting_label"], width=UI["long"]):  # each setting with its own layout
+            return dict(style={"description_width": label}, layout=widgets.Layout(width=width))
 
         self.case_pick = tip(
             widgets.Dropdown(options=names, value=names[S.case_weight], description="case slopes of", **setting()),
@@ -2496,12 +2511,15 @@ class Controller:
         b = S.slice_weights[1] if len(S.slice_weights) > 1 else None
         self.slice_pick = [
             tip(
-                widgets.Dropdown(options=names, value=names[a], description="slice over", **setting()),
+                widgets.Dropdown(options=names, value=names[a], description="slice over", **setting(width=UI["short"])),
                 "the first weight",
             ),
             tip(
                 widgets.Dropdown(
-                    options=["none"] + names, value="none" if b is None else names[b], description="and", **setting()
+                    options=["none"] + names,
+                    value="none" if b is None else names[b],
+                    description="and",
+                    **setting(label=UI["label"], width="190px"),
                 ),
                 "the second weight, or none for a curve over one weight",
             ),
@@ -2529,12 +2547,23 @@ class Controller:
         )
         for w in [*self.view_boxes.values(), self.case_pick, *self.slice_pick, self.beta, self.ahead, self.log_box]:
             w.observe(self.on_views, names="value")
-        columns = f"repeat(auto-fill, minmax({UI['long']}, 1fr))"
-        settings = widgets.GridBox(
-            [self.case_pick, *self.slice_pick, self.beta, self.ahead],
-            layout=widgets.Layout(grid_template_columns=columns, grid_gap=f"2px {UI['gap']}", margin="6px 0 0 0"),
-        )
-        return widgets.VBox([widgets.HTML(text_html(HINTS["views"])), *rows, self.log_box, settings])
+        self.settings = {"cases": [self.case_pick], "slice": self.slice_pick, "momentum": [self.beta, self.ahead]}
+        rows = [  # each view's checkbox, what it shows, and its settings in the same row
+            widgets.HBox(
+                [box, widgets.HTML(span(VIEW_HELP[v], "small", "quiet"), layout=widgets.Layout(width="460px"))]
+                + self.settings.get(v, []),
+                layout=widgets.Layout(align_items="center", flex_flow="row wrap"),
+            )
+            for v, box in self.view_boxes.items()
+        ]
+        self.update_settings()
+        return widgets.VBox([widgets.HTML(text_html(HINTS["views"])), *rows, self.log_box])
+
+    def update_settings(self):
+        """The settings of a view can be changed while the view is on."""
+        for v, controls in self.settings.items():
+            for w in controls:
+                w.disabled = not self.view_boxes[v].value
 
     # ---------------------------------------------------------------- state
 
@@ -2588,6 +2617,8 @@ class Controller:
         S = self.session
         if change is not None:
             S.last_moved = self.index[self.sliders.index(change["owner"])]
+            if before is not None:
+                self.action = (S.risk(self.values()) - before, f"{change['owner'].description} moved by hand")
         S.model.set_weights(self.values())
         self.redraw()
         if change is not None and before is not None:
@@ -2636,11 +2667,29 @@ class Controller:
         S.log_scale = bool(self.log_box.value)
         self.picture = None  # the panels changed: a new figure
         self.redraw()
+        self.update_settings()
         shown = [VIEW_LABELS[v] for v in S.views if v != "backprop"]
         self.say("Views: " + (", ".join(shown) if shown else "none") + ".")
 
+    def note_action(self):
+        """The last action, read from the history: k new steps, a step undone, or a fresh start."""
+        S = self.session
+        n = len(S.history)
+        if n == 1 and not S.predictions:
+            self.action = None
+        elif n > self.known and self.last_R is not None:
+            k = n - self.known
+            predicted = sum(p.predicted - p.before for p in S.predictions[-k:])
+            what = "one step" if k == 1 else f"{k} steps"
+            self.action = (S.history[-1] - self.last_R, f"{what}, predicted {predicted:+.4f}")
+        elif n < self.known and self.last_R is not None:
+            self.action = (S.risk() - self.last_R, "back one step")
+        self.known = n
+
     def sync(self):
-        """After steps, reset or record in code: the sliders show the network's weights, then one redraw."""
+        """After steps, back one step, reset or record, also in code: the status notes the action, the sliders show
+        the network's weights, then one redraw."""
+        self.note_action()
         self.busy = True
         try:
             w = self.session.weights()
@@ -2707,7 +2756,7 @@ class Controller:
             S.fig = self.picture.fig
             self.last_R = self.picture.frame.R
             png = self.picture.png()
-            self.readout.value = readout_html(S.readouts(self.eta.value, w))
+            self.readout.value = readout_html(S.readouts(self.eta.value, w), self.action)
             if self.use_output:
                 from IPython.display import Image, clear_output, display
 
