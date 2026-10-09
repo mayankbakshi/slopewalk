@@ -201,14 +201,22 @@ class Controller:
             "wide: all networks in one row; standard: two per row, with larger text on small screens",
         )
         self.layout_pick.observe(self.on_layout, names="value")
+        self.theme_pick = tip(
+            widgets.ToggleButtons(
+                options=["light", "dark"],
+                value=S.theme_name if S.theme_name in ("light", "dark") else "light",
+                style={"button_width": "80px"},
+            ),
+            "the colours of the picture: light, or dark for a dark notebook theme",
+        )
+        self.theme_pick.observe(self.on_theme, names="value")
+
+        def label(text, left="0"):
+            return widgets.HTML(span(text, "small", "quiet"), layout=widgets.Layout(margin=f"0 12px 0 {left}"))
+
         self.layout_row = widgets.HBox(
-            [
-                widgets.HTML(
-                    span("layout of the picture", "small", "quiet"), layout=widgets.Layout(margin="0 12px 0 0")
-                ),
-                self.layout_pick,
-            ],
-            layout=widgets.Layout(align_items="center", margin="14px 0 0 0"),
+            [label("layout of the picture"), self.layout_pick, label("colours", "32px"), self.theme_pick],
+            layout=widgets.Layout(align_items="center", flex_flow="row wrap", margin="14px 0 0 0"),
         )
 
         self.message = widgets.HTML()
@@ -505,6 +513,14 @@ class Controller:
         self.redraw()
         where = "all networks in one row" if change["new"] == "wide" else "two networks per row, larger text"
         self.say(f"Layout {change['new']}: {where}.")
+
+    def on_theme(self, change):
+        """Switches the colours of the picture: a new figure."""
+        self.session.set_theme(change["new"])
+        self.picture = None
+        self.redraw()
+        where = "for a dark notebook theme" if change["new"] == "dark" else "for a light notebook theme"
+        self.say(f"Colours {change['new']}: {where}.")
 
     def on_views(self, *_):
         if self.busy:

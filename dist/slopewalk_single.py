@@ -22,7 +22,7 @@ import torch.nn.functional as F
 from contextlib import contextmanager
 from matplotlib import patheffects
 from matplotlib.backends.backend_agg import FigureCanvasAgg
-from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.colors import LinearSegmentedColormap, to_rgba
 from matplotlib.figure import Figure
 from matplotlib.font_manager import FontProperties
 from matplotlib.patches import BoxStyle, Rectangle
@@ -731,6 +731,7 @@ class Theme:
         "#1F2328",
     )
     landscape_low = "#59636E"  # R over two weights: low R in this colour, high R in paper
+    spine = "#8C959F"  # the frames of the panels below the networks
 
     def plane_colormap(self):
         """p for class 1 over the input plane: class 0 colour, paper at p = 0.5, class 1 colour."""
@@ -751,7 +752,52 @@ class Theme:
         return out
 
 
+class DarkTheme(Theme):
+    """The same picture for a dark notebook theme: light ink on dark paper. Ratios against #1E1E1E."""
+
+    paper, ink, muted = "#1E1E1E", "#E6EDF3", "#9AA4AF"  # ink 14.1:1, muted 6.6:1
+    class_colour = {0: "#58A6FF", 1: "#FF7B72"}  # 6.6:1 and 6.6:1
+    class_tint = {0: "#1B2B40", 1: "#3D1F22"}
+    mixed_colour, mixed_tint = "#E6EDF3", "#2B2F36"
+    neutral_colour, neutral_tint = "#C9D1D9", "#2B2F36"
+    positive, negative, negative_text = "#C9D1D9", "#F0883E", "#F0883E"  # lines and numbers 6.6:1
+    frozen_text, frozen_fill = "#9AA4AF", "#25292F"
+    hidden = "#56D364"
+    arrow, curve, node_edge = "#6E7681", "#9AA4AF", "#6E7681"
+    start_colour, prediction_colour = "#9AA4AF", "#8B949E"
+    gd_colour, momentum_colour = "#9AA4AF", "#E3B341"
+    value_box = dict(boxstyle="round,pad=0.25", fc="#2B2F36", ec="#4A525C", lw=0.8)
+    plane_alpha = 0.45
+    table_edge, table_head, table_highlight = "#3A4048", "#2B2F36", "#4A3F14"
+    backprop_colour, backprop_tint = "#BC8CFF", "#2E2540"
+    marker_edge, boundary = "#0D1117", "#E6EDF3"
+    note_text, derivation_text, derivation_muted, point_neutral = "#9AA4AF", "#E6EDF3", "#8B949E", "#9AA4AF"
+    glyph_fill, glyph_edge, node_fill, label_backing = "#1E1E1E", "#4A525C", "#1E1E1E", "#1E1E1E"
+    reference_line, zero_line, landscape_line, plane_surface, path_colour = (
+        "#4A525C",
+        "#3A4048",
+        "#6E7681",
+        "#6E7681",
+        "#E6EDF3",
+    )
+    landscape_low = "#C9D1D9"
+    spine = "#4A525C"
+
+
 THEME = Theme()
+DARK_THEME = DarkTheme()
+THEMES = {"light": THEME, "dark": DARK_THEME}
+
+
+def as_theme(theme):
+    """A Theme from "light", "dark", a Theme, or None (light)."""
+    if theme is None:
+        return THEME
+    if isinstance(theme, str):
+        if theme not in THEMES:
+            raise ValueError(f"slopewalk: theme must be 'light' or 'dark', not {theme!r}.")
+        return THEMES[theme]
+    return theme
 
 
 def halo(T):
@@ -939,11 +985,30 @@ def draw_shared_note(ax, S):
 
 
 def style_panel(ax, T):
-    """The panels below the networks: the sizes of their tick labels and axis labels."""
-    ax.tick_params(labelsize=T.tick_size)
-    axes = [ax.xaxis, ax.yaxis] + ([ax.zaxis] if hasattr(ax, "zaxis") else [])
+    """The panels below the networks in the theme's colours and sizes: background, frame, ticks, axis labels, titles,
+    legend, and the panes of a 3-D panel. Set after drawing, so that tick labels made later follow too."""
+    ax.set_facecolor(T.paper)
+    for spine in ax.spines.values():
+        spine.set_color(T.spine)
+    ax.tick_params(labelsize=T.tick_size, colors=T.muted)
+    axes = [ax.xaxis, ax.yaxis]
+    if hasattr(ax, "zaxis"):
+        axes.append(ax.zaxis)
+        ax.tick_params(axis="z", labelsize=T.tick_size, colors=T.muted)
     for axis in axes:
         axis.label.set_size(T.axis_label_size)
+        axis.label.set_color(T.ink)
+        if hasattr(axis, "set_pane_color"):
+            axis.set_pane_color(to_rgba(T.value_box["fc"]))
+    for title in (ax.title, getattr(ax, "_left_title", None), getattr(ax, "_right_title", None)):
+        if title is not None:
+            title.set_color(T.ink)
+    legend = ax.get_legend()
+    if legend is not None:
+        legend.get_frame().set_facecolor(T.paper)
+        legend.get_frame().set_edgecolor(T.reference_line)
+        for text in legend.get_texts():
+            text.set_color(T.ink)
 
 
 def draw_case(ax, S, F, c, styles=None):
@@ -956,7 +1021,7 @@ def draw_case(ax, S, F, c, styles=None):
     out, w = F.out, F.w
     col, tint, mixed, yi = group_style(S, c)
     arrow = dict(arrowstyle="-|>", color=T.arrow, lw=1.0, shrinkA=0, shrinkB=0)
-    node = dict(fontsize=T.node_size, ha="center", va="center", zorder=4)
+    node = dict(fontsize=T.node_size, ha="center", va="center", zorder=4, color=T.ink)
     value = dict(fontsize=T.value_size, ha="center", va="center", zorder=5, bbox=T.value_box, color=T.ink)
     h_value = dict(value, bbox=dict(T.value_box, ec=T.hidden, lw=1.2))  # the hidden layer: a green border
     edges, obstacles = [], []  # edges: (k, source, target, preferred label fraction); obstacles: boxes to keep clear
@@ -969,7 +1034,7 @@ def draw_case(ax, S, F, c, styles=None):
         tx = (L.x_a if last else L.blocks[l][0]) - BW
         tys = np.array([1.2]) if last else L.unit_ys(layer.out_features)
         bias = (src_x if l == 0 else src_x + 0.45, 2.8)
-        ax.text(*bias, "1", color=T.ink, bbox=dict(boxstyle="circle", fc=T.node_fill, ec=T.node_edge), **node)
+        ax.text(*bias, "1", bbox=dict(boxstyle="circle", fc=T.node_fill, ec=T.node_edge), **node)
         sources = src + [(bias[0] + 0.1, bias[1] - 0.1)]
         ns, nt = len(sources), len(tys)
         for j, ty in enumerate(tys):
@@ -1116,7 +1181,16 @@ def draw_group_marks(ax, S, xs, ys, size=160):
         col, _, _, yi = group_style(S, c)
         face = "white" if D.task == "regression" else T.class_colour[yi]
         ax.scatter(xs[c], ys[c], s=size, color=face, edgecolor=T.marker_edge, zorder=4)
-        ax.text(xs[c], ys[c], f"  {letter(c)}", fontsize=T.letter_size, va="bottom", zorder=5, path_effects=halo(T))
+        ax.text(
+            xs[c],
+            ys[c],
+            f"  {letter(c)}",
+            fontsize=T.letter_size,
+            va="bottom",
+            zorder=5,
+            path_effects=halo(T),
+            color=T.ink,
+        )
 
 
 def draw_input_plane(ax, S, F):
@@ -1158,7 +1232,7 @@ def draw_input_plane(ax, S, F):
         return
     if D.d != 2:
         ax.axis("off")
-        ax.text(0.5, 0.5, f"{D.d} inputs: no picture of the input plane", ha="center", va="center")
+        ax.text(0.5, 0.5, f"{D.d} inputs: no picture of the input plane", ha="center", va="center", color=T.muted)
         return
     P1, P2, grid = plane_grid(S)
     a = net_on(S, grid, w).reshape(P1.shape)
@@ -1176,7 +1250,9 @@ def draw_input_plane(ax, S, F):
         for c in range(D.G):
             yi = group_style(S, c)[3]
             ax.scatter(*gx[c], s=160, color=T.class_colour[yi], edgecolor=T.marker_edge, zorder=3)
-            ax.text(gx[c][0] + 0.15, gx[c][1] + 0.15, letter(c), fontsize=T.letter_size, path_effects=halo(T))
+            ax.text(
+                gx[c][0] + 0.15, gx[c][1] + 0.15, letter(c), fontsize=T.letter_size, path_effects=halo(T), color=T.ink
+            )
         ax.set_title("p for class 1 and the boundary", fontsize=T.panel_title_size)
     else:
         lo, hi = float(min(a.min(), y.min())), float(max(a.max(), y.max()))
@@ -1195,7 +1271,9 @@ def draw_input_plane(ax, S, F):
             zorder=3,
         )
         for c in range(D.G):
-            ax.text(gx[c][0] + 0.15, gx[c][1] + 0.15, letter(c), fontsize=T.letter_size, path_effects=halo(T))
+            ax.text(
+                gx[c][0] + 0.15, gx[c][1] + 0.15, letter(c), fontsize=T.letter_size, path_effects=halo(T), color=T.ink
+            )
         ax.set_title("prediction over the input plane; points coloured by y", fontsize=T.panel_title_size)
     ax.set_aspect("equal")
     S.model.set_weights(w)
@@ -1296,7 +1374,7 @@ def draw_slope_table(ax, S, F):
         tbl = ax.table(
             cellText=block,
             colLabels=headers,
-            colWidths=[0.15, 0.18, 0.41, 0.26],
+            colWidths=[0.17, 0.18, 0.39, 0.26],
             cellLoc="right",
             colLoc="center",
             bbox=[b * (width + gap), 1 - height, width, height],
@@ -1311,6 +1389,7 @@ def draw_slope_table(ax, S, F):
             if r == 0:
                 cell.set_facecolor(T.table_head)
                 text.set_fontweight("bold")
+                text.set_fontsize(0.9 * fontsize)  # the headers a little smaller than the numbers
                 continue
             k = b * per_block + r - 1
             if c > 0:
@@ -1327,9 +1406,9 @@ def draw_slope_table(ax, S, F):
 VIEWS = ("backprop", "cases", "slice", "line", "hidden", "momentum")
 
 
-def message(ax, text):
+def message(ax, T, text):
     ax.axis("off")
-    ax.text(0.5, 0.5, text, ha="center", va="center", wrap=True)
+    ax.text(0.5, 0.5, text, ha="center", va="center", wrap=True, color=T.muted)
 
 
 def point_colours(S):
@@ -1490,7 +1569,7 @@ def draw_slice(ax, S, F):
     ax.set_xlabel(names[0])
     ax.set_ylabel(names[1])
     ax.legend(fontsize=T.legend_size, loc="best")
-    title = f"R over {names[0]} and {names[1]}, with the direction of -grad R"
+    title = f"R over {names[0]} and {names[1]},\nwith the direction of -grad R"
     ax.set_title(title + (f"\n{note}" if note else ""), fontsize=T.panel_title_size)
 
 
@@ -1505,7 +1584,7 @@ def draw_line(ax, S, F):
     g = moving_slopes(F)
     g2 = float((g**2).sum())
     if g2 == 0:
-        message(ax, "every slope is 0:\nno step")
+        message(ax, T, "every slope is 0:\nno step")
         return
     eta = F.eta
     ts = np.linspace(0, 2.5 * eta, 101)
@@ -1566,7 +1645,7 @@ def draw_hidden(ax, S, F):
     D, T = S.data, S.theme
     m = hidden_width(S)
     if m == 0:
-        message(ax, "no hidden layer:\nthe output unit sees x itself")
+        message(ax, T, "no hidden layer:\nthe output unit sees x itself")
         return
     H = np.asarray(F.out.hidden[-1][1], dtype=float)
     v, b = output_weights(S, F.w)
@@ -1605,7 +1684,15 @@ def draw_hidden(ax, S, F):
             ax.contour(U1, U2, a, levels=10, cmap=T.value_cmap, linewidths=0.8)
         ax.scatter(H[:, 0], H[:, 1], c=colours, s=small, edgecolor=T.marker_edge, lw=0.3, zorder=3)
         for c in range(D.G):
-            ax.text(gh[c][0], gh[c][1], f"  {letter(c)}", fontsize=T.letter_size, zorder=4, path_effects=halo(T))
+            ax.text(
+                gh[c][0],
+                gh[c][1],
+                f"  {letter(c)}",
+                fontsize=T.letter_size,
+                zorder=4,
+                path_effects=halo(T),
+                color=T.ink,
+            )
         ax.set_xlim(*x0)
         ax.set_ylim(*x1)
         ax.set_xlabel(f"{label}1")
@@ -2133,9 +2220,9 @@ class Picture:
         n_bottom = len(lower)
         size = (L.width, L.row_height(with_sd, backprop) * rows + BOTTOM_HEIGHT * n_bottom)
         if pyplot:
-            fig = plt.figure(figsize=size)
+            fig = plt.figure(figsize=size, facecolor=S.theme.paper)
         else:
-            fig = Figure(figsize=size, dpi=dpi)
+            fig = Figure(figsize=size, dpi=dpi, facecolor=S.theme.paper)
             FigureCanvasAgg(fig)
         heights = [L.row_height(with_sd, backprop)] * rows + [BOTTOM_HEIGHT] * n_bottom
         gs = fig.add_gridspec(rows + n_bottom, 1, height_ratios=heights)  # every row has its own grid and spacing
@@ -2155,7 +2242,7 @@ class Picture:
                     extra = {"projection": "3d"} if name == "hidden" and needs_3d(S) else {}
                     self.axes[name] = fig.add_subplot(cells[0, c], **extra)
         if S.title:
-            fig.suptitle(S.title, fontsize=S.theme.suptitle_size)
+            fig.suptitle(S.title, fontsize=S.theme.suptitle_size, color=S.theme.ink)
         self.fig = fig
         self.laid_out = False
 
@@ -2423,14 +2510,22 @@ class Controller:
             "wide: all networks in one row; standard: two per row, with larger text on small screens",
         )
         self.layout_pick.observe(self.on_layout, names="value")
+        self.theme_pick = tip(
+            widgets.ToggleButtons(
+                options=["light", "dark"],
+                value=S.theme_name if S.theme_name in ("light", "dark") else "light",
+                style={"button_width": "80px"},
+            ),
+            "the colours of the picture: light, or dark for a dark notebook theme",
+        )
+        self.theme_pick.observe(self.on_theme, names="value")
+
+        def label(text, left="0"):
+            return widgets.HTML(span(text, "small", "quiet"), layout=widgets.Layout(margin=f"0 12px 0 {left}"))
+
         self.layout_row = widgets.HBox(
-            [
-                widgets.HTML(
-                    span("layout of the picture", "small", "quiet"), layout=widgets.Layout(margin="0 12px 0 0")
-                ),
-                self.layout_pick,
-            ],
-            layout=widgets.Layout(align_items="center", margin="14px 0 0 0"),
+            [label("layout of the picture"), self.layout_pick, label("colours", "32px"), self.theme_pick],
+            layout=widgets.Layout(align_items="center", flex_flow="row wrap", margin="14px 0 0 0"),
         )
 
         self.message = widgets.HTML()
@@ -2728,6 +2823,14 @@ class Controller:
         where = "all networks in one row" if change["new"] == "wide" else "two networks per row, larger text"
         self.say(f"Layout {change['new']}: {where}.")
 
+    def on_theme(self, change):
+        """Switches the colours of the picture: a new figure."""
+        self.session.set_theme(change["new"])
+        self.picture = None
+        self.redraw()
+        where = "for a dark notebook theme" if change["new"] == "dark" else "for a light notebook theme"
+        self.say(f"Colours {change['new']}: {where}.")
+
     def on_views(self, *_):
         if self.busy:
             return
@@ -2933,8 +3036,8 @@ class Session:
         self.data = prepare(X, y, groups, n_inputs=self.model.n_inputs, dtype=self.model.dtype, task=task)
         self.task = self.model.task = self.data.task
         self.layout = Layout(self.model.n_inputs, self.model.hidden, self.task, style=layout, width=width)
-        self.base_theme = theme or THEME
-        self.theme = self.base_theme.scaled(self.layout.text_scale)
+        self.base_theme, self.theme_name = THEMES["light"], "light"
+        self.set_theme(theme)
         self.title = title
         self.eta = check_eta(eta)
         self.active = self.model.select(params)
@@ -2996,6 +3099,12 @@ class Session:
     def set_layout(self, style, width=None):
         """Switches the layout of the picture: "standard" or "wide" (the widgets also move the controls)."""
         self.layout = Layout(self.model.n_inputs, self.model.hidden, self.task, style=style, width=width)
+        self.theme = self.base_theme.scaled(self.layout.text_scale)
+
+    def set_theme(self, theme):
+        """The colours of the picture: "light", "dark", or a Theme (the widgets draw a new picture)."""
+        self.base_theme = as_theme(theme)
+        self.theme_name = theme if isinstance(theme, str) else ("light" if theme is None else "custom")
         self.theme = self.base_theme.scaled(self.layout.text_scale)
 
     def weight_index(self, v):
@@ -3240,6 +3349,7 @@ def explore(
     width=None,
     backprop_step=0,
     backprop_case=0,
+    theme="light",
 ):
     """Gradient descent by hand on `net`, with inputs X (n x d) and labels y.
 
@@ -3258,16 +3368,19 @@ def explore(
     row), or "auto" (the default): wide where the sliders run, standard in Colab, whose notebooks have a fixed width,
     and for still pictures. The controls are under the picture in both. width: the figure width in inches.
     backprop_step: with the view "backprop", the stage of the backward pass drawn (0: the forward pass; a step above
-    0 switches the view on); backprop_case: the group whose case the derivation follows ("A" or 0 is the first).
+    0 switches the view on); backprop_case: the group whose case the worked example follows ("A" or 0 is the first).
+    theme: "light" (the default) or "dark", the colours of the picture for a light or a dark notebook theme; the
+    controls follow the notebook's own theme.
 
     Draws one copy of the network per group (every value a mean ± standard deviation over the group), with each
     weight on its line, the units as z, activation and h, then the output and the loss with its change from the
     start. Below: the input plane, R over the steps taken with the first-order prediction of each step, and a table
     with each weight's value, the change of R for +0.1 and the slope dR/dw from R.backward().
-    With ipywidgets: sliders for the weights, eta, `gradient step`, `10 steps`, `reset`, a strip of readouts and a
-    "More views" section. The sliders change the weights of `net` itself. Without ipywidgets, or with NB_STATIC=1,
-    a still picture of the start.
-    Returns a Session: step(k), reset(), save(path), record(path), weights(), history.
+    With ipywidgets: under the picture, the status (R and the change of R in the last action), then sliders for the
+    weights, eta, `gradient step`, `10 steps`, `back one step`, `reset`, and switches for the layout and the colours
+    of the picture. The sliders change the weights of `net` itself. Without ipywidgets, or with NB_STATIC=1, a still
+    picture of the start.
+    Returns a Session: step(k), step_back(), reset(), save(path), record(path), weights(), history.
     """
     if layout == "auto":
         layout = auto_layout()
@@ -3291,6 +3404,7 @@ def explore(
         backprop_step=backprop_step,
         backprop_case=backprop_case,
     )
+    session.set_theme(theme)
     if os.environ.get("NB_STATIC") == "1":
         return still_picture(session, STATIC_MESSAGE)
     try:

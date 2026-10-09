@@ -8,7 +8,7 @@ import numpy as np
 
 from .backprop import backprop_stages
 from .data import prepare
-from .draw import THEME
+from .draw import THEMES, as_theme
 from .layout import Layout
 from .model import Model
 from .picture import Picture
@@ -97,8 +97,8 @@ class Session:
         self.data = prepare(X, y, groups, n_inputs=self.model.n_inputs, dtype=self.model.dtype, task=task)
         self.task = self.model.task = self.data.task
         self.layout = Layout(self.model.n_inputs, self.model.hidden, self.task, style=layout, width=width)
-        self.base_theme = theme or THEME
-        self.theme = self.base_theme.scaled(self.layout.text_scale)
+        self.base_theme, self.theme_name = THEMES["light"], "light"
+        self.set_theme(theme)
         self.title = title
         self.eta = check_eta(eta)
         self.active = self.model.select(params)
@@ -160,6 +160,12 @@ class Session:
     def set_layout(self, style, width=None):
         """Switches the layout of the picture: "standard" or "wide" (the widgets also move the controls)."""
         self.layout = Layout(self.model.n_inputs, self.model.hidden, self.task, style=style, width=width)
+        self.theme = self.base_theme.scaled(self.layout.text_scale)
+
+    def set_theme(self, theme):
+        """The colours of the picture: "light", "dark", or a Theme (the widgets draw a new picture)."""
+        self.base_theme = as_theme(theme)
+        self.theme_name = theme if isinstance(theme, str) else ("light" if theme is None else "custom")
         self.theme = self.base_theme.scaled(self.layout.text_scale)
 
     def weight_index(self, v):
@@ -404,6 +410,7 @@ def explore(
     width=None,
     backprop_step=0,
     backprop_case=0,
+    theme="light",
 ):
     """Gradient descent by hand on `net`, with inputs X (n x d) and labels y.
 
@@ -422,16 +429,19 @@ def explore(
     row), or "auto" (the default): wide where the sliders run, standard in Colab, whose notebooks have a fixed width,
     and for still pictures. The controls are under the picture in both. width: the figure width in inches.
     backprop_step: with the view "backprop", the stage of the backward pass drawn (0: the forward pass; a step above
-    0 switches the view on); backprop_case: the group whose case the derivation follows ("A" or 0 is the first).
+    0 switches the view on); backprop_case: the group whose case the worked example follows ("A" or 0 is the first).
+    theme: "light" (the default) or "dark", the colours of the picture for a light or a dark notebook theme; the
+    controls follow the notebook's own theme.
 
     Draws one copy of the network per group (every value a mean ± standard deviation over the group), with each
     weight on its line, the units as z, activation and h, then the output and the loss with its change from the
     start. Below: the input plane, R over the steps taken with the first-order prediction of each step, and a table
     with each weight's value, the change of R for +0.1 and the slope dR/dw from R.backward().
-    With ipywidgets: sliders for the weights, eta, `gradient step`, `10 steps`, `reset`, a strip of readouts and a
-    "More views" section. The sliders change the weights of `net` itself. Without ipywidgets, or with NB_STATIC=1,
-    a still picture of the start.
-    Returns a Session: step(k), reset(), save(path), record(path), weights(), history.
+    With ipywidgets: under the picture, the status (R and the change of R in the last action), then sliders for the
+    weights, eta, `gradient step`, `10 steps`, `back one step`, `reset`, and switches for the layout and the colours
+    of the picture. The sliders change the weights of `net` itself. Without ipywidgets, or with NB_STATIC=1, a still
+    picture of the start.
+    Returns a Session: step(k), step_back(), reset(), save(path), record(path), weights(), history.
     """
     if layout == "auto":
         layout = auto_layout()
@@ -455,6 +465,7 @@ def explore(
         backprop_step=backprop_step,
         backprop_case=backprop_case,
     )
+    session.set_theme(theme)
     if os.environ.get("NB_STATIC") == "1":
         return still_picture(session, STATIC_MESSAGE)
     try:

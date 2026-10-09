@@ -14,9 +14,9 @@ from .draw import halo, letter
 VIEWS = ("backprop", "cases", "slice", "line", "hidden", "momentum")
 
 
-def message(ax, text):
+def message(ax, T, text):
     ax.axis("off")
-    ax.text(0.5, 0.5, text, ha="center", va="center", wrap=True)
+    ax.text(0.5, 0.5, text, ha="center", va="center", wrap=True, color=T.muted)
 
 
 def point_colours(S):
@@ -177,7 +177,7 @@ def draw_slice(ax, S, F):
     ax.set_xlabel(names[0])
     ax.set_ylabel(names[1])
     ax.legend(fontsize=T.legend_size, loc="best")
-    title = f"R over {names[0]} and {names[1]}, with the direction of -grad R"
+    title = f"R over {names[0]} and {names[1]},\nwith the direction of -grad R"
     ax.set_title(title + (f"\n{note}" if note else ""), fontsize=T.panel_title_size)
 
 
@@ -192,7 +192,7 @@ def draw_line(ax, S, F):
     g = moving_slopes(F)
     g2 = float((g**2).sum())
     if g2 == 0:
-        message(ax, "every slope is 0:\nno step")
+        message(ax, T, "every slope is 0:\nno step")
         return
     eta = F.eta
     ts = np.linspace(0, 2.5 * eta, 101)
@@ -253,7 +253,7 @@ def draw_hidden(ax, S, F):
     D, T = S.data, S.theme
     m = hidden_width(S)
     if m == 0:
-        message(ax, "no hidden layer:\nthe output unit sees x itself")
+        message(ax, T, "no hidden layer:\nthe output unit sees x itself")
         return
     H = np.asarray(F.out.hidden[-1][1], dtype=float)
     v, b = output_weights(S, F.w)
@@ -292,7 +292,15 @@ def draw_hidden(ax, S, F):
             ax.contour(U1, U2, a, levels=10, cmap=T.value_cmap, linewidths=0.8)
         ax.scatter(H[:, 0], H[:, 1], c=colours, s=small, edgecolor=T.marker_edge, lw=0.3, zorder=3)
         for c in range(D.G):
-            ax.text(gh[c][0], gh[c][1], f"  {letter(c)}", fontsize=T.letter_size, zorder=4, path_effects=halo(T))
+            ax.text(
+                gh[c][0],
+                gh[c][1],
+                f"  {letter(c)}",
+                fontsize=T.letter_size,
+                zorder=4,
+                path_effects=halo(T),
+                color=T.ink,
+            )
         ax.set_xlim(*x0)
         ax.set_ylim(*x1)
         ax.set_xlabel(f"{label}1")

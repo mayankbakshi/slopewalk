@@ -9,7 +9,7 @@ import copy
 import numpy as np
 import torch
 from matplotlib import patheffects
-from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.colors import LinearSegmentedColormap, to_rgba
 from matplotlib.font_manager import FontProperties
 from matplotlib.patches import BoxStyle, Rectangle
 
@@ -58,6 +58,7 @@ class Theme:
         "#1F2328",
     )
     landscape_low = "#59636E"  # R over two weights: low R in this colour, high R in paper
+    spine = "#8C959F"  # the frames of the panels below the networks
 
     def plane_colormap(self):
         """p for class 1 over the input plane: class 0 colour, paper at p = 0.5, class 1 colour."""
@@ -78,7 +79,52 @@ class Theme:
         return out
 
 
+class DarkTheme(Theme):
+    """The same picture for a dark notebook theme: light ink on dark paper. Ratios against #1E1E1E."""
+
+    paper, ink, muted = "#1E1E1E", "#E6EDF3", "#9AA4AF"  # ink 14.1:1, muted 6.6:1
+    class_colour = {0: "#58A6FF", 1: "#FF7B72"}  # 6.6:1 and 6.6:1
+    class_tint = {0: "#1B2B40", 1: "#3D1F22"}
+    mixed_colour, mixed_tint = "#E6EDF3", "#2B2F36"
+    neutral_colour, neutral_tint = "#C9D1D9", "#2B2F36"
+    positive, negative, negative_text = "#C9D1D9", "#F0883E", "#F0883E"  # lines and numbers 6.6:1
+    frozen_text, frozen_fill = "#9AA4AF", "#25292F"
+    hidden = "#56D364"
+    arrow, curve, node_edge = "#6E7681", "#9AA4AF", "#6E7681"
+    start_colour, prediction_colour = "#9AA4AF", "#8B949E"
+    gd_colour, momentum_colour = "#9AA4AF", "#E3B341"
+    value_box = dict(boxstyle="round,pad=0.25", fc="#2B2F36", ec="#4A525C", lw=0.8)
+    plane_alpha = 0.45
+    table_edge, table_head, table_highlight = "#3A4048", "#2B2F36", "#4A3F14"
+    backprop_colour, backprop_tint = "#BC8CFF", "#2E2540"
+    marker_edge, boundary = "#0D1117", "#E6EDF3"
+    note_text, derivation_text, derivation_muted, point_neutral = "#9AA4AF", "#E6EDF3", "#8B949E", "#9AA4AF"
+    glyph_fill, glyph_edge, node_fill, label_backing = "#1E1E1E", "#4A525C", "#1E1E1E", "#1E1E1E"
+    reference_line, zero_line, landscape_line, plane_surface, path_colour = (
+        "#4A525C",
+        "#3A4048",
+        "#6E7681",
+        "#6E7681",
+        "#E6EDF3",
+    )
+    landscape_low = "#C9D1D9"
+    spine = "#4A525C"
+
+
 THEME = Theme()
+DARK_THEME = DarkTheme()
+THEMES = {"light": THEME, "dark": DARK_THEME}
+
+
+def as_theme(theme):
+    """A Theme from "light", "dark", a Theme, or None (light)."""
+    if theme is None:
+        return THEME
+    if isinstance(theme, str):
+        if theme not in THEMES:
+            raise ValueError(f"slopewalk: theme must be 'light' or 'dark', not {theme!r}.")
+        return THEMES[theme]
+    return theme
 
 
 def halo(T):
@@ -266,11 +312,30 @@ def draw_shared_note(ax, S):
 
 
 def style_panel(ax, T):
-    """The panels below the networks: the sizes of their tick labels and axis labels."""
-    ax.tick_params(labelsize=T.tick_size)
-    axes = [ax.xaxis, ax.yaxis] + ([ax.zaxis] if hasattr(ax, "zaxis") else [])
+    """The panels below the networks in the theme's colours and sizes: background, frame, ticks, axis labels, titles,
+    legend, and the panes of a 3-D panel. Set after drawing, so that tick labels made later follow too."""
+    ax.set_facecolor(T.paper)
+    for spine in ax.spines.values():
+        spine.set_color(T.spine)
+    ax.tick_params(labelsize=T.tick_size, colors=T.muted)
+    axes = [ax.xaxis, ax.yaxis]
+    if hasattr(ax, "zaxis"):
+        axes.append(ax.zaxis)
+        ax.tick_params(axis="z", labelsize=T.tick_size, colors=T.muted)
     for axis in axes:
         axis.label.set_size(T.axis_label_size)
+        axis.label.set_color(T.ink)
+        if hasattr(axis, "set_pane_color"):
+            axis.set_pane_color(to_rgba(T.value_box["fc"]))
+    for title in (ax.title, getattr(ax, "_left_title", None), getattr(ax, "_right_title", None)):
+        if title is not None:
+            title.set_color(T.ink)
+    legend = ax.get_legend()
+    if legend is not None:
+        legend.get_frame().set_facecolor(T.paper)
+        legend.get_frame().set_edgecolor(T.reference_line)
+        for text in legend.get_texts():
+            text.set_color(T.ink)
 
 
 def draw_case(ax, S, F, c, styles=None):
@@ -283,7 +348,7 @@ def draw_case(ax, S, F, c, styles=None):
     out, w = F.out, F.w
     col, tint, mixed, yi = group_style(S, c)
     arrow = dict(arrowstyle="-|>", color=T.arrow, lw=1.0, shrinkA=0, shrinkB=0)
-    node = dict(fontsize=T.node_size, ha="center", va="center", zorder=4)
+    node = dict(fontsize=T.node_size, ha="center", va="center", zorder=4, color=T.ink)
     value = dict(fontsize=T.value_size, ha="center", va="center", zorder=5, bbox=T.value_box, color=T.ink)
     h_value = dict(value, bbox=dict(T.value_box, ec=T.hidden, lw=1.2))  # the hidden layer: a green border
     edges, obstacles = [], []  # edges: (k, source, target, preferred label fraction); obstacles: boxes to keep clear
@@ -296,7 +361,7 @@ def draw_case(ax, S, F, c, styles=None):
         tx = (L.x_a if last else L.blocks[l][0]) - BW
         tys = np.array([1.2]) if last else L.unit_ys(layer.out_features)
         bias = (src_x if l == 0 else src_x + 0.45, 2.8)
-        ax.text(*bias, "1", color=T.ink, bbox=dict(boxstyle="circle", fc=T.node_fill, ec=T.node_edge), **node)
+        ax.text(*bias, "1", bbox=dict(boxstyle="circle", fc=T.node_fill, ec=T.node_edge), **node)
         sources = src + [(bias[0] + 0.1, bias[1] - 0.1)]
         ns, nt = len(sources), len(tys)
         for j, ty in enumerate(tys):
@@ -443,7 +508,16 @@ def draw_group_marks(ax, S, xs, ys, size=160):
         col, _, _, yi = group_style(S, c)
         face = "white" if D.task == "regression" else T.class_colour[yi]
         ax.scatter(xs[c], ys[c], s=size, color=face, edgecolor=T.marker_edge, zorder=4)
-        ax.text(xs[c], ys[c], f"  {letter(c)}", fontsize=T.letter_size, va="bottom", zorder=5, path_effects=halo(T))
+        ax.text(
+            xs[c],
+            ys[c],
+            f"  {letter(c)}",
+            fontsize=T.letter_size,
+            va="bottom",
+            zorder=5,
+            path_effects=halo(T),
+            color=T.ink,
+        )
 
 
 def draw_input_plane(ax, S, F):
@@ -485,7 +559,7 @@ def draw_input_plane(ax, S, F):
         return
     if D.d != 2:
         ax.axis("off")
-        ax.text(0.5, 0.5, f"{D.d} inputs: no picture of the input plane", ha="center", va="center")
+        ax.text(0.5, 0.5, f"{D.d} inputs: no picture of the input plane", ha="center", va="center", color=T.muted)
         return
     P1, P2, grid = plane_grid(S)
     a = net_on(S, grid, w).reshape(P1.shape)
@@ -503,7 +577,9 @@ def draw_input_plane(ax, S, F):
         for c in range(D.G):
             yi = group_style(S, c)[3]
             ax.scatter(*gx[c], s=160, color=T.class_colour[yi], edgecolor=T.marker_edge, zorder=3)
-            ax.text(gx[c][0] + 0.15, gx[c][1] + 0.15, letter(c), fontsize=T.letter_size, path_effects=halo(T))
+            ax.text(
+                gx[c][0] + 0.15, gx[c][1] + 0.15, letter(c), fontsize=T.letter_size, path_effects=halo(T), color=T.ink
+            )
         ax.set_title("p for class 1 and the boundary", fontsize=T.panel_title_size)
     else:
         lo, hi = float(min(a.min(), y.min())), float(max(a.max(), y.max()))
@@ -522,7 +598,9 @@ def draw_input_plane(ax, S, F):
             zorder=3,
         )
         for c in range(D.G):
-            ax.text(gx[c][0] + 0.15, gx[c][1] + 0.15, letter(c), fontsize=T.letter_size, path_effects=halo(T))
+            ax.text(
+                gx[c][0] + 0.15, gx[c][1] + 0.15, letter(c), fontsize=T.letter_size, path_effects=halo(T), color=T.ink
+            )
         ax.set_title("prediction over the input plane; points coloured by y", fontsize=T.panel_title_size)
     ax.set_aspect("equal")
     S.model.set_weights(w)
@@ -623,7 +701,7 @@ def draw_slope_table(ax, S, F):
         tbl = ax.table(
             cellText=block,
             colLabels=headers,
-            colWidths=[0.15, 0.18, 0.41, 0.26],
+            colWidths=[0.17, 0.18, 0.39, 0.26],
             cellLoc="right",
             colLoc="center",
             bbox=[b * (width + gap), 1 - height, width, height],
@@ -638,6 +716,7 @@ def draw_slope_table(ax, S, F):
             if r == 0:
                 cell.set_facecolor(T.table_head)
                 text.set_fontweight("bold")
+                text.set_fontsize(0.9 * fontsize)  # the headers a little smaller than the numbers
                 continue
             k = b * per_block + r - 1
             if c > 0:

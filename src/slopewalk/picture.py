@@ -98,9 +98,9 @@ class Picture:
         n_bottom = len(lower)
         size = (L.width, L.row_height(with_sd, backprop) * rows + BOTTOM_HEIGHT * n_bottom)
         if pyplot:
-            fig = plt.figure(figsize=size)
+            fig = plt.figure(figsize=size, facecolor=S.theme.paper)
         else:
-            fig = Figure(figsize=size, dpi=dpi)
+            fig = Figure(figsize=size, dpi=dpi, facecolor=S.theme.paper)
             FigureCanvasAgg(fig)
         heights = [L.row_height(with_sd, backprop)] * rows + [BOTTOM_HEIGHT] * n_bottom
         gs = fig.add_gridspec(rows + n_bottom, 1, height_ratios=heights)  # every row has its own grid and spacing
@@ -120,7 +120,7 @@ class Picture:
                     extra = {"projection": "3d"} if name == "hidden" and needs_3d(S) else {}
                     self.axes[name] = fig.add_subplot(cells[0, c], **extra)
         if S.title:
-            fig.suptitle(S.title, fontsize=S.theme.suptitle_size)
+            fig.suptitle(S.title, fontsize=S.theme.suptitle_size, color=S.theme.ink)
         self.fig = fig
         self.laid_out = False
 

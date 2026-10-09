@@ -49,7 +49,7 @@ def test_public_names_and_signatures():
     assert signature == (
         "(net, X, y, groups=None, eta=1.0, title=None, *, task=None, params=None, views=(), case_slopes=None, "
         "slice_weights=None, beta=0.9, lookahead=30, log_scale=False, layout='auto', width=None, "
-        "backprop_step=0, backprop_case=0)"
+        "backprop_step=0, backprop_case=0, theme='light')"
     )
     assert str(inspect.signature(slopewalk.clusters)) == "(centers, labels, noise=0.0, n_per=50, seed=0)"
     assert str(inspect.signature(slopewalk.xor_centres)) == "(noise=0.0, n_per=50, seed=0)"

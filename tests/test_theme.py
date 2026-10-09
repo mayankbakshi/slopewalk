@@ -4,6 +4,9 @@ import ast
 import pathlib
 import re
 
+import pytest
+from matplotlib.colors import to_rgb
+
 import slopewalk
 
 SOURCE = pathlib.Path(slopewalk.__file__).parent
@@ -127,3 +130,85 @@ def test_light_palette_contrast():
     from slopewalk.draw import THEME
 
     check_palette(THEME)
+
+
+def test_dark_palette_contrast():
+    from slopewalk.draw import DARK_THEME
+
+    check_palette(DARK_THEME)
+
+
+def drawn_texts(fig):
+    """The texts a draw shows: figure and axes texts, titles, legends, table cells, and the tick and axis labels of
+    axes whose axis is on (the network panels turn theirs off)."""
+    fig.canvas.draw()
+    texts = list(fig.texts)
+    for ax in fig.axes:
+        texts += list(ax.texts) + [ax.title, ax._left_title, ax._right_title]
+        if ax.axison:
+            for axis in [ax.xaxis, ax.yaxis] + ([ax.zaxis] if hasattr(ax, "zaxis") else []):
+                texts += [axis.label] + list(axis.get_ticklabels())
+        if ax.get_legend() is not None:
+            texts += list(ax.get_legend().get_texts())
+        for table in ax.tables:
+            texts += [cell.get_text() for cell in table.get_celld().values()]
+    return [t for t in texts if t.get_visible() and t.get_text().strip()]
+
+
+def every_text_is_legible(fig, T):
+    """After a draw, every text the figure shows has 3:1 or more against paper."""
+    return [(t.get_text()[:30], t.get_color()) for t in drawn_texts(fig) if contrast(t.get_color(), T.paper) < 3.0]
+
+
+def test_dark_pictures_have_no_dark_text(monkeypatch):
+    import matplotlib.pyplot as plt
+    import torch.nn as nn
+    from helpers import make
+
+    from slopewalk import explore, sine_points, xor_centres
+    from slopewalk.draw import DARK_THEME, THEME
+
+    monkeypatch.setenv("NB_STATIC", "1")
+    monkeypatch.setattr(plt, "show", lambda *a, **k: None)
+    calls = [
+        lambda t: explore(make("tanh3"), *xor_centres(noise=0.35), theme=t),
+        lambda t: explore(
+            make("tanh3"), *xor_centres(), views=("cases", "slice", "line", "hidden", "momentum"), theme=t
+        ),
+        lambda t: explore(make("tanh3"), *xor_centres(noise=0.35), views="backprop", backprop_step=5, theme=t),
+        lambda t: explore(
+            nn.Sequential(nn.Linear(1, 3), nn.Tanh(), nn.Linear(3, 1)), *sine_points(), task="regression", theme=t
+        ),
+    ]
+    for name, T in (("dark", DARK_THEME), ("light", THEME)):
+        for call in calls:
+            s = call(name)
+            assert s.fig.get_facecolor()[:3] == pytest.approx(to_rgb(T.paper))
+            assert every_text_is_legible(s.fig, T) == [], name
+            plt.close("all")
+
+
+def test_theme_option_switch_and_layout(monkeypatch):
+    import IPython.display
+    import matplotlib.pyplot as plt
+    from helpers import make
+
+    from slopewalk import explore, xor_centres
+    from slopewalk.draw import DARK_THEME, THEME
+
+    pytest.importorskip("ipywidgets")
+    monkeypatch.delenv("NB_STATIC", raising=False)
+    monkeypatch.setattr(IPython.display, "display", lambda *a, **k: None)
+    s = explore(make("tanh3"), *xor_centres())
+    C = s.controller
+    assert C.theme_pick.value == "light" and s.theme.paper == THEME.paper
+    png = C.image.value
+    C.theme_pick.value = "dark"
+    assert s.theme_name == "dark" and s.theme.paper == DARK_THEME.paper and C.image.value != png
+    assert s.fig.get_facecolor()[:3] == pytest.approx(to_rgb(DARK_THEME.paper)) and "Colours dark" in C.message.value
+    C.layout_pick.value = "standard"  # a new layout keeps the colours
+    assert s.theme.paper == DARK_THEME.paper and s.fig.get_facecolor()[:3] == pytest.approx(to_rgb(DARK_THEME.paper))
+    assert explore(make("tanh3"), *xor_centres(), theme="dark").controller.theme_pick.value == "dark"
+    with pytest.raises(ValueError, match="theme must be 'light' or 'dark'"):
+        explore(make("tanh3"), *xor_centres(), theme="purple")
+    plt.close("all")
