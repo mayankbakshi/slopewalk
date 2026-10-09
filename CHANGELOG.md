@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Any number of steps at once: a box beside the `10 steps` button sets how many steps it takes (1 to 1000), and the button's label follows it ("25 steps").
 - `theme="auto"` is the default: the picture and the controls follow the editor's theme where the kernel can read it on the same machine (VS Code's current theme, which VS Code records for its start-up screen; JupyterLab's or Notebook 7's theme setting). Elsewhere, Colab included, they are light. `SLOPEWALK_THEME=dark` or `light` chooses for every notebook, and the switch still changes both.
 - The dark palette has higher contrast: near-black paper (#0D1117), brighter ink, class colours and negative weights, and box edges, frames and table lines that stand out. Quiet text in the dark controls is less faded.
 - In VS Code a dark picture no longer sits in a white frame: VS Code puts every widget output on white, and the output that holds the controls now takes the picture's paper. The row of numbers in the status is no longer shaded by VS Code's table style.

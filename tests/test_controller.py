@@ -51,7 +51,13 @@ def test_widgets_are_built(live):
     hint, row, panel, frozen = C.controls.children
     assert "Press gradient step" in hint.value and panel is C.panel and frozen is C.frozen_note
     assert list(row.children) == [C.eta, C.button_row]  # eta, then the step buttons as one group
-    assert list(C.button_row.children) == list(C.buttons.values()) and C.button_row.layout.flex_flow == "row nowrap"
+    b = C.buttons
+    assert list(C.button_row.children) == [b["gradient step"], C.count, b["10 steps"], b["back one step"], b["reset"]]
+    assert (
+        C.button_row.layout.flex_flow == "row nowrap"
+        and C.count.value == 10
+        and b["10 steps"].description == "10 steps"
+    )
     assert C.layout_pick in C.layout_row.children
     assert re.sub("<[^>]+>", "", C.message.value) == ""  # nothing to report before the first action
     assert "next step, eta 0.7: predicted change" in C.readout.value and "none yet" in C.readout.value
@@ -436,3 +442,21 @@ def test_controls_follow_the_colours_switch(live):
     assert C.root._dom_classes.count("slopewalk-light") == 1 and "slopewalk-dark" not in C.root._dom_classes
     dark = explore(make("tanh3"), *xor_centres(), theme="dark").controller
     assert "slopewalk-dark" in dark.root._dom_classes
+
+
+def test_a_chosen_number_of_steps(live):
+    """The box beside the steps button sets how many steps it takes; the button says the number."""
+    s = explore(make("tanh3"), *xor_centres(), eta=0.5)
+    C = s.controller
+    button = C.buttons["10 steps"]
+    C.count.value = 25
+    assert button.description == "25 steps" and "25 gradient steps" in button.tooltip
+    R0 = s.history[-1]
+    button.click()
+    assert len(s.history) == 26 and s.history[-1] < R0
+    assert C.action[1].startswith("25 steps, predicted") and "25 gradient steps with eta 0.5" in C.message.value
+    C.count.value = 1
+    assert button.description == "1 step"
+    button.click()
+    assert len(s.history) == 27 and C.action[1].startswith("one step")
+    assert (C.count.min, C.count.max) == (1, 1000)

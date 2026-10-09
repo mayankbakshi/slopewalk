@@ -447,9 +447,9 @@ def explore(
     start. Below: the input plane, R over the steps taken with the first-order prediction of each step, and a table
     with each weight's value, the change of R for +0.1 and the slope dR/dw from R.backward().
     With ipywidgets: under the picture, the status (R and the change of R in the last action), then sliders for the
-    weights, eta, `gradient step`, `10 steps`, `back one step`, `reset`, and switches for the layout and the colours
-    of the picture. The sliders change the weights of `net` itself. Without ipywidgets, or with NB_STATIC=1, a still
-    picture of the start.
+    weights, eta, `gradient step`, a box with a number of steps and the button that takes that many (`10 steps` at
+    first), `back one step`, `reset`, and switches for the layout and the colours of the picture. The sliders change
+    the weights of `net` itself. Without ipywidgets, or with NB_STATIC=1, a still picture of the start.
     Returns a Session: step(k), step_back(), reset(), save(path), record(path), weights(), history.
     """
     if layout == "auto":

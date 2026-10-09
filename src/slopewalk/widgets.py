@@ -32,6 +32,7 @@ UI = {
     "setting_label": "100px",  # the label column of the other controls
     "column": "270px",  # the narrowest column of the slider grid
     "gap": "16px",
+    "count": "72px",  # the box with the number of steps
 }
 # The controls take the colours of the picture: the root box carries the class slopewalk-light or slopewalk-dark, and
 # control_css sets for each the CSS variables from which ipywidgets 7 and 8 take their colours, so that the controls
@@ -66,12 +67,14 @@ LOOK = {  # where to look in the picture at each stage of the backward pass
     "average": "The average of these slopes over the cases is the slope column of the table, what R.backward() gives.",
 }
 HINTS = {
-    "core": "Press gradient step to move every weight against its slope. Drag a slider to change one weight.",
+    "core": "Press gradient step to move every weight against its slope, or set a number in the box to take that many "
+    "steps. Drag a slider to change one weight.",
     "backprop": "Step from the output back to the first layer. The Worked example below the networks writes out the "
     "numbers for one case.",
     "views": "Tick a box to add a view under the network.",
 }
-BUTTONS = ("gradient step", "10 steps", "back one step", "reset")
+BUTTONS = ("gradient step", "10 steps", "back one step", "reset")  # "10 steps" is the key; its label follows the box
+MAX_STEPS = 1000  # the most steps the steps button takes at once
 
 
 def slider_range(v, lo=-4.0, hi=4.0):
@@ -275,7 +278,12 @@ class Controller:
         self.buttons = {name: widgets.Button(description=name) for name in BUTTONS}
         self.buttons["gradient step"].button_style = "primary"
         tip(self.buttons["gradient step"], "every weight moves against its slope: w <- w - eta x dR/dw")
-        tip(self.buttons["10 steps"], "ten gradient steps in a row")
+        self.count = tip(
+            widgets.BoundedIntText(value=10, min=1, max=MAX_STEPS, layout=widgets.Layout(width=UI["count"])),
+            f"how many gradient steps the button to the right takes, 1 to {MAX_STEPS}",
+        )
+        self.count.observe(self.on_count, names="value")
+        self.on_count()
         tip(self.buttons["back one step"], "undo the last gradient step, and any slider move made after it")
         tip(self.buttons["reset"], "back to the weights the cell started from")
         self.layout_pick = tip(
@@ -307,7 +315,9 @@ class Controller:
         self.out = widgets.Output()
         self.status = widgets.VBox([self.readout, self.message], layout=widgets.Layout(margin="6px 0 8px 0"))
 
-        self.button_row = widgets.HBox(list(self.buttons.values()), layout=widgets.Layout(flex_flow="row nowrap"))
+        b = self.buttons
+        row = [b["gradient step"], self.count, b["10 steps"], b["back one step"], b["reset"]]
+        self.button_row = widgets.HBox(row, layout=widgets.Layout(flex_flow="row nowrap", align_items="center"))
         steps_row = widgets.HBox(  # in a narrow window the buttons move below eta together
             [self.eta, self.button_row],
             layout=widgets.Layout(align_items="center", flex_flow="row wrap", margin="0 0 12px 0"),
@@ -335,7 +345,7 @@ class Controller:
             s.observe(self.on_slider, names="value")
         self.eta.observe(self.on_eta, names="value")
         self.buttons["gradient step"].on_click(lambda _: self.steps(1))
-        self.buttons["10 steps"].on_click(lambda _: self.steps(10))
+        self.buttons["10 steps"].on_click(lambda _: self.steps(int(self.count.value)))
         self.buttons["back one step"].on_click(lambda _: self.step_back())
         self.buttons["reset"].on_click(lambda _: self.reset())
 
@@ -580,6 +590,13 @@ class Controller:
         if change is not None and before is not None:
             name, old, new = change["owner"].description, change["old"], change["new"]
             self.say(f"{name} changed from {old:.2f} to {new:.2f}: {change_words(before, self.last_R)}.")
+
+    def on_count(self, *_):
+        """The steps button says how many steps it takes."""
+        n = int(self.count.value)
+        button = self.buttons["10 steps"]
+        button.description = "1 step" if n == 1 else f"{n} steps"
+        tip(button, f"{n} gradient step{'' if n == 1 else 's'} in a row; set the number in the box to the left")
 
     def on_eta(self, change):
         self.session.eta = float(change["new"])
