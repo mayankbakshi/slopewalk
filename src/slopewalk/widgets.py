@@ -17,7 +17,7 @@ from .views import VIEWS
 # (see control_css); quiet text is the same colour at a lower opacity. The two colours of the last step's change keep
 # at least 3.9:1 on white and on dark backgrounds (#1E1E1E, #111111), enough for the large text they are used for.
 UI = {
-    "quiet": "opacity:0.72",
+    "quiet": "opacity:var(--slopewalk-quiet,0.72)",  # 0.72 on light paper, 0.85 on dark (control_css)
     "text": "font-size:14px",
     "hint": "font-size:13px",
     "small": "font-size:12px",
@@ -120,8 +120,8 @@ def control_css():
             "padding": "4px 8px",
             "--jp-layout-color0": T.paper,
             "--jp-layout-color1": T.paper,
-            "--jp-layout-color2": T.table_head,
-            "--jp-layout-color3": edge,
+            "--jp-layout-color2": T.control_button,
+            "--jp-layout-color3": T.control_selected,
             "--jp-ui-font-color0": T.ink,
             "--jp-ui-font-color1": T.ink,
             "--jp-ui-font-color2": T.muted,
@@ -144,6 +144,7 @@ def control_css():
             "--jp-widgets-slider-handle-background-color": T.paper if name == "light" else T.ink,
             "--jp-widgets-slider-active-handle-color": accent,
             "--jp-widgets-dropdown-arrow": dropdown_arrow(T.ink),
+            "--slopewalk-quiet": "0.72" if name == "light" else "0.85",
         }
         rules.append(f".slopewalk-{name}{{" + ";".join(f"{k}:{v}" for k, v in values.items()) + "}")
         handle = ", ".join(f".slopewalk-{name} .{c} .noUi-handle" for c in ("widget-slider", "jupyter-widget-slider"))
@@ -151,6 +152,11 @@ def control_css():
             f"{handle}{{background:var(--jp-widgets-slider-handle-background-color);"
             "border-color:var(--jp-widgets-slider-handle-border-color)}"
         )
+        # VS Code puts every widget output on white (.cell-output-ipywidget-background{background:#fff!important}),
+        # which shows as a white frame around a dark picture: the output that holds the box takes its paper instead
+        rules.append(f".cell-output-ipywidget-background:has(.slopewalk-{name}){{background:{T.paper}!important}}")
+        # and VS Code shades every second table row, which marks the row of numbers in the status
+        rules.append(f".slopewalk-{name} table tr{{background-color:transparent}}")
     return "<style>" + "".join(rules) + "</style>"
 
 

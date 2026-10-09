@@ -9,6 +9,7 @@ import numpy as np
 from .backprop import backprop_stages
 from .data import prepare
 from .draw import THEMES, as_theme
+from .host import auto_theme
 from .layout import Layout
 from .model import Model
 from .picture import Picture
@@ -165,7 +166,10 @@ class Session:
         self.theme = self.base_theme.scaled(self.layout.text_scale)
 
     def set_theme(self, theme):
-        """The colours of the picture: "light", "dark", or a Theme (the widgets draw a new picture)."""
+        """The colours of the picture and the controls: "light", "dark", "auto" (the editor's theme where the kernel
+        can read it, see host.py), or a Theme (the widgets draw a new picture)."""
+        if theme == "auto":
+            theme = auto_theme()
         self.base_theme = as_theme(theme)
         self.theme_name = theme if isinstance(theme, str) else ("light" if theme is None else "custom")
         self.theme = self.base_theme.scaled(self.layout.text_scale)
@@ -413,7 +417,7 @@ def explore(
     width=None,
     backprop_step=0,
     backprop_case=0,
-    theme="light",
+    theme="auto",
 ):
     """Gradient descent by hand on `net`, with inputs X (n x d) and labels y.
 
@@ -434,8 +438,9 @@ def explore(
     and for still pictures. The controls are under the picture in both. width: the figure width in inches.
     backprop_step: with the view "backprop", the stage of the backward pass drawn (0: the forward pass; a step above
     0 switches the view on); backprop_case: the group whose case the Worked example follows ("A" or 0 is the first).
-    theme: "light" (the default) or "dark", the colours of the picture and its controls, for a light or a dark
-    notebook theme.
+    theme: the colours of the picture and its controls: "light", "dark", or "auto" (the default), which follows the
+    editor's theme where the kernel can read it (VS Code, and JupyterLab or Notebook 7, on the same machine) and is
+    light elsewhere, Colab included; SLOPEWALK_THEME=dark (or light) in the environment chooses for every notebook.
 
     Draws one copy of the network per group (every value a mean ± standard deviation over the group), with each
     weight on its line, the units as z, activation and h, then the output and the loss with its change from the

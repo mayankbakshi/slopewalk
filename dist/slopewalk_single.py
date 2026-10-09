@@ -13,9 +13,12 @@ import io
 import math
 import os
 import re
+import sys
 from collections import namedtuple
+import json
 import matplotlib.pyplot as plt
 import numpy as np
+import subprocess
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -27,6 +30,7 @@ from matplotlib.figure import Figure
 from matplotlib.font_manager import FontProperties
 from matplotlib.lines import Line2D
 from matplotlib.patches import BoxStyle, Rectangle
+from pathlib import Path
 
 __version__ = "0.1.0.dev0"
 
@@ -806,6 +810,7 @@ class Theme:
     )
     landscape_low = "#59636E"  # R over two weights: low R in this colour, high R in paper
     spine = "#8C959F"  # the frames of the panels below the networks
+    control_button, control_selected = "#EEF1F4", "#C4CBD3"  # the controls: buttons, and the chosen toggle button
 
     def plane_colormap(self):
         """p for class 1 over the input plane: class 0 colour, paper at p = 0.5, class 1 colour."""
@@ -827,35 +832,37 @@ class Theme:
 
 
 class DarkTheme(Theme):
-    """The same picture for a dark notebook theme: light ink on dark paper. Ratios against #1E1E1E."""
+    """The same picture for a dark notebook theme, in high contrast: light ink on near-black paper, bright class
+    colours, and frames and box edges that stand out. Ratios against #0D1117."""
 
-    paper, ink, muted = "#1E1E1E", "#E6EDF3", "#9AA4AF"  # ink 14.1:1, muted 6.6:1
-    class_colour = {0: "#58A6FF", 1: "#FF7B72", 2: "#39C5BB", 3: "#F778BA"}  # 6.6, 6.6, 7.8 and 6.6:1
-    class_tint = {0: "#1B2B40", 1: "#3D1F22", 2: "#163431", 3: "#3B1E30"}
-    mixed_colour, mixed_tint = "#E6EDF3", "#2B2F36"
-    neutral_colour, neutral_tint = "#C9D1D9", "#2B2F36"
-    positive, negative, negative_text = "#C9D1D9", "#F0883E", "#F0883E"  # lines and numbers 6.6:1
-    frozen_text, frozen_fill = "#9AA4AF", "#25292F"
+    paper, ink, muted = "#0D1117", "#F0F3F6", "#B1BAC4"  # ink 17.0:1, muted 9.6:1
+    class_colour = {0: "#71B7FF", 1: "#FF9492", 2: "#4FD8C8", 3: "#FF8DCA"}  # 8.9, 8.9, 10.8 and 8.9:1
+    class_tint = {0: "#0F2742", 1: "#3A1519", 2: "#0E2E2B", 3: "#36162A"}
+    mixed_colour, mixed_tint = "#F0F3F6", "#21262D"
+    neutral_colour, neutral_tint = "#D1D9E0", "#21262D"
+    positive, negative, negative_text = "#E6EDF3", "#FFA657", "#FFA657"  # lines 16.0:1, negative 9.8:1
+    frozen_text, frozen_fill = "#9EA7B3", "#161B22"
     hidden = "#56D364"
-    arrow, curve, node_edge = "#6E7681", "#9AA4AF", "#6E7681"
-    start_colour, prediction_colour = "#9AA4AF", "#8B949E"
-    gd_colour, momentum_colour = "#9AA4AF", "#E3B341"
-    value_box = dict(boxstyle="round,pad=0.25", fc="#2B2F36", ec="#4A525C", lw=0.8)
-    plane_alpha = 0.45
-    table_edge, table_head, table_highlight = "#3A4048", "#2B2F36", "#4A3F14"
-    backprop_colour, backprop_tint = "#BC8CFF", "#2E2540"
-    marker_edge, boundary = "#0D1117", "#E6EDF3"
-    note_text, derivation_text, derivation_muted, point_neutral = "#9AA4AF", "#E6EDF3", "#8B949E", "#9AA4AF"
-    glyph_fill, glyph_edge, node_fill, label_backing = "#1E1E1E", "#4A525C", "#1E1E1E", "#1E1E1E"
+    arrow, curve, node_edge = "#9EA7B3", "#C9D1D9", "#9EA7B3"
+    start_colour, prediction_colour = "#B1BAC4", "#9EA7B3"
+    gd_colour, momentum_colour = "#B1BAC4", "#F0B72F"
+    value_box = dict(boxstyle="round,pad=0.25", fc="#161B22", ec="#7A828E", lw=0.8)  # edges 4.9:1
+    plane_alpha = 0.5
+    table_edge, table_head, table_highlight = "#6E7681", "#21262D", "#4D3B00"
+    backprop_colour, backprop_tint = "#CB9EFF", "#261A3D"  # 8.9:1, and 7.6:1 on its tint
+    marker_edge, boundary = "#0D1117", "#F0F3F6"
+    note_text, derivation_text, derivation_muted, point_neutral = "#B1BAC4", "#F0F3F6", "#9EA7B3", "#B1BAC4"
+    glyph_fill, glyph_edge, node_fill, label_backing = "#0D1117", "#7A828E", "#0D1117", "#0D1117"
     reference_line, zero_line, landscape_line, plane_surface, path_colour = (
-        "#4A525C",
-        "#3A4048",
         "#6E7681",
-        "#6E7681",
-        "#E6EDF3",
+        "#57606A",
+        "#8B949E",
+        "#8B949E",
+        "#F0F3F6",
     )
-    landscape_low = "#C9D1D9"
-    spine = "#4A525C"
+    landscape_low = "#D1D9E0"
+    spine = "#7A828E"
+    control_button, control_selected = "#21262D", "#4F5864"  # ink on them 13.7:1 and 6.5:1
 
 
 THEME = Theme()
@@ -1306,11 +1313,20 @@ def class_boundaries(ax, U1, U2, A, **style):
             ax.contour(U1, U2, d, levels=[0.0], **style)
 
 
-def class_legend(ax, S):
-    """A legend of the class colours."""
+def class_legend(ax, S, winners=None):
+    """A legend of the class colours. winners: the classes that are the most likely somewhere in the picture; the
+    others are marked "no region", so that a class missing from the picture is not taken for a drawing error."""
     T = S.theme
     handles = [
-        Line2D([], [], marker="o", ls="none", color=T.class_colour[k], mec=T.marker_edge, label=f"class {k}")
+        Line2D(
+            [],
+            [],
+            marker="o",
+            ls="none",
+            color=T.class_colour[k],
+            mec=T.marker_edge,
+            label=f"class {k}" if winners is None or k in winners else f"class {k}: no region",
+        )
         for k in range(S.data.n_classes)
     ]
     ax.legend(handles=handles, fontsize=T.legend_size, loc="best")
@@ -1490,7 +1506,7 @@ def draw_class_plane(ax, S, F, gx):
         yi = group_style(S, c)[3]
         ax.scatter(*gx[c], s=160, color=T.class_colour[yi], edgecolor=T.marker_edge, zorder=3)
         ax.text(gx[c][0] + 0.15, gx[c][1] + 0.15, letter(c), fontsize=T.letter_size, path_effects=halo(T), color=T.ink)
-    class_legend(ax, S)
+    class_legend(ax, S, set(np.unique(A.argmax(-1)).tolist()))
     ax.set_xlim(lo, hi)
     ax.set_ylim(lo, hi)
     ax.set_aspect("equal")
@@ -2694,7 +2710,7 @@ def still_picture(session, message):
 # (see control_css); quiet text is the same colour at a lower opacity. The two colours of the last step's change keep
 # at least 3.9:1 on white and on dark backgrounds (#1E1E1E, #111111), enough for the large text they are used for.
 UI = {
-    "quiet": "opacity:0.72",
+    "quiet": "opacity:var(--slopewalk-quiet,0.72)",  # 0.72 on light paper, 0.85 on dark (control_css)
     "text": "font-size:14px",
     "hint": "font-size:13px",
     "small": "font-size:12px",
@@ -2797,8 +2813,8 @@ def control_css():
             "padding": "4px 8px",
             "--jp-layout-color0": T.paper,
             "--jp-layout-color1": T.paper,
-            "--jp-layout-color2": T.table_head,
-            "--jp-layout-color3": edge,
+            "--jp-layout-color2": T.control_button,
+            "--jp-layout-color3": T.control_selected,
             "--jp-ui-font-color0": T.ink,
             "--jp-ui-font-color1": T.ink,
             "--jp-ui-font-color2": T.muted,
@@ -2821,6 +2837,7 @@ def control_css():
             "--jp-widgets-slider-handle-background-color": T.paper if name == "light" else T.ink,
             "--jp-widgets-slider-active-handle-color": accent,
             "--jp-widgets-dropdown-arrow": dropdown_arrow(T.ink),
+            "--slopewalk-quiet": "0.72" if name == "light" else "0.85",
         }
         rules.append(f".slopewalk-{name}{{" + ";".join(f"{k}:{v}" for k, v in values.items()) + "}")
         handle = ", ".join(f".slopewalk-{name} .{c} .noUi-handle" for c in ("widget-slider", "jupyter-widget-slider"))
@@ -2828,6 +2845,11 @@ def control_css():
             f"{handle}{{background:var(--jp-widgets-slider-handle-background-color);"
             "border-color:var(--jp-widgets-slider-handle-border-color)}"
         )
+        # VS Code puts every widget output on white (.cell-output-ipywidget-background{background:#fff!important}),
+        # which shows as a white frame around a dark picture: the output that holds the box takes its paper instead
+        rules.append(f".cell-output-ipywidget-background:has(.slopewalk-{name}){{background:{T.paper}!important}}")
+        # and VS Code shades every second table row, which marks the row of numbers in the status
+        rules.append(f".slopewalk-{name} table tr{{background-color:transparent}}")
     return "<style>" + "".join(rules) + "</style>"
 
 
@@ -3408,6 +3430,177 @@ class Controller:
         self.redraw()
         return self.session
 
+# ------------------------ host.py ------------------------
+
+# VS Code's own themes, as written in its settings
+VSCODE_LIGHT = {
+    "Default Light Modern",
+    "Default Light+",
+    "Visual Studio Light",
+    "Default High Contrast Light",
+    "Quiet Light",
+    "Solarized Light",
+}
+VSCODE_DARK = {
+    "Default Dark Modern",
+    "Default Dark+",
+    "Visual Studio Dark",
+    "Default High Contrast",
+    "Abyss",
+    "Kimbie Dark",
+    "Monokai",
+    "Monokai Dimmed",
+    "Red",
+    "Solarized Dark",
+    "Tomorrow Night Blue",
+}
+
+
+def auto_theme():
+    """ "light" or "dark" for explore(theme="auto"): SLOPEWALK_THEME if set; light for still pictures (NB_STATIC=1) and
+    in Colab; else the theme of VS Code or JupyterLab read from their settings, and light when that fails."""
+    forced = os.environ.get("SLOPEWALK_THEME", "").strip().lower()
+    if forced in ("light", "dark"):
+        return forced
+    if os.environ.get("NB_STATIC") == "1" or "google.colab" in sys.modules:
+        return "light"
+    try:
+        found = vscode_theme() if os.environ.get("VSCODE_PID") else jupyterlab_theme()
+    except Exception:  # a setting the kernel cannot read is not worth an error: the switch is there
+        found = None
+    return found or "light"
+
+
+def read_jsonc(path):
+    """A settings file in JSON with comments and trailing commas, as VS Code and JupyterLab write them, or None."""
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return None
+    out, i, n = [], 0, len(text)
+    while i < n:
+        if text[i] == '"':  # a string, kept as it is
+            j = i + 1
+            while j < n and text[j] != '"':
+                j += 2 if text[j] == "\\" else 1
+            out.append(text[i : j + 1])
+            i = j + 1
+        elif text.startswith("//", i):
+            j = text.find("\n", i)
+            i = n if j < 0 else j
+        elif text.startswith("/*", i):
+            j = text.find("*/", i + 2)
+            i = n if j < 0 else j + 2
+        else:
+            out.append(text[i])
+            i += 1
+    try:
+        data = json.loads(re.sub(r",(\s*[}\]])", r"\1", "".join(out)))
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def system_theme():
+    """ "dark" or "light" from the system's appearance (macOS, Windows, GNOME), or None."""
+    try:
+        if sys.platform == "darwin":
+            done = subprocess.run(
+                ["defaults", "read", "-g", "AppleInterfaceStyle"], capture_output=True, text=True, timeout=2
+            )
+            return "dark" if done.stdout.strip().lower() == "dark" else "light"
+        if sys.platform.startswith("win"):
+            import winreg
+
+            key = winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
+            )
+            return "light" if winreg.QueryValueEx(key, "AppsUseLightTheme")[0] else "dark"
+        done = subprocess.run(
+            ["gsettings", "get", "org.gnome.desktop.interface", "color-scheme"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        if done.returncode == 0:
+            return "dark" if "dark" in done.stdout else "light"
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    return None
+
+
+def vscode_folder():
+    """VS Code's folder of user data (it holds User/settings.json): from the kernel's environment, which VS Code
+    sets, or the usual place."""
+    cache = os.environ.get("VSCODE_CODE_CACHE_PATH")  # .../Code/CachedData/<version>
+    if cache and Path(cache).parent.name == "CachedData":
+        return Path(cache).parent.parent
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "Code"
+    if sys.platform.startswith("win"):
+        return Path(os.environ.get("APPDATA", Path.home())) / "Code"
+    return Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "Code"
+
+
+def vscode_theme():
+    """The kind of theme VS Code shows. VS Code keeps the kind of the theme it last painted in
+    User/globalStorage/storage.json (for its start-up screen), which follows extension themes and the system's
+    appearance; without it, its settings: the system's appearance when VS Code follows it, else the name of its
+    color theme (dark when none is set, VS Code's default)."""
+    folder = vscode_folder()
+    try:
+        storage = json.loads((folder / "User" / "globalStorage" / "storage.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        storage = {}
+    splash = storage.get("windowSplash") if isinstance(storage, dict) else None
+    base = storage.get("theme") if isinstance(storage, dict) else None
+    base = base or (splash.get("baseTheme") if isinstance(splash, dict) else None)
+    if base in ("vs", "hc-light"):
+        return "light"
+    if base in ("vs-dark", "hc-black"):
+        return "dark"
+    settings = read_jsonc(folder / "User" / "settings.json") or {}
+    if settings.get("window.autoDetectColorScheme"):
+        return system_theme()
+    return theme_kind(str(settings.get("workbench.colorTheme", "Default Dark Modern")))
+
+
+def theme_kind(name):
+    """ "light" or "dark" for the name of a VS Code color theme: VS Code's own themes, else a word in the name, or
+    None."""
+    if name in VSCODE_LIGHT:
+        return "light"
+    if name in VSCODE_DARK:
+        return "dark"
+    words = name.lower()
+    if "light" in words:
+        return "light"
+    if any(w in words for w in ("dark", "night", "black", "monokai", "dracula")):
+        return "dark"
+    return None
+
+
+def jupyterlab_theme():
+    """The theme of JupyterLab or Notebook 7 on this machine, from its user settings, or None (the default, light)."""
+    try:
+        from jupyter_core.paths import jupyter_config_dir
+
+        base = Path(jupyter_config_dir())
+    except ImportError:  # jupyter_core comes with Jupyter; without it, its rule: JUPYTER_CONFIG_DIR, else ~/.jupyter
+        base = Path(os.environ.get("JUPYTER_CONFIG_DIR") or Path.home() / ".jupyter")
+    path = base / "lab" / "user-settings" / "@jupyterlab" / "apputils-extension" / "themes.jupyterlab-settings"
+    settings = read_jsonc(path)
+    if not settings:
+        return None
+    if settings.get("adaptive-theme"):
+        return system_theme()
+    words = str(settings.get("theme", "JupyterLab Light")).lower()
+    if "light" in words:
+        return "light"
+    if "dark" in words or "night" in words:
+        return "dark"
+    return None
+
 # ------------------------ session.py ------------------------
 
 # one gradient step: R before it, R predicted to first order (R - eta * |g|^2), and R after it
@@ -3560,7 +3753,10 @@ class Session:
         self.theme = self.base_theme.scaled(self.layout.text_scale)
 
     def set_theme(self, theme):
-        """The colours of the picture: "light", "dark", or a Theme (the widgets draw a new picture)."""
+        """The colours of the picture and the controls: "light", "dark", "auto" (the editor's theme where the kernel
+        can read it, see host.py), or a Theme (the widgets draw a new picture)."""
+        if theme == "auto":
+            theme = auto_theme()
         self.base_theme = as_theme(theme)
         self.theme_name = theme if isinstance(theme, str) else ("light" if theme is None else "custom")
         self.theme = self.base_theme.scaled(self.layout.text_scale)
@@ -3808,7 +4004,7 @@ def explore(
     width=None,
     backprop_step=0,
     backprop_case=0,
-    theme="light",
+    theme="auto",
 ):
     """Gradient descent by hand on `net`, with inputs X (n x d) and labels y.
 
@@ -3829,8 +4025,9 @@ def explore(
     and for still pictures. The controls are under the picture in both. width: the figure width in inches.
     backprop_step: with the view "backprop", the stage of the backward pass drawn (0: the forward pass; a step above
     0 switches the view on); backprop_case: the group whose case the Worked example follows ("A" or 0 is the first).
-    theme: "light" (the default) or "dark", the colours of the picture and its controls, for a light or a dark
-    notebook theme.
+    theme: the colours of the picture and its controls: "light", "dark", or "auto" (the default), which follows the
+    editor's theme where the kernel can read it (VS Code, and JupyterLab or Notebook 7, on the same machine) and is
+    light elsewhere, Colab included; SLOPEWALK_THEME=dark (or light) in the environment chooses for every notebook.
 
     Draws one copy of the network per group (every value a mean ± standard deviation over the group), with each
     weight on its line, the units as z, activation and h, then the output and the loss with its change from the

@@ -61,6 +61,7 @@ class Theme:
     )
     landscape_low = "#59636E"  # R over two weights: low R in this colour, high R in paper
     spine = "#8C959F"  # the frames of the panels below the networks
+    control_button, control_selected = "#EEF1F4", "#C4CBD3"  # the controls: buttons, and the chosen toggle button
 
     def plane_colormap(self):
         """p for class 1 over the input plane: class 0 colour, paper at p = 0.5, class 1 colour."""
@@ -82,35 +83,37 @@ class Theme:
 
 
 class DarkTheme(Theme):
-    """The same picture for a dark notebook theme: light ink on dark paper. Ratios against #1E1E1E."""
+    """The same picture for a dark notebook theme, in high contrast: light ink on near-black paper, bright class
+    colours, and frames and box edges that stand out. Ratios against #0D1117."""
 
-    paper, ink, muted = "#1E1E1E", "#E6EDF3", "#9AA4AF"  # ink 14.1:1, muted 6.6:1
-    class_colour = {0: "#58A6FF", 1: "#FF7B72", 2: "#39C5BB", 3: "#F778BA"}  # 6.6, 6.6, 7.8 and 6.6:1
-    class_tint = {0: "#1B2B40", 1: "#3D1F22", 2: "#163431", 3: "#3B1E30"}
-    mixed_colour, mixed_tint = "#E6EDF3", "#2B2F36"
-    neutral_colour, neutral_tint = "#C9D1D9", "#2B2F36"
-    positive, negative, negative_text = "#C9D1D9", "#F0883E", "#F0883E"  # lines and numbers 6.6:1
-    frozen_text, frozen_fill = "#9AA4AF", "#25292F"
+    paper, ink, muted = "#0D1117", "#F0F3F6", "#B1BAC4"  # ink 17.0:1, muted 9.6:1
+    class_colour = {0: "#71B7FF", 1: "#FF9492", 2: "#4FD8C8", 3: "#FF8DCA"}  # 8.9, 8.9, 10.8 and 8.9:1
+    class_tint = {0: "#0F2742", 1: "#3A1519", 2: "#0E2E2B", 3: "#36162A"}
+    mixed_colour, mixed_tint = "#F0F3F6", "#21262D"
+    neutral_colour, neutral_tint = "#D1D9E0", "#21262D"
+    positive, negative, negative_text = "#E6EDF3", "#FFA657", "#FFA657"  # lines 16.0:1, negative 9.8:1
+    frozen_text, frozen_fill = "#9EA7B3", "#161B22"
     hidden = "#56D364"
-    arrow, curve, node_edge = "#6E7681", "#9AA4AF", "#6E7681"
-    start_colour, prediction_colour = "#9AA4AF", "#8B949E"
-    gd_colour, momentum_colour = "#9AA4AF", "#E3B341"
-    value_box = dict(boxstyle="round,pad=0.25", fc="#2B2F36", ec="#4A525C", lw=0.8)
-    plane_alpha = 0.45
-    table_edge, table_head, table_highlight = "#3A4048", "#2B2F36", "#4A3F14"
-    backprop_colour, backprop_tint = "#BC8CFF", "#2E2540"
-    marker_edge, boundary = "#0D1117", "#E6EDF3"
-    note_text, derivation_text, derivation_muted, point_neutral = "#9AA4AF", "#E6EDF3", "#8B949E", "#9AA4AF"
-    glyph_fill, glyph_edge, node_fill, label_backing = "#1E1E1E", "#4A525C", "#1E1E1E", "#1E1E1E"
+    arrow, curve, node_edge = "#9EA7B3", "#C9D1D9", "#9EA7B3"
+    start_colour, prediction_colour = "#B1BAC4", "#9EA7B3"
+    gd_colour, momentum_colour = "#B1BAC4", "#F0B72F"
+    value_box = dict(boxstyle="round,pad=0.25", fc="#161B22", ec="#7A828E", lw=0.8)  # edges 4.9:1
+    plane_alpha = 0.5
+    table_edge, table_head, table_highlight = "#6E7681", "#21262D", "#4D3B00"
+    backprop_colour, backprop_tint = "#CB9EFF", "#261A3D"  # 8.9:1, and 7.6:1 on its tint
+    marker_edge, boundary = "#0D1117", "#F0F3F6"
+    note_text, derivation_text, derivation_muted, point_neutral = "#B1BAC4", "#F0F3F6", "#9EA7B3", "#B1BAC4"
+    glyph_fill, glyph_edge, node_fill, label_backing = "#0D1117", "#7A828E", "#0D1117", "#0D1117"
     reference_line, zero_line, landscape_line, plane_surface, path_colour = (
-        "#4A525C",
-        "#3A4048",
         "#6E7681",
-        "#6E7681",
-        "#E6EDF3",
+        "#57606A",
+        "#8B949E",
+        "#8B949E",
+        "#F0F3F6",
     )
-    landscape_low = "#C9D1D9"
-    spine = "#4A525C"
+    landscape_low = "#D1D9E0"
+    spine = "#7A828E"
+    control_button, control_selected = "#21262D", "#4F5864"  # ink on them 13.7:1 and 6.5:1
 
 
 THEME = Theme()
@@ -561,11 +564,20 @@ def class_boundaries(ax, U1, U2, A, **style):
             ax.contour(U1, U2, d, levels=[0.0], **style)
 
 
-def class_legend(ax, S):
-    """A legend of the class colours."""
+def class_legend(ax, S, winners=None):
+    """A legend of the class colours. winners: the classes that are the most likely somewhere in the picture; the
+    others are marked "no region", so that a class missing from the picture is not taken for a drawing error."""
     T = S.theme
     handles = [
-        Line2D([], [], marker="o", ls="none", color=T.class_colour[k], mec=T.marker_edge, label=f"class {k}")
+        Line2D(
+            [],
+            [],
+            marker="o",
+            ls="none",
+            color=T.class_colour[k],
+            mec=T.marker_edge,
+            label=f"class {k}" if winners is None or k in winners else f"class {k}: no region",
+        )
         for k in range(S.data.n_classes)
     ]
     ax.legend(handles=handles, fontsize=T.legend_size, loc="best")
@@ -745,7 +757,7 @@ def draw_class_plane(ax, S, F, gx):
         yi = group_style(S, c)[3]
         ax.scatter(*gx[c], s=160, color=T.class_colour[yi], edgecolor=T.marker_edge, zorder=3)
         ax.text(gx[c][0] + 0.15, gx[c][1] + 0.15, letter(c), fontsize=T.letter_size, path_effects=halo(T), color=T.ink)
-    class_legend(ax, S)
+    class_legend(ax, S, set(np.unique(A.argmax(-1)).tolist()))
     ax.set_xlim(lo, hi)
     ax.set_ylim(lo, hi)
     ax.set_aspect("equal")

@@ -202,11 +202,36 @@ def test_plane_shows_the_class_regions(static):
     s = explore(make("three_classes"), *five_centres())
     plane = [ax for ax in s.fig.axes if ax.get_title() == "the most likely class and the boundaries"][0]
     assert len(plane.images) == 1
-    assert [t.get_text() for t in plane.get_legend().get_texts()] == ["class 0", "class 1", "class 2"]
+    from slopewalk.draw import net_on, plane_grid
+
+    winners = set(net_on(s, plane_grid(s)[2], s.weights()).argmax(1).tolist())
+    expected = [f"class {k}" if k in winners else f"class {k}: no region" for k in range(3)]
+    assert [t.get_text() for t in plane.get_legend().get_texts()] == expected and len(winners) < 3
     lines_before = len(plane.collections)
     s.step(20, eta=1.0)
     plane = [ax for ax in s.draw().axes if ax.get_title() == "the most likely class and the boundaries"][0]
     assert len(plane.collections) > lines_before  # the starting boundaries, dashed
+
+
+def test_a_class_gets_its_region_once_learned(static):
+    """After 40 steps no point is most likely class 2, and the legend says so; after 300 steps of a network with four
+    hidden units, the middle of the plane is class 2."""
+    from slopewalk import explore
+
+    torch.manual_seed(0)
+    net = nn.Sequential(nn.Linear(2, 4), nn.Tanh(), nn.Linear(4, 3))
+    s = explore(net, *five_centres(0.35))
+    legend = lambda fig: [  # noqa: E731
+        t.get_text()
+        for ax in fig.axes
+        if ax.get_legend()
+        for t in ax.get_legend().get_texts()
+        if "class" in t.get_text()
+    ]
+    s.step(40, eta=0.5)
+    assert "class 2: no region" in legend(s.draw())
+    s.step(260, eta=0.5)
+    assert legend(s.draw()) == ["class 0", "class 1", "class 2"]
 
 
 def test_class_shading():

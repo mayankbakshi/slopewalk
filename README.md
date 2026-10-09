@@ -40,7 +40,7 @@ Options of `explore`, all keyword-only; without them the picture is as above:
 | `beta=0.9`, `lookahead=30` | momentum and the number of steps in the momentum panel. |
 | `log_scale=True` | R on a log axis. |
 | `layout="wide"`, `"standard"`, `width=27` | the default `"auto"` is wide where the sliders run in Jupyter or VS Code, and standard in Colab (whose notebooks have a fixed width) and for still pictures. Wide: the picture at the full width, with the network panels side by side (up to four) and the lower panels in one row (up to six), each as wide as suits it. Standard: two network panels and three lower panels per row, with larger text on small screens. `width` sets the figure width in inches. |
-| `theme="dark"` | the colours of the picture and its controls for a dark notebook theme: light ink on dark paper. The default is `"light"`. A switch under the controls changes both. |
+| `theme="dark"`, `"light"` | the colours of the picture and its controls. The default `"auto"` follows the editor's theme where the kernel can read it: VS Code, and JupyterLab or Notebook 7, on the same machine. Colab and remote kernels do not tell the kernel their theme, so there it is light. `SLOPEWALK_THEME=dark` (or `light`) in the environment chooses for every notebook, and a switch under the controls changes both. |
 
 With the backward pass on, the widgets have buttons to step back and forth through the stages and a picker for the case of the Worked example; the panel headed "Worked example" below the networks gives the formula of the current stage under its heading. In this view the names of the values (z, h, a, p, δ, ∂ℓ/∂h) are written in panel A only; the other panels show the values. `record_backprop("backprop.gif")` writes one frame per stage.
 
