@@ -172,3 +172,37 @@ def test_risk_batch_equals_risk_row_by_row():
         batch = M.risk_batch(X, y, W)
         assert batch == pytest.approx([M.risk(X, y, list(row)) for row in W], abs=1e-6)
     assert naming_order(net)  # the network is still usable
+
+
+def test_step_back_undoes_the_last_step():
+    s = Session(make("tanh3"), *xor_centres(), eta=0.5)
+    w0 = s.weights()
+    assert s.step_back() is None  # nothing to undo
+    s.step(1)
+    w1 = s.weights()
+    s.step(2)
+    assert len(s.history) == 4 and len(s.predictions) == 3 and len(s.path) == 4
+    assert s.step_back() == pytest.approx(s.weights()) and len(s.history) == 3 and len(s.path) == 3
+    s.step_back()
+    assert s.weights() == pytest.approx(w1) and len(s.history) == 2 and len(s.predictions) == 1 and len(s.path) == 2
+    assert s.path[-1] == pytest.approx(w1) and s.history[-1] == pytest.approx(s.risk(w1))
+    s.step_back()
+    assert s.weights() == pytest.approx(w0) and s.history == [s.risk(w0)] and s.path == [w0] and s.predictions == []
+
+
+def test_step_back_after_a_slider_move():
+    """A slider move after a step is undone with the step; the path keeps its segments consistent."""
+    s = Session(make("tanh3"), *xor_centres(), eta=0.5)
+    w0 = s.weights()
+    s.step(1)
+    w1 = s.weights()
+    moved = list(w1)
+    moved[0] += 0.4
+    s.model.set_weights(moved)  # what a slider does
+    s.step(1)  # from the moved weights: the path starts a new segment
+    assert np.isnan(s.path[2]).all() and s.path[3] == pytest.approx(moved) and len(s.path) == 5
+    s.step_back()
+    assert s.weights() == pytest.approx(moved) and len(s.path) == 2 and s.path[-1] == pytest.approx(w1)
+    s.model.set_weights([v + 0.1 for v in moved])  # another slider move, then back: the step before it is undone
+    s.step_back()
+    assert s.weights() == pytest.approx(w0) and s.path == [w0] and len(s.history) == 1

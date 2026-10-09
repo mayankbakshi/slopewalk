@@ -33,7 +33,7 @@ Options of `explore`, all keyword-only; without them the picture is as above:
 |---|---|
 | `task="regression"` | the output is a prediction and R the mean squared error; `y` holds numbers. Labels other than 0 and 1 without this option raise an error. |
 | `params=["w10", "w11"]`, `"output"`, `"layer:1"` | only these weights get sliders and move in a step; the others are drawn lighter and stay fixed. |
-| `views=("backprop", "slice", "line", "hidden", "momentum", "cases")` | extra panels, see below. |
+| `views=("backprop", "slice", "line", "hidden", "momentum", "cases")` | extra views, see below. |
 | `backprop_step=3`, `backprop_case="B"` | the stage of the backward pass drawn, and the group whose case the derivation follows; a step above 0 turns the view on. |
 | `case_slopes="w10"` | the per-case panel for this weight. |
 | `slice_weights=("w10", "w11")` | the weights of the slice panel (one or two). |
@@ -43,12 +43,12 @@ Options of `explore`, all keyword-only; without them the picture is as above:
 
 With the backward pass on, the widgets have buttons to step back and forth through the stages, a picker for the traced case, and a caption with the formula of the current stage. `record_backprop("backprop.gif")` writes one frame per stage.
 
-`explore` returns a session: `step(k)` takes k gradient steps (the sliders follow), `reset()` returns to the start, `predict()` gives the first-order change of R for the next step, `lookahead()` the next steps of gradient descent and of momentum, `case_slopes()` each case's slope along every weight, `save("state.png")` writes the current picture and `record("run.gif", steps=40)` a GIF of a run. `history`, `predictions` and `path` hold R, the predicted and actual change, and the weights after each step.
+`explore` returns a session: `step(k)` takes k gradient steps (the sliders follow), `step_back()` undoes the last one (and any slider move made after it), `reset()` returns to the start, `predict()` gives the first-order change of R for the next step, `lookahead()` the next steps of gradient descent and of momentum, `case_slopes()` each case's slope along every weight, `save("state.png")` writes the current picture and `record("run.gif", steps=40)` a GIF of a run. `history`, `predictions` and `path` hold R, the predicted and actual change, and the weights after each step.
 
 ## What it draws
 
 1. One copy of the network per point or group (red: class 1; blue: class 0). With several points in a group, every value is a mean ± standard deviation over the group.
-2. Each weight and bias on its line (line width: its size; orange: negative; blue: changed by you). Names `w1, w2, ...` on the lines for networks with at most 9 weights; otherwise the values only, and the slider groups say which inputs each unit's weights belong to.
+2. Each weight and bias on its line (line width: its size; orange: negative; blue: changed by you). The weights are the same for every case, so the first panel carries their numbers and the others show the lines only. Names `w1, w2, ...` on the lines for networks with at most 9 weights; otherwise the values only, except the weight moved last with a slider, which keeps its name. The slider groups say which inputs each unit's weights belong to.
 3. Each unit as pre-activation z, activation function (a small curve; dot: the value of z; shaded: the group's spread) and value h. Then the score a, the sigmoid, p for class 1, and the log loss with its change since the start.
 4. Below: the boundary p = 0.5 in the input plane (two inputs; dashed: the boundary at the start; one input: p against x1), R (the average log loss) over the gradient steps taken with the first-order prediction of each step (hollow markers), and a table with each weight's value, the change of R for +0.1 and the slope dR/dw from `R.backward()`.
 5. The extra views, in rows of three below:
@@ -59,9 +59,9 @@ With the backward pass on, the widgets have buttons to step back and forth throu
    - `hidden`: each case at its values in the last hidden layer, with the output unit's boundary (a line for two units, a plane for three);
    - `momentum`: R over the next steps of gradient descent and of momentum (each step keeps the share beta of the last one).
 
-Under the picture, a status line gives R, the size of the gradient, the accuracy, the predicted change of R for the next step and the last step's predicted and actual change, with one sentence on what the last action did (for example "w10 changed from 0.49 to 0.70: R went from 0.5680 to 0.5619, down 0.0061.").
+Under the picture, the status shows R and the change of R in the last step in large type (green when R went down, red when it went up, with the first-order prediction under it), then the predicted change for the next step, the size of the gradient and the accuracy. One sentence says what the last action did (for example "w10 changed from 0.49 to 0.70: R went from 0.5680 to 0.5619, down 0.0061.").
 
-Under the status line are the controls: one line on what to do, a row with `eta`, `gradient step` (w ← w − eta · dR/dw for every weight), `10 steps`, `reset` and the layout switch, and a slider per weight in a column per unit (a drop-down list and one slider above 30 weights; a slider widens its range when a step takes its weight past the end). Every control has a tooltip. Tabs appear only for what the call asks for:
+Under the status are the controls: one line on what to do, a row with `eta`, `gradient step` (w ← w − eta · dR/dw for every weight), `10 steps`, `back one step` and `reset`, and a slider per weight in a column per unit (a drop-down list and one slider above 30 weights; a slider widens its range when a step takes its weight past the end). Sliders apply when they are released. The buttons are disabled while the picture is drawn, so that clicks do not pile up. Every control has a tooltip. Last comes the layout of the picture, wide or standard. Text in the controls takes the colours of the notebook's theme, light or dark. Tabs appear only for what the call asks for:
 
 1. **Backprop**, when `views` includes `"backprop"` (or `backprop_step` is above 0): `previous stage` and `next stage` move through the stages, `trace case` chooses the case written out, and the caption gives the formula of the stage.
 2. **Views**, when other views are asked for: a checkbox per extra panel, with their settings.

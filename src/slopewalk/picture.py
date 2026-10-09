@@ -13,7 +13,7 @@ import numpy as np
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
 
-from .backprop import backward_pass, draw_derivation, label_spec, line_styles, overlay, stage_index
+from .backprop import backward_pass, draw_derivation, label_spec, line_styles, overlay, shared_labels, stage_index
 from .draw import draw_case, draw_edge_labels, draw_history, draw_input_plane, draw_slope_table
 from .layout import BOTTOM_HEIGHT, NET_GAP, PANEL_GAP
 from .views import VIEW_DRAWERS, VIEWS, needs_3d
@@ -133,8 +133,10 @@ class Picture:
             S.model.set_weights(F.w)
         if not self.laid_out:
             self.layout()
+        shared = shared_labels(F)  # the weights are the same in every panel: the first panel carries their labels
         for c, (ax, (edges, obstacles)) in enumerate(zip(self.case_axes, parts)):
-            draw_edge_labels(ax, S, F, edges, obstacles, label_spec(S, F, c))
+            if c == 0 or not shared:
+                draw_edge_labels(ax, S, F, edges, obstacles, label_spec(S, F, c))
         S.model.set_weights(F.w)
         self.frame = F
         return self.fig

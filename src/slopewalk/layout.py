@@ -13,6 +13,7 @@ LAYOUTS = ("standard", "wide")
 WIDTH = {"standard": 15.0, "wide": 27.0}  # default figure width in inches
 WIDE_PER_ROW, WIDE_BOTTOM_PER_ROW = 4, 6  # the most network panels and lower panels per row of the wide layout
 NET_GAP, PANEL_GAP = 0.5, 0.8  # inches between network panels, and between the panels below them
+TEXT_SCALE = {"standard": 1.0, "wide": 1.1}  # text in the network panels: the wide picture is shown smaller
 # the wide layout gives each lower panel a base width in inches that suits it (for a row 4.2 inches tall), and the
 # width left over in its row goes to the panels that can use it, in these proportions
 WIDE_BASE = {
@@ -46,14 +47,17 @@ class Layout:
             raise ValueError(f"slopewalk: width is the figure width in inches, between 6 and 60, not {width!r}.")
         self.n_inputs, self.hidden, self.task, self.style = n_inputs, hidden, task, style
         self.width = float(width) if width is not None else WIDTH[style]
+        self.text_scale = f = TEXT_SCALE[style]
+        extra = 1.2 * (f - 1)  # larger text: the loss box moves right, clear of the box before it
         self.blocks, x = [], 1.75
         for _ in hidden:
             self.blocks.append((x, x + 0.75, x + 1.5))  # x of the z box, of the glyph and of the h box
             x += 2.75
         if task == "regression":
-            self.x_a, self.x_sigmoid, self.x_p, self.x_loss = x, None, None, x + 1.1
+            self.x_a, self.x_sigmoid, self.x_p, self.x_loss = x, None, None, x + 1.1 + extra
         else:
-            self.x_a, self.x_sigmoid, self.x_p, self.x_loss = x, x + 0.75, x + 1.5, x + 2.4
+            self.x_a, self.x_sigmoid, self.x_p, self.x_loss = x, x + 0.75, x + 1.5, x + 2.4 + extra
+        self.x_input_value = -0.24 * f  # the right edge of an input's value box, left of its circle
         self.y_inputs = np.linspace(1.95, 0.45, n_inputs) if n_inputs > 1 else np.array([1.2])
         self.xlim = (-0.95, self.x_loss + 0.6)
         self.ylim = (-0.05, 3.0)
@@ -92,7 +96,7 @@ class Layout:
         for 12 units), by a fifth when the boxes carry a standard deviation line (groups of points), and by 40% when
         the backward pass adds its boxes under the units."""
         units = min(4.0, max(1.0, max(self.hidden, default=1) / 3))
-        return 2.9 * units * (1.2 if with_sd else 1.0) * (1.4 if backprop else 1.0)
+        return 2.9 * units * (1.2 if with_sd else 1.0) * (1.4 if backprop else 1.0) * self.text_scale
 
     def lower_rows(self, panels, n_weights=0):
         """The rows of the panels below the networks: lists of (panel, width), with widths in inches that add up to

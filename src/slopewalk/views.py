@@ -76,8 +76,9 @@ def draw_cases(ax, S, F):
     ax.set_xlim(-0.6, D.G - 0.4)
     ax.set_ylabel("slope of the case's own loss")
     formula = "(p - y) da/dw" if D.task == "binary" else "2(ŷ - y) dŷ/dw"
-    ax.set_title(f"each case's slope along {name}, {formula};\nbars: group means; dashed: the average", fontsize=10)
-    ax.legend(fontsize=8, loc="best")
+    title = f"each case's slope along {name}, {formula};\nbars: group means; dashed: the average"
+    ax.set_title(title, fontsize=T.panel_title_size)
+    ax.legend(fontsize=T.legend_size, loc="best")
 
 
 # ---------------------------------------------------------------- R over one or two weights
@@ -130,8 +131,8 @@ def draw_slice(ax, S, F):
         ax.set_ylim(float(R.min()) - 0.1 * span, float(R.max()) + 0.1 * span)
         ax.set_xlabel(names[0])
         ax.set_ylabel("R")
-        ax.legend(fontsize=8, loc="best")
-        ax.set_title(f"R over {names[0]}" + (f",\n{note}" if note else ""), fontsize=10)
+        ax.legend(fontsize=T.legend_size, loc="best")
+        ax.set_title(f"R over {names[0]}" + (f",\n{note}" if note else ""), fontsize=T.panel_title_size)
         return
     a, b = idx
     flat = np.concatenate([p.reshape(-1, 2) for p in pts])
@@ -147,12 +148,12 @@ def draw_slice(ax, S, F):
         ax.contourf(A, B, R, levels=levels, cmap="Greys_r", alpha=0.35)
         ax.contour(A, B, R, levels=levels, colors="0.35", linewidths=0.6)
     if look:
-        for key, colour, label in (
-            ("gd", T.gd_colour, "next steps, gradient descent"),
-            ("momentum", T.momentum_colour, f"next steps, momentum {S.beta:g}"),
+        for key, colour, style, label in (
+            ("gd", T.gd_colour, "o-", "next steps, gradient descent"),
+            ("momentum", T.momentum_colour, "o--", f"next steps, momentum {S.beta:g}"),  # dashed: not by colour alone
         ):
             p = look[key]["path"][:, idx]
-            ax.plot(p[:, 0], p[:, 1], "o-", color=colour, ms=2.5, lw=1.2, label=label, zorder=3)
+            ax.plot(p[:, 0], p[:, 1], style, color=colour, ms=2.5, lw=1.2, label=label, zorder=3)
     if len(path) > 1:
         ax.plot(path[:, 0], path[:, 1], "o-", color="0.1", ms=3, lw=1.2, label="steps taken", zorder=4)
     ax.plot([w0[a]], [w0[b]], "o", mfc="white", mec="k", ms=7, label="start", zorder=5)
@@ -173,9 +174,9 @@ def draw_slice(ax, S, F):
     ax.set_ylim(*xb)
     ax.set_xlabel(names[0])
     ax.set_ylabel(names[1])
-    ax.legend(fontsize=7, loc="best")
+    ax.legend(fontsize=T.legend_size, loc="best")
     title = f"R over {names[0]} and {names[1]}, with the direction of -grad R"
-    ax.set_title(title + (f"\n{note}" if note else ""), fontsize=10)
+    ax.set_title(title + (f"\n{note}" if note else ""), fontsize=T.panel_title_size)
 
 
 # ---------------------------------------------------------------- R along the next step
@@ -221,8 +222,8 @@ def draw_line(ax, S, F):
     ax.set_xlim(0, ts[-1])
     ax.set_xlabel("t, the step size along -grad R")
     ax.set_ylabel("R")
-    ax.legend(fontsize=7, loc="best")
-    ax.set_title(f"R along the next step, eta = {eta:g}", fontsize=10)
+    ax.legend(fontsize=T.legend_size, loc="best")
+    ax.set_title(f"R along the next step, eta {eta:g}", fontsize=T.panel_title_size)
 
 
 # ---------------------------------------------------------------- the hidden layer
@@ -275,7 +276,7 @@ def draw_hidden(ax, S, F):
             ax.scatter(h, D.y.numpy(), c=colours, s=small, edgecolor="k", lw=0.3, zorder=3)
             ax.set_ylabel("y")
         ax.set_xlabel(f"{label}1")
-        ax.legend(fontsize=8, loc="best")
+        ax.legend(fontsize=T.legend_size, loc="best")
     elif m == 2:
         x0, x1 = window(H[:, 0], minimum=0.6), window(H[:, 1], minimum=0.6)
         U1, U2 = np.meshgrid(np.linspace(*x0, 81), np.linspace(*x1, 81))
@@ -289,7 +290,7 @@ def draw_hidden(ax, S, F):
             ax.contour(U1, U2, a, levels=10, cmap=T.value_cmap, linewidths=0.8)
         ax.scatter(H[:, 0], H[:, 1], c=colours, s=small, edgecolor="k", lw=0.3, zorder=3)
         for c in range(D.G):
-            ax.text(gh[c][0], gh[c][1], f"  {letter(c)}", fontsize=11, zorder=4)
+            ax.text(gh[c][0], gh[c][1], f"  {letter(c)}", fontsize=T.letter_size, zorder=4)
         ax.set_xlim(*x0)
         ax.set_ylim(*x1)
         ax.set_xlabel(f"{label}1")
@@ -324,7 +325,7 @@ def draw_hidden(ax, S, F):
         ax.set_xlabel("a = output unit's score" if binary else "prediction")
         ax.set_ylabel("largest other direction of h")
     what = "the boundary a = 0" if binary else "coloured by y"
-    ax.set_title(f"the cases at their hidden values,\n{what}", fontsize=10)
+    ax.set_title(f"the cases at their hidden values,\n{what}", fontsize=T.panel_title_size)
 
 
 # ---------------------------------------------------------------- gradient descent and momentum
@@ -338,13 +339,13 @@ def draw_momentum(ax, S, F):
     gd, mo = look["gd"]["R"], look["momentum"]["R"]
     steps = range(len(gd))
     ax.plot(steps, gd, color=T.gd_colour, lw=1.8, label=f"gradient descent: R {gd[-1]:.4f}")
-    ax.plot(steps, mo, color=T.momentum_colour, lw=1.8, label=f"momentum, beta {S.beta:g}: R {mo[-1]:.4f}")
+    ax.plot(steps, mo, "--", color=T.momentum_colour, lw=1.8, label=f"momentum, beta {S.beta:g}: R {mo[-1]:.4f}")
     if S.log_scale and min(min(gd), min(mo)) > 0:
         ax.set_yscale("log")
     ax.set_xlabel("steps from the current weights")
     ax.set_ylabel("R")
-    ax.legend(fontsize=8, loc="best")
-    ax.set_title(f"the next {len(gd) - 1} steps, eta {F.eta:g}", fontsize=10)
+    ax.legend(fontsize=T.legend_size, loc="best")
+    ax.set_title(f"the next {len(gd) - 1} steps, eta {F.eta:g}", fontsize=T.panel_title_size)
 
 
 VIEW_DRAWERS = {

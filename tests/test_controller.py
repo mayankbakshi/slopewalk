@@ -1,6 +1,7 @@
 """The widgets, built without a front end: sliders and buttons change the network, the history and the picture."""
 
 import copy
+import re
 
 import matplotlib.pyplot as plt
 import pytest
@@ -45,16 +46,17 @@ def test_widgets_are_built(live):
     sl = C.sliders[0]
     assert (sl.min, sl.max, sl.step, sl.continuous_update, sl.readout_format) == (-4, 4, 0.001, False, ".2f")
     assert C.eta.value == 0.7 and (C.eta.min, C.eta.max, C.eta.step) == (0.1, 5, 0.1)
-    assert list(C.buttons) == ["gradient step", "10 steps", "reset"]
+    assert list(C.buttons) == ["gradient step", "10 steps", "back one step", "reset"]
     assert C.tabs is None  # no tabs unless the call asks for the backward pass or for extra views
     hint, row, panel, frozen = C.controls.children
     assert "Press gradient step" in hint.value and panel is C.panel and frozen is C.frozen_note
-    assert list(row.children) == [C.eta, *C.buttons.values(), C.layout_box]  # eta, the steps and the layout in a row
-    assert C.layout_pick in C.layout_box.children
-    assert "At the start: R = 1.0032." in C.message.value and "next step, eta 0.7" in C.readout.value
+    assert list(row.children) == [C.eta, *C.buttons.values()]  # eta and the step buttons in one row
+    assert C.layout_pick in C.layout_row.children
+    assert re.sub("<[^>]+>", "", C.message.value) == ""  # nothing to report before the first action
+    assert "next step, eta 0.7: predicted change" in C.readout.value and "none yet" in C.readout.value
     assert isinstance(C.image, ipywidgets.Image) and C.image.value[:8] == b"\x89PNG\r\n\x1a\n"
-    (root,) = C.widgets  # the picture first, then the status line, then the controls
-    assert list(root.children) == [C.image, C.status, C.controls, C.out]
+    (root,) = C.widgets  # the picture first, then the status, the controls, and last the layout of the picture
+    assert list(root.children) == [C.image, C.status, C.controls, C.layout_row, C.out]
     assert list(C.status.children) == [C.readout, C.message]
     assert C.image.layout.width == "100%"  # the default layout outside Colab is wide: the picture at the full width
     for html in (C.message.value, C.readout.value, hint.value):
@@ -69,7 +71,7 @@ def test_standard_layout_has_the_same_order(live):
     net, X, y = logistic_start()
     C = explore(net, X, y, layout="standard").controller
     (root,) = C.widgets
-    assert list(root.children) == [C.image, C.status, C.controls, C.out]
+    assert list(root.children) == [C.image, C.status, C.controls, C.layout_row, C.out]
     assert C.image.layout.width == ""  # the picture keeps its own width
 
 
@@ -79,11 +81,12 @@ def test_layout_switch(live):
     assert C.layout_pick.value == "wide" and s.fig.get_size_inches()[0] == 27
     C.layout_pick.value = "standard"
     assert s.layout.style == "standard" and s.fig.get_size_inches()[0] == 15
-    assert list(C.root.children) == [C.image, C.status, C.controls, C.out] and "Layout standard" in C.message.value
+    order = [C.image, C.status, C.controls, C.layout_row, C.out]
+    assert list(C.root.children) == order and "Layout standard" in C.message.value
     assert C.image.layout.width == ""
     C.layout_pick.value = "wide"
     assert s.fig.get_size_inches()[0] == 27 and C.image.layout.width == "100%"
-    assert list(C.root.children) == [C.image, C.status, C.controls, C.out]
+    assert list(C.root.children) == order
 
 
 def test_messages_say_what_happened(live):
@@ -142,7 +145,7 @@ def test_slider_changes_the_network_and_redraws(live):
     assert net[0].weight[0, 0].item() == pytest.approx(0.6)
     assert s.fig is fig0  # the same figure, drawn again
     assert s.controller.image.value != png0
-    labels = [t.get_text() for ax in s.fig.axes for t in ax.texts if t.get_fontsize() == 8.5]
+    labels = [t.get_text() for ax in s.fig.axes for t in ax.texts if t.get_fontsize() == s.theme.edge_label_size]
     assert "w1 = 0.60" in labels
     assert len(s.history) == 1  # moving a slider is not a gradient step
 
@@ -175,7 +178,7 @@ def test_ten_steps_with_eta(live):
     assert s.weights() == pytest.approx(naming_order(ref), abs=1e-5)
     assert len(s.history) == 11
     hist_ax = [ax for ax in s.fig.axes if ax.get_title().startswith("R = ")][0]
-    assert len(hist_ax.lines[0].get_xdata()) == 11 and hist_ax.get_title() == f"R = {s.history[-1]:.3f}"
+    assert len(hist_ax.lines[0].get_xdata()) == 11 and hist_ax.get_title() == f"R = {s.history[-1]:.4f}"
 
 
 def test_reset_button(live):
@@ -235,10 +238,14 @@ def test_steps_in_code_update_the_sliders(live):
 def test_readout_strip(live):
     s = explore(make("tanh3"), *xor_centres(), eta=0.5)
     C = s.controller
-    assert "next step, eta 0.5: predicted change of R" in C.readout.value and "last step" not in C.readout.value
+    assert "next step, eta 0.5: predicted change" in C.readout.value and "none yet" in C.readout.value
+    columns = C.readout.value.count("<td")
     C.buttons["gradient step"].click()
     p = s.predictions[-1]
-    assert f"{p.predicted - p.before:+.4f}, {p.actual - p.before:+.4f}" in C.readout.value
+    assert f"{p.actual - p.before:+.4f}" in C.readout.value
+    assert f"predicted {p.predicted - p.before:+.4f}" in C.readout.value
+    assert "#2E8B57" in C.readout.value and "none yet" not in C.readout.value  # R went down: green
+    assert C.readout.value.count("<td") == columns  # the status keeps its shape after the first step
     C.eta.value = 2.0
     assert s.eta == 2.0 and "next step, eta 2: predicted change" in C.readout.value
 
@@ -253,7 +260,7 @@ def test_tabs_appear_only_when_asked_for(live):
     assert titles(C) == ["Weights and steps", "Views"] and C.tabs.selected_index == 0
     C = explore(make("tanh3"), X, y, groups, views=("backprop", "line"), case_slopes="w10").controller
     assert titles(C) == ["Weights and steps", "Backprop", "Views"]
-    assert list(C.root.children) == [C.image, C.status, C.tabs, C.out]  # the tabs under the picture
+    assert list(C.root.children) == [C.image, C.status, C.tabs, C.layout_row, C.out]  # the tabs under the picture
     assert C.view_boxes["line"].value and C.view_boxes["cases"].value and not C.view_boxes["slice"].value
 
 
@@ -292,3 +299,62 @@ def test_changing_tabs_leaves_the_picture_as_it_is(live):
     for tab in (0, 2, 1, 0):
         C.tabs.selected_index = tab
         assert s.fig is fig and C.image.value == png and s.views == views and s.backprop_step == 2
+
+
+def test_back_one_step(live):
+    s = explore(make("tanh3"), *xor_centres(), eta=0.5)
+    C = s.controller
+    back = C.buttons["back one step"]
+    assert back.disabled  # nothing to undo yet
+    w0 = s.weights()
+    C.buttons["gradient step"].click()
+    assert not back.disabled and len(s.history) == 2
+    R1 = s.history[-1]
+    back.click()
+    assert s.weights() == pytest.approx(w0) and C.values() == pytest.approx(w0) and s.history == [s.risk(w0)]
+    assert f"Back one step: R went from {R1:.4f} to {s.history[0]:.4f}" in C.message.value and back.disabled
+
+
+def test_buttons_are_disabled_while_working(live, monkeypatch):
+    s = explore(make("tanh3"), *xor_centres(), eta=0.5)
+    C = s.controller
+    seen = []
+    C.buttons["gradient step"].observe(lambda ch: seen.append(ch["new"]), names="disabled")
+    C.buttons["gradient step"].click()
+    assert seen == [True, False]  # disabled for the step and the redraw, then enabled again
+
+    def broken(*a, **k):
+        raise RuntimeError("drawing failed")
+
+    monkeypatch.setattr(C.picture, "refresh", broken)
+    C.buttons["10 steps"].click()  # the callback fails; ipywidgets logs the error
+    assert not any(b.disabled for name, b in C.buttons.items() if name != "back one step")
+
+
+def test_text_follows_the_host_colour(live):
+    """No fixed text colours in the control area, so dark themes work; only the change of the last step is
+    coloured, in colours that keep 3:1 on light and dark backgrounds."""
+    s = explore(make("tanh3"), *xor_centres(), views=("backprop", "slice"))
+    C = s.controller
+    C.buttons["gradient step"].click()
+    html = [C.message.value, C.readout.value, C.layout_row.children[0].value]
+    html += [w.value for tab in C.tabs.children for w in tab.children if isinstance(w, ipywidgets.HTML)]
+    colours = {c for h in html for c in re.findall(r"color:\s*(#[0-9A-Fa-f]{3,6})", h)}
+    assert colours <= {"#2E8B57", "#E53935"}
+
+
+def test_sliders_apply_on_release(live):
+    s = explore(make("tanh3"), *xor_centres(), views=("backprop", "momentum"))
+    C = s.controller
+    assert not any(w.continuous_update for w in [*C.sliders, C.eta, C.bp_step, C.beta, C.ahead])
+
+
+def test_a_slider_marks_its_weight(live):
+    s = explore(make("tanh3"), *xor_centres())
+    C = s.controller
+    C.sliders[4].value = 0.25
+    assert s.last_moved == 4
+    labels = [t.get_text() for t in s.fig.axes[0].texts if t.get_fontsize() == s.theme.edge_label_size]
+    assert "w5 = 0.25" in labels
+    C.buttons["gradient step"].click()
+    assert s.last_moved is None

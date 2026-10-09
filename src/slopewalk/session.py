@@ -62,11 +62,12 @@ def as_views(views):
 class Session:
     """What explore returns.
 
-    weights(), risk(), slopes(), predict(), step(k), reset() work on the network itself; lookahead() and
+    weights(), risk(), slopes(), predict(), step(k), step_back(), reset() work on the network itself; lookahead() and
     case_slopes() leave it as it is. save(path) writes the current picture and record(path) a GIF of a run.
     history holds R at the start and after every step; predictions one Prediction per step; path the weights after
     every step (a row of NaN marks a jump made with the sliders); w0 the weights at the start; active the indices of
-    the weights that move; controller the widgets or None.
+    the weights that move; last_moved the weight a slider changed last (None after a step); controller the widgets
+    or None.
     """
 
     def __init__(
@@ -96,7 +97,8 @@ class Session:
         self.data = prepare(X, y, groups, n_inputs=self.model.n_inputs, dtype=self.model.dtype, task=task)
         self.task = self.model.task = self.data.task
         self.layout = Layout(self.model.n_inputs, self.model.hidden, self.task, style=layout, width=width)
-        self.theme = theme or THEME
+        self.base_theme = theme or THEME
+        self.theme = self.base_theme.scaled(self.layout.text_scale)
         self.title = title
         self.eta = check_eta(eta)
         self.active = self.model.select(params)
@@ -131,6 +133,8 @@ class Session:
         self.history = [self.risk(self.w0)]
         self.predictions = []
         self.path = [list(self.w0)]
+        self.undo = []  # per step taken: the weights before it, and the length of path before it
+        self.last_moved = None
         self.cache = {}
         self.fig = None
         self.controller = None
@@ -156,6 +160,7 @@ class Session:
     def set_layout(self, style, width=None):
         """Switches the layout of the picture: "standard" or "wide" (the widgets also move the controls)."""
         self.layout = Layout(self.model.n_inputs, self.model.hidden, self.task, style=style, width=width)
+        self.theme = self.base_theme.scaled(self.layout.text_scale)
 
     def weight_index(self, v):
         """The index of a weight given by its name ("w10") or its index."""
@@ -189,11 +194,13 @@ class Session:
         Records R, the prediction and the weights of every step. Returns the new weights."""
         eta = self.eta if eta is None else check_eta(eta)
         w = [float(v) for v in (self.weights() if w is None else w)]
-        if any(abs(a - b) > 1e-12 for a, b in zip(w, self.path[-1])):
+        mark = len(self.path)
+        if any(abs(a - b) > 1e-6 * max(1.0, abs(b)) for a, b in zip(w, self.path[-1])):  # beyond float32 rounding
             self.path.append([math.nan] * len(w))  # the sliders moved the weights: a new segment of the path
             self.path.append(list(w))
         R = self.risk(w)
-        for _ in range(k):
+        for i in range(k):
+            self.undo.append((list(w), mark if i == 0 else len(self.path)))
             g = self.slopes(w)
             g2 = float(sum(g[i] ** 2 for i in self.active))
             for i in self.active:
@@ -203,9 +210,25 @@ class Session:
             self.history.append(R_new)
             self.path.append(list(w))
             R = R_new
+        self.last_moved = None  # a step moves every weight
         self.model.set_weights(w)
         self.changed()
         return w
+
+    def step_back(self):
+        """Undoes the last gradient step: the weights return to what they were just before it, so a slider move made
+        after the step is undone as well, and the step leaves history, predictions and path. Returns the weights, or
+        None when there is no step to undo."""
+        if not self.undo:
+            return None
+        w, mark = self.undo.pop()
+        del self.path[mark:]
+        self.history.pop()
+        self.predictions.pop()
+        self.last_moved = None
+        self.model.set_weights(w)
+        self.changed()
+        return list(w)
 
     def reset(self):
         """Back to the weights at the start, with no steps taken. Returns the weights."""
@@ -213,6 +236,8 @@ class Session:
         self.history = [self.risk(self.w0)]
         self.predictions = []
         self.path = [list(self.w0)]
+        self.undo = []
+        self.last_moved = None
         self.changed()
         return list(self.w0)
 

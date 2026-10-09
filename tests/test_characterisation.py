@@ -264,15 +264,16 @@ def test_public_signatures_unchanged():
 
 def test_two_point_picture(static, capsys):
     net, X, y, _ = two_point()
+    R = oracle(net, X, y)[0]
     fig = static(net, X, y)
     assert "Still picture of the start" in capsys.readouterr().out
-    assert history_title(fig) == "R = 1.003"
+    assert history_title(fig) == f"R = {R:.4f}" and history_title(fig).startswith("R = 1.003")
     table = slope_table(fig)
     assert list(table) == ["w1", "w2", "w3"]
     assert [table[k][1] for k in table] == [0.616, 0.116, 0.116]
     assert [table[k][0] for k in table] == pytest.approx(plus_point_one(net, X, y), abs=1.5e-4)
-    # names and values on the lines (at most 9 weights), once per panel
-    assert sorted(edge_labels(fig)) == sorted(["w1 = 0.50", "w2 = 0.50", "w3 = 0.00"] * 2)
+    # names and values on the lines (at most 9 weights), in the first panel: the weights are the same in every panel
+    assert sorted(edge_labels(fig)) == sorted(["w1 = 0.50", "w2 = 0.50", "w3 = 0.00"])
     assert panel_titles(fig) == ["A: (-1.0, 1.0), class 1:  loss 0.693", "B: (1.0, 1.0), class 0:  loss 1.313"]
     assert "y = 1\nloss 0.693\nchange\nfrom start\n+0.000" in texts(fig)
     assert "y = 0\nloss 1.313\nchange\nfrom start\n+0.000" in texts(fig)
@@ -287,14 +288,14 @@ def test_xor_step40_picture(static):
     R, g, a, p, loss = oracle(net, Xc, yc)
     delta = plus_point_one(net, Xc, yc)
     fig = static(net, Xc, yc, gc)
-    assert history_title(fig) == "R = 0.568"
+    assert history_title(fig) == f"R = {R:.4f}" and history_title(fig).startswith("R = 0.568")
     table = slope_table(fig)
     assert list(table) == NAMES13  # the slope table follows the naming order
     assert [table[k][1] for k in NAMES13] == pytest.approx(g, abs=1.5e-3)
     assert [table[k][0] for k in NAMES13] == pytest.approx(delta, abs=1.5e-4)
-    # more than 9 weights: values only on the lines, each weight once per panel
+    # more than 9 weights: values only on the lines, each weight once, in the first panel
     w = flat(net)
-    assert sorted(edge_labels(fig)) == sorted([f"{v:.2f}" for v in w] * 4)
+    assert sorted(edge_labels(fig)) == sorted([f"{v:.2f}" for v in w])
     # panels in the order of the centres: A top left, B top right, C bottom left, D bottom right
     assert panel_titles(fig) == [
         f"A: (-1.0, 1.0), class 1:  loss {loss[0]:.3f}",
@@ -352,7 +353,7 @@ def test_without_ipywidgets_draws_and_explains(monkeypatch, capsys):
     explore(net, X, y)
     out = capsys.readouterr().out
     assert "No sliders: the package ipywidgets is missing" in out
-    assert history_title(plt.gcf()) == "R = 1.003"
+    assert history_title(plt.gcf()) == f"R = {oracle(net, X, y)[0]:.4f}"
     plt.close("all")
 
 
@@ -418,7 +419,7 @@ def test_controller_sliders_buttons_and_steps(controller):
     # reset returns to the weights at call time
     buttons["reset"].click()
     assert flat(net) == pytest.approx([0.5, 0.5, 0.0], abs=1e-9)
-    assert history_title(s.fig) == "R = 1.003"
+    assert history_title(s.fig) == f"R = {oracle(net, X, y)[0]:.4f}"
 
 
 def test_controller_ten_steps_lower_R(controller):
@@ -441,6 +442,6 @@ def test_controller_ten_steps_lower_R(controller):
     assert w == pytest.approx(flat(ref), abs=1e-5)
     R_after = oracle(net, Xc, yc)[0]
     assert R_after < 0.568
-    assert history_title(s.fig) == f"R = {R_after:.3f}"
+    assert history_title(s.fig) == f"R = {R_after:.4f}"
     hist_ax = [ax for ax in s.fig.axes if ax.get_title().startswith("R = ")][0]
     assert len(hist_ax.lines[0].get_xdata()) == 11  # start plus ten steps

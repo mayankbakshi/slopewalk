@@ -137,7 +137,7 @@ def test_pictures_of_every_stage(static):
             == {"forward": 13, "output": 0, "weights": 4 if k == 2 else 9, "to_h": 3, "delta": 0, "average": 13}[kind]
         )
         derivation = [ax for ax in fig.axes if ax.get_title(loc="left").startswith("backward pass of A")]
-        assert len(derivation) == 1 and f"step {k} of 6" in derivation[0].get_title(loc="left")
+        assert len(derivation) == 1 and f"stage {k} of 6" in derivation[0].get_title(loc="left")
         plt.close("all")
 
 
@@ -193,8 +193,8 @@ def test_widget_controls(monkeypatch):
     C.bp_next.click()
     C.bp_next.click()
     assert s.backprop_step == 2 and C.image.value != png
-    assert "Stage 2 of 6. Slopes of the output weights" in C.bp_caption.value
     assert "On the purple lines" in C.message.value
+    assert not C.bp_prev.disabled and not C.bp_next.disabled
     C.bp_prev.click()
     assert s.backprop_step == 1
     C.bp_case.value = "D"
@@ -202,6 +202,20 @@ def test_widget_controls(monkeypatch):
     png = C.image.value
     C.tabs.selected_index = 0  # the other tab: the backward pass stays in the picture, which does not change
     assert "backprop" in s.views and s.backprop_step == 1 and C.image.value == png
+    C.bp_step.value = 0
+    assert C.bp_prev.disabled and not C.bp_next.disabled  # the stage buttons stop at the ends
+    C.bp_step.value = 6
+    assert C.bp_next.disabled and not C.bp_prev.disabled
     starts_on = explore(reference_net(40), *XOR, backprop_step=3).controller
     assert starts_on.tabs.selected_index == 1
     plt.close("all")
+
+
+def test_shared_labels_only_in_the_first_panel(static):
+    """Weights (forward, back to h) are the same in every panel: panel A only. Per-case slopes: every panel."""
+    s = explore(reference_net(40), *XOR, views="backprop")
+    count = lambda fig: [sum(t.get_fontsize() == THEME.edge_label_size for t in ax.texts) for ax in network_panels(fig)]  # noqa: E731
+    for k, expected in ((0, [13, 0, 0, 0]), (2, [4, 4, 4, 4]), (3, [3, 0, 0, 0]), (6, [13, 13, 13, 13])):
+        s.backprop_step = k
+        assert count(s.draw()) == expected, k
+        plt.close("all")

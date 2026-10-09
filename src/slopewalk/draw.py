@@ -4,6 +4,8 @@ Every panel function takes (ax, S, F): the axes, the session and the frame of nu
 (see picture.py), so that no panel computes R or the slopes again.
 """
 
+import copy
+
 import numpy as np
 import torch
 from matplotlib.font_manager import FontProperties
@@ -19,11 +21,12 @@ class Theme:
     Only the labels on the weight lines use edge_label_size, and only the weight lines use zorder 1.
     """
 
-    class_colour = {0: "blue", 1: "red"}
+    class_colour = {0: "blue", 1: "#C62828"}  # a red dark enough for text: 5.6:1 on white, 4.7:1 on its tint
     class_tint = {0: "#E5ECFF", 1: "#FFE5E5"}
     mixed_colour, mixed_tint = "black", "#EEEEEE"
     neutral_colour, neutral_tint = "0.15", "#EEEEEE"  # regression panels
-    positive, negative, negative_text, changed = "black", "tab:orange", "#B35900", "tab:blue"
+    positive, negative, negative_text, changed = "black", "#E86A00", "#B35900", "tab:blue"  # lines 3.2:1 on white
+    line_width, line_slope, line_max = 1.0, 1.3, 7  # a weight's line: line_width + line_slope * |w|, at most line_max
     frozen_alpha, frozen_text, frozen_fill = 0.35, "0.55", "#F5F5F5"  # weights that do not move (params)
     hidden = "green"  # the h boxes, the dot and the band on the glyphs, the history line
     arrow, curve, node_edge = "0.45", "0.35", "gray"
@@ -31,11 +34,20 @@ class Theme:
     gd_colour, momentum_colour = "green", "#B9852B"
     value_box = dict(boxstyle="round,pad=0.25", fc="#F2F2F2", ec="0.7", lw=0.8)
     edge_label_size, glyph_name_size, value_size, node_size, title_size, suptitle_size = 8.5, 8, 9.5, 10, 11.5, 13
-    note_size = 9
-    plane_cmap, points_cmap, value_cmap = "RdBu_r", "bwr", "viridis"
-    table_size, table_title_size, table_row_height = 10, 10.5, 0.058  # row height as a fraction of the panel
+    note_size = 9.5  # notes inside panels, and the lines of the backward pass
+    panel_title_size, legend_size, letter_size = 10.5, 8, 11  # the panels below the networks
+    plane_cmap, value_cmap = "RdBu_r", "viridis"
+    table_size, table_row_height = 10, 0.058  # row height as a fraction of the panel
     table_edge, table_head, table_highlight = "0.8", "#F2F2F2", "#FFF1D6"
     backprop_colour, backprop_tint, backprop_size = "#7B1FA2", "#F3E5F5", 9  # the backward pass
+    network_sizes = ("edge_label_size", "glyph_name_size", "value_size", "node_size", "title_size", "backprop_size")
+
+    def scaled(self, factor):
+        """A copy whose text in the network panels is `factor` times larger; the panels below keep their sizes."""
+        out = copy.copy(self)
+        for name in self.network_sizes:
+            setattr(out, name, round(getattr(self, name) * factor, 2))
+        return out
 
 
 THEME = Theme()
@@ -147,12 +159,33 @@ def weight_colour(T, k, w, changed, frozen):
     return T.changed if k in changed else (T.positive if w[k] >= 0 else T.negative)
 
 
+def label_variants(S, F, edges, spec):
+    """The label sets to try, in order: (mode, labels). Names and values for small networks, values only for larger
+    ones; with values only, the weight moved last by a slider first keeps its name, so that its line can be found."""
+    M, w = S.model, F.w
+    ks = [k for k, _, _, _ in edges]
+    if spec is not None:  # names, values, then values with fewer digits where the lines are crowded
+        out = [("names", [spec[k][0] for k in ks])] if S.layout.show_names(len(w)) else []
+        out.append(("values", [spec[k][1] for k in ks]))
+        if any(len(spec[k]) > 3 for k in ks):
+            out.append(("values", [spec[k][3] if len(spec[k]) > 3 else spec[k][1] for k in ks]))
+        return out
+    named = "{} = {:.2f}"
+    if S.layout.show_names(len(w)):
+        return [("names", [named.format(M.names[k], w[k]) for k in ks]), ("values", [f"{w[k]:.2f}" for k in ks])]
+    out = []
+    moved = getattr(S, "last_moved", None)
+    if moved in ks:
+        out.append(("values", [named.format(M.names[k], w[k]) if k == moved else f"{w[k]:.2f}" for k in ks]))
+    return out + [("values", [f"{w[k]:.2f}" for k in ks])]
+
+
 def draw_edge_labels(ax, S, F, edges, obstacles, spec=None):
     """The labels on the lines: names and values for small networks, values only for larger ones, none when
     even the values cannot be placed without overlaps (the values stay on the sliders and in the table).
-    spec: {k: (long text, short text, colour)} replaces the labels (only those lines get one), as in the
-    backward pass. Returns the mode used: "names", "values" or "none"."""
-    M, L, T = S.model, S.layout, S.theme
+    spec: {k: (long text, short text, colour[, shorter text])} replaces the labels (only those lines get one), as in
+    the backward pass. Returns the mode used: "names", "values" or "none"."""
+    T = S.theme
     w = F.w
     renderer = get_renderer(ax.figure)
     obstacles = obstacles + box_obstacles(ax, renderer, T.edge_label_size)
@@ -162,18 +195,16 @@ def draw_edge_labels(ax, S, F, edges, obstacles, spec=None):
             return "none"
     segments = [(p0, p1) for _, p0, p1, _ in edges]
     defaults = [t0 for _, _, _, t0 in edges]
-    modes = ["names", "values"] if L.show_names(len(w)) else ["values"]
-    for mode in modes:
-        if spec is not None:
-            labels = [spec[k][0] if mode == "names" else spec[k][1] for k, _, _, _ in edges]
-        else:
-            labels = [f"{M.names[k]} = {w[k]:.2f}" if mode == "names" else f"{w[k]:.2f}" for k, _, _, _ in edges]
-        sizes = [text_size(ax, renderer, s, T.edge_label_size) for s in labels]
-        positions, _, worst_labels, worst_boxes = place_labels(segments, sizes, obstacles, defaults, pad=0.03)
+    chosen = None
+    for variant, texts in label_variants(S, F, edges, spec):
+        sizes = [text_size(ax, renderer, s, T.edge_label_size) for s in texts]
+        places, _, worst_labels, worst_boxes = place_labels(segments, sizes, obstacles, defaults, pad=0.03)
         if max(worst_labels, worst_boxes) <= LABEL_TOLERANCE:
+            chosen = variant, texts, places
             break
-    else:
+    if chosen is None:
         return "none"
+    mode, labels, positions = chosen
     for (k, _, _, _), label, (cx, cy) in zip(edges, labels, positions):
         frozen = k not in F.moving
         hot = k in F.changed and not frozen and spec is None
@@ -242,7 +273,7 @@ def draw_case(ax, S, F, c, styles=None):
     for i, yy in enumerate(L.y_inputs):
         ax.text(0, yy, f"x{i + 1}", color=col, bbox=dict(boxstyle="circle", fc=tint, ec=col), **node)
         ax.text(
-            -0.24,
+            L.x_input_value,
             yy,
             num(xm[i], xs[i]),
             fontsize=T.node_size,
@@ -261,7 +292,7 @@ def draw_case(ax, S, F, c, styles=None):
         ax.text(
             L.x_a, 1.2, "ŷ\n" + num(am, as_), fontsize=T.node_size, ha="center", va="center", zorder=5, bbox=T.value_box
         )
-        ax.annotate("", xy=(L.x_loss - 0.42, 1.2), xytext=(L.x_a + BW, 1.2), arrowprops=arrow)
+        ax.annotate("", xy=(L.x_loss - 0.42 * L.text_scale, 1.2), xytext=(L.x_a + BW, 1.2), arrowprops=arrow)
         ym, ys = D.stats(D.y.numpy(), c)
         ytxt = f"y = {ym:+.2f}" if npts == 1 else f"y {ym:+.2f}\n±{ys:.2f}"
         ax.text(
@@ -320,7 +351,7 @@ def draw_case(ax, S, F, c, styles=None):
             [sx, tx],
             [sy, ty],
             color=colour,
-            lw=min(0.6 + 1.3 * abs(w[k]), 7),
+            lw=min(T.line_width + T.line_slope * abs(w[k]), T.line_max),
             alpha=alpha,
             zorder=1,
             solid_capstyle="round",
@@ -368,7 +399,7 @@ def draw_group_marks(ax, S, xs, ys, size=160):
         col, _, _, yi = group_style(S, c)
         face = "white" if D.task == "regression" else T.class_colour[yi]
         ax.scatter(xs[c], ys[c], s=size, color=face, edgecolor="k", zorder=4)
-        ax.text(xs[c], ys[c], f"  {letter(c)}", fontsize=12, va="bottom", zorder=5)
+        ax.text(xs[c], ys[c], f"  {letter(c)}", fontsize=T.letter_size, va="bottom", zorder=5)
 
 
 def draw_input_plane(ax, S, F):
@@ -390,21 +421,22 @@ def draw_input_plane(ax, S, F):
             ax.plot(u, out0, "--", color=T.start_colour, lw=1.0, label="start")
         ax.plot(u, out, color=T.neutral_colour, lw=2, label="p for class 1" if D.task == "binary" else "prediction")
         if D.task == "binary":
-            ax.scatter(X[:, 0], y, c=y, cmap=T.points_cmap, vmin=0, vmax=1, s=18, edgecolor="k", lw=0.3, zorder=3)
+            colours = [T.class_colour[int(v)] for v in y]
+            ax.scatter(X[:, 0], y, c=colours, s=18, edgecolor="k", lw=0.3, zorder=3)
             ax.axhline(0.5, color="0.7", lw=0.8, zorder=0)
             gy = [float(D.stats(y, c)[0]) for c in range(D.G)]
             ax.set_ylim(-0.08, 1.08)
             ax.set_ylabel("p")
-            ax.set_title("p for class 1 against x1")
+            ax.set_title("p for class 1 against x1", fontsize=T.panel_title_size)
         else:
             ax.scatter(X[:, 0], y, s=18, color="0.25", zorder=3)
             gy = [float(D.stats(y, c)[0]) for c in range(D.G)]
             ax.set_ylabel("y")
-            ax.set_title("prediction and the points")
+            ax.set_title("prediction and the points", fontsize=T.panel_title_size)
         draw_group_marks(ax, S, [float(v[0]) for v in gx], gy, size=110)
         ax.set_xlabel("x1")
         if moved:
-            ax.legend(fontsize=8, loc="best")
+            ax.legend(fontsize=T.legend_size, loc="best")
         S.model.set_weights(w)
         return
     if D.d != 2:
@@ -423,12 +455,12 @@ def draw_input_plane(ax, S, F):
             if a0.min() < 0 < a0.max():
                 ax.contour(P1, P2, a0, levels=[0.0], colors=T.start_colour, linestyles="--", linewidths=1.0)
         if D.n > D.G:
-            ax.scatter(X[:, 0], X[:, 1], c=y, cmap=T.points_cmap, s=4, vmin=0, vmax=1)
+            ax.scatter(X[:, 0], X[:, 1], c=[T.class_colour[int(v)] for v in y], s=4)
         for c in range(D.G):
             yi = group_style(S, c)[3]
             ax.scatter(*gx[c], s=160, color=T.class_colour[yi], edgecolor="k", zorder=3)
-            ax.text(gx[c][0] + 0.15, gx[c][1] + 0.15, letter(c), fontsize=12)
-        ax.set_title("p for class 1 and the boundary")
+            ax.text(gx[c][0] + 0.15, gx[c][1] + 0.15, letter(c), fontsize=T.letter_size)
+        ax.set_title("p for class 1 and the boundary", fontsize=T.panel_title_size)
     else:
         lo, hi = float(min(a.min(), y.min())), float(max(a.max(), y.max()))
         levels = np.linspace(lo, hi, 12) if hi > lo else 12
@@ -446,8 +478,8 @@ def draw_input_plane(ax, S, F):
             zorder=3,
         )
         for c in range(D.G):
-            ax.text(gx[c][0] + 0.15, gx[c][1] + 0.15, letter(c), fontsize=12)
-        ax.set_title("prediction over the input plane; points coloured by y")
+            ax.text(gx[c][0] + 0.15, gx[c][1] + 0.15, letter(c), fontsize=T.letter_size)
+        ax.set_title("prediction over the input plane; points coloured by y", fontsize=T.panel_title_size)
     ax.set_aspect("equal")
     S.model.set_weights(w)
 
@@ -467,7 +499,7 @@ def draw_history(ax, S, F):
     if predicted:
         ks, vs = zip(*predicted)
         ax.plot(ks, vs, "o", mfc="white", mec=T.prediction_colour, ms=6, ls="none", label="first-order prediction")
-        ax.legend(fontsize=8, loc="lower left")
+        ax.legend(fontsize=T.legend_size, loc="lower left")
     ax.set_xlabel("gradient steps taken")
     ax.set_ylabel("R")
     values = list(history) + [v for _, v in predicted]
@@ -478,7 +510,7 @@ def draw_history(ax, S, F):
     else:
         floor = 1.1 if S.task == "binary" else 0.0
         ax.set_ylim(min(0.0, min(values)), max(floor, max(values) * 1.05))
-    ax.set_title(f"R = {F.R:.3f}")
+    ax.set_title(f"R = {F.R:.4f}", fontsize=T.panel_title_size)
     if len(history) < 12:
         ax.set_xticks(range(len(history)))
     notes = [f"next step, eta {F.eta:g}: predicted change {F.next_change:+.4f}"]
@@ -527,7 +559,7 @@ def draw_slope_table(ax, S, F):
     headers = (
         ["w", "value", "R, +0.1", "slope"] if short else ["weight", "value", "change of R for +0.1", "slope dR/dw"]
     )
-    ax.set_title("Change of R when one weight grows by 0.1,\nand the slope dR/dw", fontsize=T.table_title_size)
+    ax.set_title("Change of R when one weight grows by 0.1,\nand the slope dR/dw", fontsize=T.panel_title_size)
     gap = 0.03
     width = (1 - gap * (n_blocks - 1)) / n_blocks
     for b, block in enumerate(blocks):

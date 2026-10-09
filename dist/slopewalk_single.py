@@ -8,6 +8,7 @@ not this file. Same use as the package:
     explore(net, X, y, groups)
 """
 
+import copy
 import io
 import math
 import os
@@ -18,6 +19,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from contextlib import contextmanager
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
 from matplotlib.font_manager import FontProperties
@@ -500,6 +502,7 @@ LAYOUTS = ("standard", "wide")
 WIDTH = {"standard": 15.0, "wide": 27.0}  # default figure width in inches
 WIDE_PER_ROW, WIDE_BOTTOM_PER_ROW = 4, 6  # the most network panels and lower panels per row of the wide layout
 NET_GAP, PANEL_GAP = 0.5, 0.8  # inches between network panels, and between the panels below them
+TEXT_SCALE = {"standard": 1.0, "wide": 1.1}  # text in the network panels: the wide picture is shown smaller
 # the wide layout gives each lower panel a base width in inches that suits it (for a row 4.2 inches tall), and the
 # width left over in its row goes to the panels that can use it, in these proportions
 WIDE_BASE = {
@@ -533,14 +536,17 @@ class Layout:
             raise ValueError(f"slopewalk: width is the figure width in inches, between 6 and 60, not {width!r}.")
         self.n_inputs, self.hidden, self.task, self.style = n_inputs, hidden, task, style
         self.width = float(width) if width is not None else WIDTH[style]
+        self.text_scale = f = TEXT_SCALE[style]
+        extra = 1.2 * (f - 1)  # larger text: the loss box moves right, clear of the box before it
         self.blocks, x = [], 1.75
         for _ in hidden:
             self.blocks.append((x, x + 0.75, x + 1.5))  # x of the z box, of the glyph and of the h box
             x += 2.75
         if task == "regression":
-            self.x_a, self.x_sigmoid, self.x_p, self.x_loss = x, None, None, x + 1.1
+            self.x_a, self.x_sigmoid, self.x_p, self.x_loss = x, None, None, x + 1.1 + extra
         else:
-            self.x_a, self.x_sigmoid, self.x_p, self.x_loss = x, x + 0.75, x + 1.5, x + 2.4
+            self.x_a, self.x_sigmoid, self.x_p, self.x_loss = x, x + 0.75, x + 1.5, x + 2.4 + extra
+        self.x_input_value = -0.24 * f  # the right edge of an input's value box, left of its circle
         self.y_inputs = np.linspace(1.95, 0.45, n_inputs) if n_inputs > 1 else np.array([1.2])
         self.xlim = (-0.95, self.x_loss + 0.6)
         self.ylim = (-0.05, 3.0)
@@ -579,7 +585,7 @@ class Layout:
         for 12 units), by a fifth when the boxes carry a standard deviation line (groups of points), and by 40% when
         the backward pass adds its boxes under the units."""
         units = min(4.0, max(1.0, max(self.hidden, default=1) / 3))
-        return 2.9 * units * (1.2 if with_sd else 1.0) * (1.4 if backprop else 1.0)
+        return 2.9 * units * (1.2 if with_sd else 1.0) * (1.4 if backprop else 1.0) * self.text_scale
 
     def lower_rows(self, panels, n_weights=0):
         """The rows of the panels below the networks: lists of (panel, width), with widths in inches that add up to
@@ -688,11 +694,12 @@ class Theme:
     Only the labels on the weight lines use edge_label_size, and only the weight lines use zorder 1.
     """
 
-    class_colour = {0: "blue", 1: "red"}
+    class_colour = {0: "blue", 1: "#C62828"}  # a red dark enough for text: 5.6:1 on white, 4.7:1 on its tint
     class_tint = {0: "#E5ECFF", 1: "#FFE5E5"}
     mixed_colour, mixed_tint = "black", "#EEEEEE"
     neutral_colour, neutral_tint = "0.15", "#EEEEEE"  # regression panels
-    positive, negative, negative_text, changed = "black", "tab:orange", "#B35900", "tab:blue"
+    positive, negative, negative_text, changed = "black", "#E86A00", "#B35900", "tab:blue"  # lines 3.2:1 on white
+    line_width, line_slope, line_max = 1.0, 1.3, 7  # a weight's line: line_width + line_slope * |w|, at most line_max
     frozen_alpha, frozen_text, frozen_fill = 0.35, "0.55", "#F5F5F5"  # weights that do not move (params)
     hidden = "green"  # the h boxes, the dot and the band on the glyphs, the history line
     arrow, curve, node_edge = "0.45", "0.35", "gray"
@@ -700,11 +707,20 @@ class Theme:
     gd_colour, momentum_colour = "green", "#B9852B"
     value_box = dict(boxstyle="round,pad=0.25", fc="#F2F2F2", ec="0.7", lw=0.8)
     edge_label_size, glyph_name_size, value_size, node_size, title_size, suptitle_size = 8.5, 8, 9.5, 10, 11.5, 13
-    note_size = 9
-    plane_cmap, points_cmap, value_cmap = "RdBu_r", "bwr", "viridis"
-    table_size, table_title_size, table_row_height = 10, 10.5, 0.058  # row height as a fraction of the panel
+    note_size = 9.5  # notes inside panels, and the lines of the backward pass
+    panel_title_size, legend_size, letter_size = 10.5, 8, 11  # the panels below the networks
+    plane_cmap, value_cmap = "RdBu_r", "viridis"
+    table_size, table_row_height = 10, 0.058  # row height as a fraction of the panel
     table_edge, table_head, table_highlight = "0.8", "#F2F2F2", "#FFF1D6"
     backprop_colour, backprop_tint, backprop_size = "#7B1FA2", "#F3E5F5", 9  # the backward pass
+    network_sizes = ("edge_label_size", "glyph_name_size", "value_size", "node_size", "title_size", "backprop_size")
+
+    def scaled(self, factor):
+        """A copy whose text in the network panels is `factor` times larger; the panels below keep their sizes."""
+        out = copy.copy(self)
+        for name in self.network_sizes:
+            setattr(out, name, round(getattr(self, name) * factor, 2))
+        return out
 
 
 THEME = Theme()
@@ -816,12 +832,33 @@ def weight_colour(T, k, w, changed, frozen):
     return T.changed if k in changed else (T.positive if w[k] >= 0 else T.negative)
 
 
+def label_variants(S, F, edges, spec):
+    """The label sets to try, in order: (mode, labels). Names and values for small networks, values only for larger
+    ones; with values only, the weight moved last by a slider first keeps its name, so that its line can be found."""
+    M, w = S.model, F.w
+    ks = [k for k, _, _, _ in edges]
+    if spec is not None:  # names, values, then values with fewer digits where the lines are crowded
+        out = [("names", [spec[k][0] for k in ks])] if S.layout.show_names(len(w)) else []
+        out.append(("values", [spec[k][1] for k in ks]))
+        if any(len(spec[k]) > 3 for k in ks):
+            out.append(("values", [spec[k][3] if len(spec[k]) > 3 else spec[k][1] for k in ks]))
+        return out
+    named = "{} = {:.2f}"
+    if S.layout.show_names(len(w)):
+        return [("names", [named.format(M.names[k], w[k]) for k in ks]), ("values", [f"{w[k]:.2f}" for k in ks])]
+    out = []
+    moved = getattr(S, "last_moved", None)
+    if moved in ks:
+        out.append(("values", [named.format(M.names[k], w[k]) if k == moved else f"{w[k]:.2f}" for k in ks]))
+    return out + [("values", [f"{w[k]:.2f}" for k in ks])]
+
+
 def draw_edge_labels(ax, S, F, edges, obstacles, spec=None):
     """The labels on the lines: names and values for small networks, values only for larger ones, none when
     even the values cannot be placed without overlaps (the values stay on the sliders and in the table).
-    spec: {k: (long text, short text, colour)} replaces the labels (only those lines get one), as in the
-    backward pass. Returns the mode used: "names", "values" or "none"."""
-    M, L, T = S.model, S.layout, S.theme
+    spec: {k: (long text, short text, colour[, shorter text])} replaces the labels (only those lines get one), as in
+    the backward pass. Returns the mode used: "names", "values" or "none"."""
+    T = S.theme
     w = F.w
     renderer = get_renderer(ax.figure)
     obstacles = obstacles + box_obstacles(ax, renderer, T.edge_label_size)
@@ -831,18 +868,16 @@ def draw_edge_labels(ax, S, F, edges, obstacles, spec=None):
             return "none"
     segments = [(p0, p1) for _, p0, p1, _ in edges]
     defaults = [t0 for _, _, _, t0 in edges]
-    modes = ["names", "values"] if L.show_names(len(w)) else ["values"]
-    for mode in modes:
-        if spec is not None:
-            labels = [spec[k][0] if mode == "names" else spec[k][1] for k, _, _, _ in edges]
-        else:
-            labels = [f"{M.names[k]} = {w[k]:.2f}" if mode == "names" else f"{w[k]:.2f}" for k, _, _, _ in edges]
-        sizes = [text_size(ax, renderer, s, T.edge_label_size) for s in labels]
-        positions, _, worst_labels, worst_boxes = place_labels(segments, sizes, obstacles, defaults, pad=0.03)
+    chosen = None
+    for variant, texts in label_variants(S, F, edges, spec):
+        sizes = [text_size(ax, renderer, s, T.edge_label_size) for s in texts]
+        places, _, worst_labels, worst_boxes = place_labels(segments, sizes, obstacles, defaults, pad=0.03)
         if max(worst_labels, worst_boxes) <= LABEL_TOLERANCE:
+            chosen = variant, texts, places
             break
-    else:
+    if chosen is None:
         return "none"
+    mode, labels, positions = chosen
     for (k, _, _, _), label, (cx, cy) in zip(edges, labels, positions):
         frozen = k not in F.moving
         hot = k in F.changed and not frozen and spec is None
@@ -911,7 +946,7 @@ def draw_case(ax, S, F, c, styles=None):
     for i, yy in enumerate(L.y_inputs):
         ax.text(0, yy, f"x{i + 1}", color=col, bbox=dict(boxstyle="circle", fc=tint, ec=col), **node)
         ax.text(
-            -0.24,
+            L.x_input_value,
             yy,
             num(xm[i], xs[i]),
             fontsize=T.node_size,
@@ -930,7 +965,7 @@ def draw_case(ax, S, F, c, styles=None):
         ax.text(
             L.x_a, 1.2, "ŷ\n" + num(am, as_), fontsize=T.node_size, ha="center", va="center", zorder=5, bbox=T.value_box
         )
-        ax.annotate("", xy=(L.x_loss - 0.42, 1.2), xytext=(L.x_a + BW, 1.2), arrowprops=arrow)
+        ax.annotate("", xy=(L.x_loss - 0.42 * L.text_scale, 1.2), xytext=(L.x_a + BW, 1.2), arrowprops=arrow)
         ym, ys = D.stats(D.y.numpy(), c)
         ytxt = f"y = {ym:+.2f}" if npts == 1 else f"y {ym:+.2f}\n±{ys:.2f}"
         ax.text(
@@ -989,7 +1024,7 @@ def draw_case(ax, S, F, c, styles=None):
             [sx, tx],
             [sy, ty],
             color=colour,
-            lw=min(0.6 + 1.3 * abs(w[k]), 7),
+            lw=min(T.line_width + T.line_slope * abs(w[k]), T.line_max),
             alpha=alpha,
             zorder=1,
             solid_capstyle="round",
@@ -1037,7 +1072,7 @@ def draw_group_marks(ax, S, xs, ys, size=160):
         col, _, _, yi = group_style(S, c)
         face = "white" if D.task == "regression" else T.class_colour[yi]
         ax.scatter(xs[c], ys[c], s=size, color=face, edgecolor="k", zorder=4)
-        ax.text(xs[c], ys[c], f"  {letter(c)}", fontsize=12, va="bottom", zorder=5)
+        ax.text(xs[c], ys[c], f"  {letter(c)}", fontsize=T.letter_size, va="bottom", zorder=5)
 
 
 def draw_input_plane(ax, S, F):
@@ -1059,21 +1094,22 @@ def draw_input_plane(ax, S, F):
             ax.plot(u, out0, "--", color=T.start_colour, lw=1.0, label="start")
         ax.plot(u, out, color=T.neutral_colour, lw=2, label="p for class 1" if D.task == "binary" else "prediction")
         if D.task == "binary":
-            ax.scatter(X[:, 0], y, c=y, cmap=T.points_cmap, vmin=0, vmax=1, s=18, edgecolor="k", lw=0.3, zorder=3)
+            colours = [T.class_colour[int(v)] for v in y]
+            ax.scatter(X[:, 0], y, c=colours, s=18, edgecolor="k", lw=0.3, zorder=3)
             ax.axhline(0.5, color="0.7", lw=0.8, zorder=0)
             gy = [float(D.stats(y, c)[0]) for c in range(D.G)]
             ax.set_ylim(-0.08, 1.08)
             ax.set_ylabel("p")
-            ax.set_title("p for class 1 against x1")
+            ax.set_title("p for class 1 against x1", fontsize=T.panel_title_size)
         else:
             ax.scatter(X[:, 0], y, s=18, color="0.25", zorder=3)
             gy = [float(D.stats(y, c)[0]) for c in range(D.G)]
             ax.set_ylabel("y")
-            ax.set_title("prediction and the points")
+            ax.set_title("prediction and the points", fontsize=T.panel_title_size)
         draw_group_marks(ax, S, [float(v[0]) for v in gx], gy, size=110)
         ax.set_xlabel("x1")
         if moved:
-            ax.legend(fontsize=8, loc="best")
+            ax.legend(fontsize=T.legend_size, loc="best")
         S.model.set_weights(w)
         return
     if D.d != 2:
@@ -1092,12 +1128,12 @@ def draw_input_plane(ax, S, F):
             if a0.min() < 0 < a0.max():
                 ax.contour(P1, P2, a0, levels=[0.0], colors=T.start_colour, linestyles="--", linewidths=1.0)
         if D.n > D.G:
-            ax.scatter(X[:, 0], X[:, 1], c=y, cmap=T.points_cmap, s=4, vmin=0, vmax=1)
+            ax.scatter(X[:, 0], X[:, 1], c=[T.class_colour[int(v)] for v in y], s=4)
         for c in range(D.G):
             yi = group_style(S, c)[3]
             ax.scatter(*gx[c], s=160, color=T.class_colour[yi], edgecolor="k", zorder=3)
-            ax.text(gx[c][0] + 0.15, gx[c][1] + 0.15, letter(c), fontsize=12)
-        ax.set_title("p for class 1 and the boundary")
+            ax.text(gx[c][0] + 0.15, gx[c][1] + 0.15, letter(c), fontsize=T.letter_size)
+        ax.set_title("p for class 1 and the boundary", fontsize=T.panel_title_size)
     else:
         lo, hi = float(min(a.min(), y.min())), float(max(a.max(), y.max()))
         levels = np.linspace(lo, hi, 12) if hi > lo else 12
@@ -1115,8 +1151,8 @@ def draw_input_plane(ax, S, F):
             zorder=3,
         )
         for c in range(D.G):
-            ax.text(gx[c][0] + 0.15, gx[c][1] + 0.15, letter(c), fontsize=12)
-        ax.set_title("prediction over the input plane; points coloured by y")
+            ax.text(gx[c][0] + 0.15, gx[c][1] + 0.15, letter(c), fontsize=T.letter_size)
+        ax.set_title("prediction over the input plane; points coloured by y", fontsize=T.panel_title_size)
     ax.set_aspect("equal")
     S.model.set_weights(w)
 
@@ -1136,7 +1172,7 @@ def draw_history(ax, S, F):
     if predicted:
         ks, vs = zip(*predicted)
         ax.plot(ks, vs, "o", mfc="white", mec=T.prediction_colour, ms=6, ls="none", label="first-order prediction")
-        ax.legend(fontsize=8, loc="lower left")
+        ax.legend(fontsize=T.legend_size, loc="lower left")
     ax.set_xlabel("gradient steps taken")
     ax.set_ylabel("R")
     values = list(history) + [v for _, v in predicted]
@@ -1147,7 +1183,7 @@ def draw_history(ax, S, F):
     else:
         floor = 1.1 if S.task == "binary" else 0.0
         ax.set_ylim(min(0.0, min(values)), max(floor, max(values) * 1.05))
-    ax.set_title(f"R = {F.R:.3f}")
+    ax.set_title(f"R = {F.R:.4f}", fontsize=T.panel_title_size)
     if len(history) < 12:
         ax.set_xticks(range(len(history)))
     notes = [f"next step, eta {F.eta:g}: predicted change {F.next_change:+.4f}"]
@@ -1196,7 +1232,7 @@ def draw_slope_table(ax, S, F):
     headers = (
         ["w", "value", "R, +0.1", "slope"] if short else ["weight", "value", "change of R for +0.1", "slope dR/dw"]
     )
-    ax.set_title("Change of R when one weight grows by 0.1,\nand the slope dR/dw", fontsize=T.table_title_size)
+    ax.set_title("Change of R when one weight grows by 0.1,\nand the slope dR/dw", fontsize=T.panel_title_size)
     gap = 0.03
     width = (1 - gap * (n_blocks - 1)) / n_blocks
     for b, block in enumerate(blocks):
@@ -1295,8 +1331,9 @@ def draw_cases(ax, S, F):
     ax.set_xlim(-0.6, D.G - 0.4)
     ax.set_ylabel("slope of the case's own loss")
     formula = "(p - y) da/dw" if D.task == "binary" else "2(ŷ - y) dŷ/dw"
-    ax.set_title(f"each case's slope along {name}, {formula};\nbars: group means; dashed: the average", fontsize=10)
-    ax.legend(fontsize=8, loc="best")
+    title = f"each case's slope along {name}, {formula};\nbars: group means; dashed: the average"
+    ax.set_title(title, fontsize=T.panel_title_size)
+    ax.legend(fontsize=T.legend_size, loc="best")
 
 
 # ---------------------------------------------------------------- R over one or two weights
@@ -1349,8 +1386,8 @@ def draw_slice(ax, S, F):
         ax.set_ylim(float(R.min()) - 0.1 * span, float(R.max()) + 0.1 * span)
         ax.set_xlabel(names[0])
         ax.set_ylabel("R")
-        ax.legend(fontsize=8, loc="best")
-        ax.set_title(f"R over {names[0]}" + (f",\n{note}" if note else ""), fontsize=10)
+        ax.legend(fontsize=T.legend_size, loc="best")
+        ax.set_title(f"R over {names[0]}" + (f",\n{note}" if note else ""), fontsize=T.panel_title_size)
         return
     a, b = idx
     flat = np.concatenate([p.reshape(-1, 2) for p in pts])
@@ -1366,12 +1403,12 @@ def draw_slice(ax, S, F):
         ax.contourf(A, B, R, levels=levels, cmap="Greys_r", alpha=0.35)
         ax.contour(A, B, R, levels=levels, colors="0.35", linewidths=0.6)
     if look:
-        for key, colour, label in (
-            ("gd", T.gd_colour, "next steps, gradient descent"),
-            ("momentum", T.momentum_colour, f"next steps, momentum {S.beta:g}"),
+        for key, colour, style, label in (
+            ("gd", T.gd_colour, "o-", "next steps, gradient descent"),
+            ("momentum", T.momentum_colour, "o--", f"next steps, momentum {S.beta:g}"),  # dashed: not by colour alone
         ):
             p = look[key]["path"][:, idx]
-            ax.plot(p[:, 0], p[:, 1], "o-", color=colour, ms=2.5, lw=1.2, label=label, zorder=3)
+            ax.plot(p[:, 0], p[:, 1], style, color=colour, ms=2.5, lw=1.2, label=label, zorder=3)
     if len(path) > 1:
         ax.plot(path[:, 0], path[:, 1], "o-", color="0.1", ms=3, lw=1.2, label="steps taken", zorder=4)
     ax.plot([w0[a]], [w0[b]], "o", mfc="white", mec="k", ms=7, label="start", zorder=5)
@@ -1392,9 +1429,9 @@ def draw_slice(ax, S, F):
     ax.set_ylim(*xb)
     ax.set_xlabel(names[0])
     ax.set_ylabel(names[1])
-    ax.legend(fontsize=7, loc="best")
+    ax.legend(fontsize=T.legend_size, loc="best")
     title = f"R over {names[0]} and {names[1]}, with the direction of -grad R"
-    ax.set_title(title + (f"\n{note}" if note else ""), fontsize=10)
+    ax.set_title(title + (f"\n{note}" if note else ""), fontsize=T.panel_title_size)
 
 
 # ---------------------------------------------------------------- R along the next step
@@ -1440,8 +1477,8 @@ def draw_line(ax, S, F):
     ax.set_xlim(0, ts[-1])
     ax.set_xlabel("t, the step size along -grad R")
     ax.set_ylabel("R")
-    ax.legend(fontsize=7, loc="best")
-    ax.set_title(f"R along the next step, eta = {eta:g}", fontsize=10)
+    ax.legend(fontsize=T.legend_size, loc="best")
+    ax.set_title(f"R along the next step, eta {eta:g}", fontsize=T.panel_title_size)
 
 
 # ---------------------------------------------------------------- the hidden layer
@@ -1494,7 +1531,7 @@ def draw_hidden(ax, S, F):
             ax.scatter(h, D.y.numpy(), c=colours, s=small, edgecolor="k", lw=0.3, zorder=3)
             ax.set_ylabel("y")
         ax.set_xlabel(f"{label}1")
-        ax.legend(fontsize=8, loc="best")
+        ax.legend(fontsize=T.legend_size, loc="best")
     elif m == 2:
         x0, x1 = window(H[:, 0], minimum=0.6), window(H[:, 1], minimum=0.6)
         U1, U2 = np.meshgrid(np.linspace(*x0, 81), np.linspace(*x1, 81))
@@ -1508,7 +1545,7 @@ def draw_hidden(ax, S, F):
             ax.contour(U1, U2, a, levels=10, cmap=T.value_cmap, linewidths=0.8)
         ax.scatter(H[:, 0], H[:, 1], c=colours, s=small, edgecolor="k", lw=0.3, zorder=3)
         for c in range(D.G):
-            ax.text(gh[c][0], gh[c][1], f"  {letter(c)}", fontsize=11, zorder=4)
+            ax.text(gh[c][0], gh[c][1], f"  {letter(c)}", fontsize=T.letter_size, zorder=4)
         ax.set_xlim(*x0)
         ax.set_ylim(*x1)
         ax.set_xlabel(f"{label}1")
@@ -1543,7 +1580,7 @@ def draw_hidden(ax, S, F):
         ax.set_xlabel("a = output unit's score" if binary else "prediction")
         ax.set_ylabel("largest other direction of h")
     what = "the boundary a = 0" if binary else "coloured by y"
-    ax.set_title(f"the cases at their hidden values,\n{what}", fontsize=10)
+    ax.set_title(f"the cases at their hidden values,\n{what}", fontsize=T.panel_title_size)
 
 
 # ---------------------------------------------------------------- gradient descent and momentum
@@ -1557,13 +1594,13 @@ def draw_momentum(ax, S, F):
     gd, mo = look["gd"]["R"], look["momentum"]["R"]
     steps = range(len(gd))
     ax.plot(steps, gd, color=T.gd_colour, lw=1.8, label=f"gradient descent: R {gd[-1]:.4f}")
-    ax.plot(steps, mo, color=T.momentum_colour, lw=1.8, label=f"momentum, beta {S.beta:g}: R {mo[-1]:.4f}")
+    ax.plot(steps, mo, "--", color=T.momentum_colour, lw=1.8, label=f"momentum, beta {S.beta:g}: R {mo[-1]:.4f}")
     if S.log_scale and min(min(gd), min(mo)) > 0:
         ax.set_yscale("log")
     ax.set_xlabel("steps from the current weights")
     ax.set_ylabel("R")
-    ax.legend(fontsize=8, loc="best")
-    ax.set_title(f"the next {len(gd) - 1} steps, eta {F.eta:g}", fontsize=10)
+    ax.legend(fontsize=T.legend_size, loc="best")
+    ax.set_title(f"the next {len(gd) - 1} steps, eta {F.eta:g}", fontsize=T.panel_title_size)
 
 
 VIEW_DRAWERS = {
@@ -1710,6 +1747,12 @@ def line_styles(S, F):
     return styles
 
 
+def shared_labels(F):
+    """True when the labels on the lines are the same in every network panel (the weights themselves), so that the
+    first panel alone carries them. The slopes of the backward pass differ from case to case and go in every panel."""
+    return F.stage is None or F.stage.kind in ("forward", "to_h")
+
+
 def label_spec(S, F, c):
     """The labels on the lines at the current stage: {k: (long text, short text, colour)}, or None for the usual
     labels. Weights stages: each line's slope (mean over the group); back to h: the weights used; else none."""
@@ -1722,7 +1765,7 @@ def label_spec(S, F, c):
     if st.kind in ("weights", "average"):
         ks = M.layer_indices(st.layer) if st.kind == "weights" else range(M.n_weights)
         for k in ks:
-            spec[k] = (f"∂ℓ/∂{M.names[k]} = {g[k]:+.3f}", f"{g[k]:+.3f}", T.backprop_colour)
+            spec[k] = (f"∂ℓ/∂{M.names[k]} = {g[k]:+.3f}", f"{g[k]:+.3f}", T.backprop_colour, f"{g[k]:+.2f}")
     elif st.kind == "to_h":
         for k in M.layer_indices(st.layer + 1):
             if M.where[k][2] >= 0:
@@ -1732,11 +1775,14 @@ def label_spec(S, F, c):
 
 
 def box(ax, x, y, text, T):
-    """A backward value under the forward box at (x, y)."""
+    """A backward value under the forward box at (x, y), far enough down to clear it: both boxes have the same number
+    of lines (two for single points, three with a standard deviation)."""
+    lines = text.count("\n") + 1
+    drop = lines * 1.2 * (T.value_size + T.backprop_size) / 2 + 0.25 * T.value_size + 0.2 * T.backprop_size + 3
     ax.annotate(
         text,
         xy=(x, y),
-        xytext=(0, -31),
+        xytext=(0, -max(31.0, drop)),
         textcoords="offset points",
         ha="center",
         va="center",
@@ -1909,7 +1955,8 @@ def draw_derivation(ax, S, F):
     shown = lines[-most:]
     group = "" if S.data.gsel[c].sum() == 1 else f", the case nearest the mean of group {letter(c)}"
     head = f"backward pass of {letter(c)}{group}"
-    ax.set_title(f"{head}\nstep {step} of {len(S.backprop_stages) - 1}: {stage.text}", fontsize=10.5, loc="left")
+    title = f"{head}\nstage {step} of {len(S.backprop_stages) - 1}: {stage.text}"
+    ax.set_title(title, fontsize=T.panel_title_size, loc="left")
     dy = 0.96 / per_column
     if len(lines) > most:
         shown = [(None, "... (earlier steps above)")] + shown[1:]
@@ -1921,7 +1968,7 @@ def draw_derivation(ax, S, F):
             0.98 - row * dy,
             text,
             transform=ax.transAxes,
-            fontsize=9.5,
+            fontsize=T.note_size,
             va="top",
             color=T.backprop_colour if current else ("0.5" if s is None else "0.2"),
             fontweight="bold" if current else "normal",
@@ -2044,8 +2091,10 @@ class Picture:
             S.model.set_weights(F.w)
         if not self.laid_out:
             self.layout()
+        shared = shared_labels(F)  # the weights are the same in every panel: the first panel carries their labels
         for c, (ax, (edges, obstacles)) in enumerate(zip(self.case_axes, parts)):
-            draw_edge_labels(ax, S, F, edges, obstacles, label_spec(S, F, c))
+            if c == 0 or not shared:
+                draw_edge_labels(ax, S, F, edges, obstacles, label_spec(S, F, c))
         S.model.set_weights(F.w)
         self.frame = F
         return self.fig
@@ -2091,6 +2140,26 @@ def still_picture(session, message):
 
 # ------------------------ widgets.py ------------------------
 
+# The look of the control area in one place. Text takes the host's colour, so light and dark themes both work;
+# quiet text is the same colour at a lower opacity. The two colours of the last step's change keep at least 3.9:1 on
+# white and on dark backgrounds (#1E1E1E, #111111), enough for the large text they are used for.
+UI = {
+    "quiet": "opacity:0.72",
+    "text": "font-size:14px",
+    "hint": "font-size:13px",
+    "small": "font-size:12px",
+    "value": "font-size:15px",
+    "big": "font-size:22px;font-weight:600",
+    "numbers": "font-variant-numeric:tabular-nums",
+    "down": "#2E8B57",
+    "up": "#E53935",
+    "short": "250px",  # weight sliders and drop-down lists
+    "long": "320px",  # eta, stage and the settings of the views
+    "label": "40px",  # the label column of the weight sliders, eta and stage
+    "setting_label": "100px",  # the label column of the other controls
+    "column": "270px",  # the narrowest column of the slider grid
+    "gap": "16px",
+}
 TITLES = {"core": "Weights and steps", "backprop": "Backprop", "views": "Views"}
 VIEW_LABELS = {
     "backprop": "backward pass",
@@ -2116,14 +2185,11 @@ LOOK = {  # where to look in the picture at each stage of the backward pass
     "average": "The average of these slopes over the cases is the slope column of the table, what R.backward() gives.",
 }
 HINTS = {
-    "core": "Press gradient step to move every weight against its slope, by eta times the slope. Drag a slider to "
-    "change one weight by hand: each column holds the weights into one unit.",
-    "backprop": "Step through the backward pass, from the output back to the first layer. The panel under the picture "
-    "writes out the numbers for the case chosen in trace case.",
-    "views": "Tick a box to add a panel under the network.",
+    "core": "Press gradient step to move every weight against its slope. Drag a slider to change one weight.",
+    "backprop": "Step from the output back to the first layer. The text under the picture follows one case.",
+    "views": "Tick a box to add a view under the network.",
 }
-HINT_STYLE = "font-size:13px;color:#555;margin:2px 0 6px 0"
-SLIDER_STYLE = {"description_width": "40px"}
+BUTTONS = ("gradient step", "10 steps", "back one step", "reset")
 
 
 def slider_range(v, lo=-4.0, hi=4.0):
@@ -2148,28 +2214,43 @@ def name_ranges(names):
     return ", ".join(parts)
 
 
+def span(text, *styles):
+    return f'<span style="{";".join(UI[s] for s in styles)}">{text}</span>'
+
+
 def readout_html(r):
-    """The numbers of the status line, as a plain table: a row of labels over a row of values."""
-    cells = [("R", f"{r['R']:.4f}", "#222"), ("size of the gradient", f"{r['grad_norm']:.4f}", "#222")]
-    if r["accuracy"] is not None:
-        cells.append(("accuracy", f"{r['accuracy']:.3f}", "#222"))
-    cells.append((f"next step, eta {r['eta']:g}: predicted change of R", f"{r['next_change']:+.4f}", "#222"))
-    if r["last"] is not None:
+    """The status numbers: a row of labels, a row of values and a row of notes. R and the change of the last step
+    are large; the other numbers are smaller. The columns stay the same before and after the first step."""
+    if r["last"] is None:
+        change, note = span("none yet", "value", "quiet"), ""
+    else:
         predicted, actual = r["last"]
-        colour = "#B00020" if actual > 0 else "#1B6E3A"
-        cells.append(("last step: predicted, actual change", f"{predicted:+.4f}, {actual:+.4f}", colour))
-    pad = "padding:1px 28px 1px 0;text-align:left"
-    head = "".join(f'<td style="{pad};color:#666">{label}</td>' for label, _, _ in cells)
-    vals = "".join(f'<td style="{pad};font-family:monospace;color:{c}">{v}</td>' for _, v, c in cells)
-    return f'<table style="border-collapse:collapse;font-size:13px"><tr>{head}</tr><tr>{vals}</tr></table>'
+        colour = UI["up"] if actual > 0 else UI["down"]
+        change = f'<span style="{UI["big"]};color:{colour}">{actual:+.4f}</span>'
+        note = f"predicted {predicted:+.4f}"
+    cells = [
+        ("R", span(f"{r['R']:.4f}", "big"), ""),
+        ("change of R in the last step", change, note),
+        (f"next step, eta {r['eta']:g}: predicted change", span(f"{r['next_change']:+.4f}", "value"), ""),
+        ("size of the gradient", span(f"{r['grad_norm']:.4f}", "value"), ""),
+    ]
+    if r["accuracy"] is not None:
+        cells.append(("accuracy", span(f"{r['accuracy']:.3f}", "value"), ""))
+    pad = f"padding:0 32px 0 0;text-align:left;vertical-align:bottom;{UI['numbers']}"
+    rows = [
+        "".join(f'<td style="{pad}">{span(label, "small", "quiet")}</td>' for label, _, _ in cells),
+        "".join(f'<td style="{pad}">{value}</td>' for _, value, _ in cells),
+        "".join(f'<td style="{pad}">{span(note, "small", "quiet") if note else ""}</td>' for _, _, note in cells),
+    ]
+    return '<table style="border-collapse:collapse">' + "".join(f"<tr>{row}</tr>" for row in rows) + "</table>"
 
 
 def message_html(text):
-    return f'<div style="font-size:14px;color:#222;margin:6px 0 2px 0;min-height:1.4em">{text}</div>'
+    return f'<div style="{UI["text"]};margin:8px 0 2px 0;min-height:1.4em">{text}</div>'
 
 
 def text_html(text):
-    return f'<div style="{HINT_STYLE}">{text}</div>'
+    return f'<div style="{UI["hint"]};{UI["quiet"]};margin:2px 0 8px 0">{text}</div>'
 
 
 def tip(widget, text):
@@ -2196,7 +2277,8 @@ class Controller:
 
         S = self.session = session
         self.dpi = dpi
-        self.busy = False
+        self.busy = False  # True while the sliders are set from code: their observers then do nothing
+        self.depth = 0  # how many actions are running; the buttons are disabled while it is above 0
         self.picture = None
         self.last_R = None
         self.use_output = os.environ.get("SLOPEWALK_DISPLAY") == "output"  # fallback: the PNG through display()
@@ -2212,8 +2294,8 @@ class Controller:
                 description=S.names[k],
                 readout_format=".2f",
                 continuous_update=False,
-                style=SLIDER_STYLE,
-                layout=widgets.Layout(width="250px"),
+                style={"description_width": UI["label"]},
+                layout=widgets.Layout(width=UI["short"]),
             )
             self.sliders.append(tip(slider, f"{S.names[k]}: drag to change this weight in the network"))
         self.panel = self.grouped_panel(widgets) if len(self.sliders) <= 30 else self.dropdown_panel(widgets)
@@ -2228,34 +2310,41 @@ class Controller:
             step=0.01 if small else 0.1,
             description="eta",
             readout_format=".2f" if small else ".1f",
-            style=SLIDER_STYLE,
-            layout=widgets.Layout(width="320px"),
+            continuous_update=False,
+            style={"description_width": UI["label"]},
+            layout=widgets.Layout(width=UI["long"]),
         )
         tip(self.eta, "eta, the step size: a gradient step moves each weight by eta times its slope")
-        self.buttons = {name: widgets.Button(description=name) for name in ("gradient step", "10 steps", "reset")}
+        self.buttons = {name: widgets.Button(description=name) for name in BUTTONS}
         self.buttons["gradient step"].button_style = "primary"
         tip(self.buttons["gradient step"], "every weight moves against its slope: w <- w - eta x dR/dw")
         tip(self.buttons["10 steps"], "ten gradient steps in a row")
+        tip(self.buttons["back one step"], "undo the last gradient step, and any slider move made after it")
         tip(self.buttons["reset"], "back to the weights the cell started from")
         self.layout_pick = tip(
             widgets.ToggleButtons(options=["wide", "standard"], value=S.layout.style, style={"button_width": "80px"}),
             "wide: all networks in one row; standard: two per row, with larger text on small screens",
         )
         self.layout_pick.observe(self.on_layout, names="value")
-        self.layout_box = widgets.HBox(
-            [widgets.Label("layout", layout=widgets.Layout(margin="0 8px 0 0")), self.layout_pick],
-            layout=widgets.Layout(align_items="center", margin="0 0 0 40px"),
+        self.layout_row = widgets.HBox(
+            [
+                widgets.HTML(
+                    span("layout of the picture", "small", "quiet"), layout=widgets.Layout(margin="0 12px 0 0")
+                ),
+                self.layout_pick,
+            ],
+            layout=widgets.Layout(align_items="center", margin="14px 0 0 0"),
         )
 
         self.message = widgets.HTML()
         self.readout = widgets.HTML()
         self.image = widgets.Image(format="png", layout=widgets.Layout(max_width="100%", height="auto"))
         self.out = widgets.Output()
-        self.status = widgets.VBox([self.readout, self.message], layout=widgets.Layout(margin="4px 0 8px 0"))
+        self.status = widgets.VBox([self.readout, self.message], layout=widgets.Layout(margin="6px 0 8px 0"))
 
         steps_row = widgets.HBox(
-            [self.eta, *self.buttons.values(), self.layout_box],
-            layout=widgets.Layout(align_items="center", flex_flow="row wrap", margin="0 0 10px 0"),
+            [self.eta, *self.buttons.values()],
+            layout=widgets.Layout(align_items="center", flex_flow="row wrap", margin="0 0 12px 0"),
         )
         core = widgets.VBox([widgets.HTML(text_html(HINTS["core"])), steps_row, self.panel, self.frozen_note])
         # tabs only for what the call asked for; the backward pass stays on while its tab exists
@@ -2281,16 +2370,18 @@ class Controller:
         self.eta.observe(self.on_eta, names="value")
         self.buttons["gradient step"].on_click(lambda _: self.steps(1))
         self.buttons["10 steps"].on_click(lambda _: self.steps(10))
+        self.buttons["back one step"].on_click(lambda _: self.step_back())
         self.buttons["reset"].on_click(lambda _: self.reset())
 
-        # the picture first, then the status line, then the controls
+        # the picture first, then the status, the controls, and last the layout of the picture
         self.picture_box = self.out if self.use_output else self.image
         tail = [] if self.use_output else [self.out]
-        self.root = widgets.VBox([self.picture_box, self.status, self.controls, *tail])
+        self.root = widgets.VBox([self.picture_box, self.status, self.controls, self.layout_row, *tail])
         self.root.layout.width = "100%"
         self.arrange(S.layout.style)
         self.widgets = [self.root]
-        self.say(f"At the start: R = {S.history[0]:.4f}." if "backprop" not in S.views else self.stage_words())
+        self.update_buttons()
+        self.say(self.stage_words() if "backprop" in S.views else "")
 
     # ---------------------------------------------------------------- building
 
@@ -2315,22 +2406,26 @@ class Controller:
                     head = widgets.HTML(f"<b>{M.unit_title(layer, j)}</b>: weights for {names}")
                     boxes.append(widgets.VBox([head] + [self.sliders[self.index.index(q)] for q in ks]))
                 k += L.in_features + 1
-        return widgets.GridBox(
-            boxes,
-            layout=widgets.Layout(grid_template_columns="repeat(auto-fill, minmax(270px, 1fr))", grid_gap="2px 16px"),
-        )
+        columns = f"repeat(auto-fill, minmax({UI['column']}, 1fr))"
+        return widgets.GridBox(boxes, layout=widgets.Layout(grid_template_columns=columns, grid_gap=f"2px {UI['gap']}"))
 
     def dropdown_panel(self, widgets):
         """More than 30 sliders: choose one weight, then move it."""
         names = [self.session.names[k] for k in self.index]
-        pick = widgets.Dropdown(options=[(nm, i) for i, nm in enumerate(names)], value=0, description="weight")
+        pick = widgets.Dropdown(
+            options=[(nm, i) for i, nm in enumerate(names)],
+            value=0,
+            description="weight",
+            style={"description_width": UI["label"]},
+            layout=widgets.Layout(width=UI["short"]),
+        )
         tip(pick, "choose the weight to move")
-        holder = widgets.HBox([self.sliders[0]])
+        holder = widgets.HBox([self.sliders[0]], layout=widgets.Layout(margin=f"0 0 0 {UI['gap']}"))
         pick.observe(lambda ch: setattr(holder, "children", [self.sliders[ch["new"]]]), names="value")
         return widgets.HBox([pick, holder])
 
     def backprop_tab(self, widgets):
-        """Previous and next stage, the stage, the case the derivation follows, and the formula of the stage."""
+        """Previous and next stage, the stage and the case the text under the picture follows."""
         S = self.session
         n = len(S.backprop_stages)
         self.bp_prev = tip(widgets.Button(description="previous stage"), "the stage before")
@@ -2338,7 +2433,13 @@ class Controller:
             widgets.Button(description="next stage", button_style="primary"), "the next stage, one layer back"
         )
         self.bp_step = widgets.IntSlider(
-            value=S.backprop_step, min=0, max=n - 1, description="stage", style=SLIDER_STYLE
+            value=S.backprop_step,
+            min=0,
+            max=n - 1,
+            description="stage",
+            continuous_update=False,
+            style={"description_width": UI["label"]},
+            layout=widgets.Layout(width=UI["long"]),
         )
         tip(self.bp_step, "0 is the forward pass; the last stage is the average over the cases")
         letters = [chr(65 + c) if c < 26 else str(c) for c in range(S.data.G)]
@@ -2346,10 +2447,10 @@ class Controller:
             options=letters,
             value=letters[S.backprop_case],
             description="trace case",
+            style={"description_width": "70px"},
             layout=widgets.Layout(width="190px"),
         )
-        tip(self.bp_case, "the group whose case the panel under the picture writes out")
-        self.bp_caption = widgets.HTML()
+        tip(self.bp_case, "the group whose case the text under the picture follows")
         self.bp_prev.on_click(lambda _: setattr(self.bp_step, "value", max(0, self.bp_step.value - 1)))
         self.bp_next.on_click(lambda _: setattr(self.bp_step, "value", min(n - 1, self.bp_step.value + 1)))
         self.bp_step.observe(self.on_backprop, names="value")
@@ -2358,41 +2459,69 @@ class Controller:
             [self.bp_prev, self.bp_next, self.bp_step, self.bp_case],
             layout=widgets.Layout(align_items="center", flex_flow="row wrap"),
         )
-        return widgets.VBox([widgets.HTML(text_html(HINTS["backprop"])), row, self.bp_caption])
+        return widgets.VBox([widgets.HTML(text_html(HINTS["backprop"])), row])
 
     def views_tab(self, widgets):
-        """A checkbox per extra panel with a line on what it shows, and the settings of the panels."""
+        """A checkbox per view with a line on what it shows, and the settings of the views."""
         S = self.session
         names = list(S.names)
         self.view_boxes = {
-            v: tip(widgets.Checkbox(value=v in S.views, description=VIEW_LABELS[v], indent=False), VIEW_HELP[v])
+            v: tip(
+                widgets.Checkbox(
+                    value=v in S.views,
+                    description=VIEW_LABELS[v],
+                    indent=False,
+                    layout=widgets.Layout(width="200px"),
+                ),
+                VIEW_HELP[v],
+            )
             for v in VIEWS
             if v != "backprop"
         }
         rows = [
-            widgets.HBox([box, widgets.HTML(f'<span style="color:#666;font-size:12px">{VIEW_HELP[v]}</span>')])
+            widgets.HBox(
+                [box, widgets.HTML(span(VIEW_HELP[v], "small", "quiet"))], layout=widgets.Layout(align_items="center")
+            )
             for v, box in self.view_boxes.items()
         ]
+
+        def setting():  # the label column and width shared by the settings, each with its own layout
+            return dict(style={"description_width": UI["setting_label"]}, layout=widgets.Layout(width=UI["long"]))
+
         self.case_pick = tip(
-            widgets.Dropdown(options=names, value=names[S.case_weight], description="case slopes of"),
-            "the weight of the panel 'each case's slope'",
+            widgets.Dropdown(options=names, value=names[S.case_weight], description="case slopes of", **setting()),
+            "the weight of the view 'each case's slope'",
         )
         a = S.slice_weights[0]
         b = S.slice_weights[1] if len(S.slice_weights) > 1 else None
         self.slice_pick = [
-            tip(widgets.Dropdown(options=names, value=names[a], description="slice over"), "the first weight"),
             tip(
-                widgets.Dropdown(options=["none"] + names, value="none" if b is None else names[b], description="and"),
+                widgets.Dropdown(options=names, value=names[a], description="slice over", **setting()),
+                "the first weight",
+            ),
+            tip(
+                widgets.Dropdown(
+                    options=["none"] + names, value="none" if b is None else names[b], description="and", **setting()
+                ),
                 "the second weight, or none for a curve over one weight",
             ),
         ]
         self.beta = tip(
-            widgets.FloatSlider(value=S.beta, min=0.0, max=0.99, step=0.01, description="beta"),
+            widgets.FloatSlider(
+                value=S.beta, min=0.0, max=0.99, step=0.01, description="beta", continuous_update=False, **setting()
+            ),
             "momentum: the share of the last step that each step keeps",
         )
         self.ahead = tip(
-            widgets.IntSlider(value=S.lookahead_steps, min=1, max=200, description="steps ahead"),
-            "how many steps the momentum panel looks ahead",
+            widgets.IntSlider(
+                value=S.lookahead_steps,
+                min=1,
+                max=200,
+                description="steps ahead",
+                continuous_update=False,
+                **setting(),
+            ),
+            "how many steps the momentum view looks ahead",
         )
         self.log_box = tip(
             widgets.Checkbox(value=S.log_scale, description="R on a log scale", indent=False),
@@ -2400,9 +2529,10 @@ class Controller:
         )
         for w in [*self.view_boxes.values(), self.case_pick, *self.slice_pick, self.beta, self.ahead, self.log_box]:
             w.observe(self.on_views, names="value")
+        columns = f"repeat(auto-fill, minmax({UI['long']}, 1fr))"
         settings = widgets.GridBox(
             [self.case_pick, *self.slice_pick, self.beta, self.ahead],
-            layout=widgets.Layout(grid_template_columns="repeat(auto-fill, minmax(300px, 1fr))", grid_gap="2px 16px"),
+            layout=widgets.Layout(grid_template_columns=columns, grid_gap=f"2px {UI['gap']}", margin="6px 0 0 0"),
         )
         return widgets.VBox([widgets.HTML(text_html(HINTS["views"])), *rows, self.log_box, settings])
 
@@ -2412,9 +2542,37 @@ class Controller:
         self.message.value = message_html(text)
 
     def stage_words(self):
-        """The status line for the current stage of the backward pass: where to look in the picture."""
+        """The message for the current stage of the backward pass: where to look in the picture."""
         S = self.session
         return LOOK[S.backprop_stages[S.backprop_step].kind]
+
+    def action_buttons(self):
+        return [*self.buttons.values()] + ([self.bp_prev, self.bp_next] if "backprop" in self.kinds else [])
+
+    def update_buttons(self):
+        """Enables the buttons, except back one step with no step to undo and the stage buttons at the ends."""
+        S = self.session
+        for b in self.action_buttons():
+            b.disabled = False
+        self.buttons["back one step"].disabled = not S.undo
+        if "backprop" in self.kinds:
+            self.bp_prev.disabled = S.backprop_step == 0
+            self.bp_next.disabled = S.backprop_step == len(S.backprop_stages) - 1
+
+    @contextmanager
+    def working(self):
+        """Disables the buttons while an action runs and the picture is drawn again, so that clicks do not queue up;
+        enables them afterwards, also when the action fails."""
+        self.depth += 1
+        if self.depth == 1:
+            for b in self.action_buttons():
+                b.disabled = True
+        try:
+            yield
+        finally:
+            self.depth -= 1
+            if self.depth == 0:
+                self.update_buttons()
 
     def values(self):
         """The full weight vector: the sliders for the weights that move, the network for the others."""
@@ -2427,7 +2585,10 @@ class Controller:
         if self.busy:
             return
         before = self.last_R
-        self.session.model.set_weights(self.values())
+        S = self.session
+        if change is not None:
+            S.last_moved = self.index[self.sliders.index(change["owner"])]
+        S.model.set_weights(self.values())
         self.redraw()
         if change is not None and before is not None:
             name, old, new = change["owner"].description, change["old"], change["new"]
@@ -2476,7 +2637,7 @@ class Controller:
         self.picture = None  # the panels changed: a new figure
         self.redraw()
         shown = [VIEW_LABELS[v] for v in S.views if v != "backprop"]
-        self.say("Extra panels: " + (", ".join(shown) if shown else "none") + ".")
+        self.say("Views: " + (", ".join(shown) if shown else "none") + ".")
 
     def sync(self):
         """After steps, reset or record in code: the sliders show the network's weights, then one redraw."""
@@ -2497,38 +2658,48 @@ class Controller:
     def steps(self, m):
         """m gradient steps from the slider values with the current eta; the session then updates the sliders."""
         S = self.session
-        S.eta = float(self.eta.value)
-        before = S.risk(self.values())
-        S.step(m, S.eta, self.values())
-        after = S.history[-1]
-        if m == 1:
-            p = S.predictions[-1]
-            text = (
-                f"One gradient step with eta {S.eta:g}: {change_words(before, after)}. "
-                f"Predicted change {p.predicted - p.before:+.4f}, actual {p.actual - p.before:+.4f}."
-            )
-        else:
-            text = f"{m} gradient steps with eta {S.eta:g}: {change_words(before, after)}."
-        if after > before:
-            text += " R went up: eta may be too large."
-        self.say(text)
+        with self.working():
+            S.eta = float(self.eta.value)
+            before = S.risk(self.values())
+            S.step(m, S.eta, self.values())
+            after = S.history[-1]
+            if m == 1:
+                p = S.predictions[-1]
+                text = (
+                    f"One gradient step with eta {S.eta:g}: {change_words(before, after)}. "
+                    f"Predicted change {p.predicted - p.before:+.4f}, actual {p.actual - p.before:+.4f}."
+                )
+            else:
+                text = f"{m} gradient steps with eta {S.eta:g}: {change_words(before, after)}."
+            if after > before:
+                text += " R went up: eta may be too large."
+            self.say(text)
+
+    def step_back(self):
+        """Undoes the last gradient step; the session then updates the sliders."""
+        S = self.session
+        with self.working():
+            before = S.risk(self.values())
+            if S.step_back() is not None:
+                self.say(f"Back one step: {change_words(before, S.risk())}.")
 
     def reset(self):
         """Back to the weights at the start, with no steps taken, and the sliders' starting ranges."""
         S = self.session
-        S.reset()
-        self.busy = True
-        try:
-            for k, s in zip(self.index, self.sliders):
-                lo, hi = slider_range(S.w0[k])
-                s.min, s.max = lo, hi
-        finally:
-            self.busy = False
-        self.say(f"Back to the start: the weights the cell started from, R = {S.history[0]:.4f}.")
+        with self.working():
+            S.reset()
+            self.busy = True
+            try:
+                for k, s in zip(self.index, self.sliders):
+                    lo, hi = slider_range(S.w0[k])
+                    s.min, s.max = lo, hi
+            finally:
+                self.busy = False
+            self.say(f"Back to the start: the weights the cell started from, R = {S.history[0]:.4f}.")
 
     def redraw(self):
         S = self.session
-        with self.out:
+        with self.working(), self.out:
             if self.picture is None:
                 self.picture = Picture(S, dpi=self.dpi)
             w = self.values()
@@ -2537,10 +2708,6 @@ class Controller:
             self.last_R = self.picture.frame.R
             png = self.picture.png()
             self.readout.value = readout_html(S.readouts(self.eta.value, w))
-            if "backprop" in self.kinds:
-                n = len(S.backprop_stages) - 1
-                text = S.backprop_stages[S.backprop_step].text
-                self.bp_caption.value = text_html(f"Stage {S.backprop_step} of {n}. {text[:1].upper()}{text[1:]}.")
             if self.use_output:
                 from IPython.display import Image, clear_output, display
 
@@ -2605,11 +2772,12 @@ def as_views(views):
 class Session:
     """What explore returns.
 
-    weights(), risk(), slopes(), predict(), step(k), reset() work on the network itself; lookahead() and
+    weights(), risk(), slopes(), predict(), step(k), step_back(), reset() work on the network itself; lookahead() and
     case_slopes() leave it as it is. save(path) writes the current picture and record(path) a GIF of a run.
     history holds R at the start and after every step; predictions one Prediction per step; path the weights after
     every step (a row of NaN marks a jump made with the sliders); w0 the weights at the start; active the indices of
-    the weights that move; controller the widgets or None.
+    the weights that move; last_moved the weight a slider changed last (None after a step); controller the widgets
+    or None.
     """
 
     def __init__(
@@ -2639,7 +2807,8 @@ class Session:
         self.data = prepare(X, y, groups, n_inputs=self.model.n_inputs, dtype=self.model.dtype, task=task)
         self.task = self.model.task = self.data.task
         self.layout = Layout(self.model.n_inputs, self.model.hidden, self.task, style=layout, width=width)
-        self.theme = theme or THEME
+        self.base_theme = theme or THEME
+        self.theme = self.base_theme.scaled(self.layout.text_scale)
         self.title = title
         self.eta = check_eta(eta)
         self.active = self.model.select(params)
@@ -2674,6 +2843,8 @@ class Session:
         self.history = [self.risk(self.w0)]
         self.predictions = []
         self.path = [list(self.w0)]
+        self.undo = []  # per step taken: the weights before it, and the length of path before it
+        self.last_moved = None
         self.cache = {}
         self.fig = None
         self.controller = None
@@ -2699,6 +2870,7 @@ class Session:
     def set_layout(self, style, width=None):
         """Switches the layout of the picture: "standard" or "wide" (the widgets also move the controls)."""
         self.layout = Layout(self.model.n_inputs, self.model.hidden, self.task, style=style, width=width)
+        self.theme = self.base_theme.scaled(self.layout.text_scale)
 
     def weight_index(self, v):
         """The index of a weight given by its name ("w10") or its index."""
@@ -2732,11 +2904,13 @@ class Session:
         Records R, the prediction and the weights of every step. Returns the new weights."""
         eta = self.eta if eta is None else check_eta(eta)
         w = [float(v) for v in (self.weights() if w is None else w)]
-        if any(abs(a - b) > 1e-12 for a, b in zip(w, self.path[-1])):
+        mark = len(self.path)
+        if any(abs(a - b) > 1e-6 * max(1.0, abs(b)) for a, b in zip(w, self.path[-1])):  # beyond float32 rounding
             self.path.append([math.nan] * len(w))  # the sliders moved the weights: a new segment of the path
             self.path.append(list(w))
         R = self.risk(w)
-        for _ in range(k):
+        for i in range(k):
+            self.undo.append((list(w), mark if i == 0 else len(self.path)))
             g = self.slopes(w)
             g2 = float(sum(g[i] ** 2 for i in self.active))
             for i in self.active:
@@ -2746,9 +2920,25 @@ class Session:
             self.history.append(R_new)
             self.path.append(list(w))
             R = R_new
+        self.last_moved = None  # a step moves every weight
         self.model.set_weights(w)
         self.changed()
         return w
+
+    def step_back(self):
+        """Undoes the last gradient step: the weights return to what they were just before it, so a slider move made
+        after the step is undone as well, and the step leaves history, predictions and path. Returns the weights, or
+        None when there is no step to undo."""
+        if not self.undo:
+            return None
+        w, mark = self.undo.pop()
+        del self.path[mark:]
+        self.history.pop()
+        self.predictions.pop()
+        self.last_moved = None
+        self.model.set_weights(w)
+        self.changed()
+        return list(w)
 
     def reset(self):
         """Back to the weights at the start, with no steps taken. Returns the weights."""
@@ -2756,6 +2946,8 @@ class Session:
         self.history = [self.risk(self.w0)]
         self.predictions = []
         self.path = [list(self.w0)]
+        self.undo = []
+        self.last_moved = None
         self.changed()
         return list(self.w0)
 

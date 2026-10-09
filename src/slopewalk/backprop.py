@@ -149,6 +149,12 @@ def line_styles(S, F):
     return styles
 
 
+def shared_labels(F):
+    """True when the labels on the lines are the same in every network panel (the weights themselves), so that the
+    first panel alone carries them. The slopes of the backward pass differ from case to case and go in every panel."""
+    return F.stage is None or F.stage.kind in ("forward", "to_h")
+
+
 def label_spec(S, F, c):
     """The labels on the lines at the current stage: {k: (long text, short text, colour)}, or None for the usual
     labels. Weights stages: each line's slope (mean over the group); back to h: the weights used; else none."""
@@ -161,7 +167,7 @@ def label_spec(S, F, c):
     if st.kind in ("weights", "average"):
         ks = M.layer_indices(st.layer) if st.kind == "weights" else range(M.n_weights)
         for k in ks:
-            spec[k] = (f"∂ℓ/∂{M.names[k]} = {g[k]:+.3f}", f"{g[k]:+.3f}", T.backprop_colour)
+            spec[k] = (f"∂ℓ/∂{M.names[k]} = {g[k]:+.3f}", f"{g[k]:+.3f}", T.backprop_colour, f"{g[k]:+.2f}")
     elif st.kind == "to_h":
         for k in M.layer_indices(st.layer + 1):
             if M.where[k][2] >= 0:
@@ -171,11 +177,14 @@ def label_spec(S, F, c):
 
 
 def box(ax, x, y, text, T):
-    """A backward value under the forward box at (x, y)."""
+    """A backward value under the forward box at (x, y), far enough down to clear it: both boxes have the same number
+    of lines (two for single points, three with a standard deviation)."""
+    lines = text.count("\n") + 1
+    drop = lines * 1.2 * (T.value_size + T.backprop_size) / 2 + 0.25 * T.value_size + 0.2 * T.backprop_size + 3
     ax.annotate(
         text,
         xy=(x, y),
-        xytext=(0, -31),
+        xytext=(0, -max(31.0, drop)),
         textcoords="offset points",
         ha="center",
         va="center",
@@ -348,7 +357,8 @@ def draw_derivation(ax, S, F):
     shown = lines[-most:]
     group = "" if S.data.gsel[c].sum() == 1 else f", the case nearest the mean of group {letter(c)}"
     head = f"backward pass of {letter(c)}{group}"
-    ax.set_title(f"{head}\nstep {step} of {len(S.backprop_stages) - 1}: {stage.text}", fontsize=10.5, loc="left")
+    title = f"{head}\nstage {step} of {len(S.backprop_stages) - 1}: {stage.text}"
+    ax.set_title(title, fontsize=T.panel_title_size, loc="left")
     dy = 0.96 / per_column
     if len(lines) > most:
         shown = [(None, "... (earlier steps above)")] + shown[1:]
@@ -360,7 +370,7 @@ def draw_derivation(ax, S, F):
             0.98 - row * dy,
             text,
             transform=ax.transAxes,
-            fontsize=9.5,
+            fontsize=T.note_size,
             va="top",
             color=T.backprop_colour if current else ("0.5" if s is None else "0.2"),
             fontweight="bold" if current else "normal",

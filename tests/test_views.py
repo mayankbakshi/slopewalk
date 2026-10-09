@@ -167,3 +167,14 @@ def test_picture_keeps_its_axes_when_refreshed():
     pic.refresh()
     assert [tuple(ax.get_position().bounds) for ax in pic.fig.axes] == positions
     assert plt.get_fignums() == []  # never a pyplot figure
+
+
+def test_momentum_is_dashed(static):
+    """Gradient descent and momentum differ by line style as well as colour."""
+    s = explore(make("tanh3"), *XOR, eta=0.5, params=["w10", "w11"], views=("slice", "momentum"))
+    mom = [ax for ax in s.fig.axes if ax.get_title().startswith("the next ")][0]
+    styles = {line.get_label().split(":")[0]: line.get_linestyle() for line in mom.lines}
+    assert styles["gradient descent"] == "-" and styles["momentum, beta 0.9"] == "--"
+    sl = [ax for ax in s.fig.axes if ax.get_title().startswith("R over w10")][0]
+    paths = {line.get_label(): line.get_linestyle() for line in sl.lines if line.get_label().startswith("next steps")}
+    assert paths == {"next steps, gradient descent": "-", "next steps, momentum 0.9": "--"}

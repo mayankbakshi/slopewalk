@@ -1,15 +1,37 @@
-"""The controls of explore. The picture comes first; under it a status line (the key numbers and one sentence on the
-last action), then the controls: the sliders grouped by unit, and one row with eta, the step buttons and the layout.
-Tabs appear only for what the explore call asks for: "Backprop" when the views include "backprop", "Views" when
-other views are asked for. Changing tabs leaves the picture as it is. Needs ipywidgets.
+"""The controls of explore. The picture comes first; under it a status block (R and the last step's change, large,
+then the other numbers and one sentence on the last action), then the controls: one row with eta and the step
+buttons, the sliders in a column per unit, and last the layout of the picture. Tabs appear only for what the explore
+call asks for: "Backprop" when the views include "backprop", "Views" when other views are asked for. Changing tabs
+leaves the picture as it is. Needs ipywidgets.
 """
 
 import math
 import os
+from contextlib import contextmanager
 
 from .picture import LIVE_DPI, Picture
 from .views import VIEWS
 
+# The look of the control area in one place. Text takes the host's colour, so light and dark themes both work;
+# quiet text is the same colour at a lower opacity. The two colours of the last step's change keep at least 3.9:1 on
+# white and on dark backgrounds (#1E1E1E, #111111), enough for the large text they are used for.
+UI = {
+    "quiet": "opacity:0.72",
+    "text": "font-size:14px",
+    "hint": "font-size:13px",
+    "small": "font-size:12px",
+    "value": "font-size:15px",
+    "big": "font-size:22px;font-weight:600",
+    "numbers": "font-variant-numeric:tabular-nums",
+    "down": "#2E8B57",
+    "up": "#E53935",
+    "short": "250px",  # weight sliders and drop-down lists
+    "long": "320px",  # eta, stage and the settings of the views
+    "label": "40px",  # the label column of the weight sliders, eta and stage
+    "setting_label": "100px",  # the label column of the other controls
+    "column": "270px",  # the narrowest column of the slider grid
+    "gap": "16px",
+}
 TITLES = {"core": "Weights and steps", "backprop": "Backprop", "views": "Views"}
 VIEW_LABELS = {
     "backprop": "backward pass",
@@ -35,14 +57,11 @@ LOOK = {  # where to look in the picture at each stage of the backward pass
     "average": "The average of these slopes over the cases is the slope column of the table, what R.backward() gives.",
 }
 HINTS = {
-    "core": "Press gradient step to move every weight against its slope, by eta times the slope. Drag a slider to "
-    "change one weight by hand: each column holds the weights into one unit.",
-    "backprop": "Step through the backward pass, from the output back to the first layer. The panel under the picture "
-    "writes out the numbers for the case chosen in trace case.",
-    "views": "Tick a box to add a panel under the network.",
+    "core": "Press gradient step to move every weight against its slope. Drag a slider to change one weight.",
+    "backprop": "Step from the output back to the first layer. The text under the picture follows one case.",
+    "views": "Tick a box to add a view under the network.",
 }
-HINT_STYLE = "font-size:13px;color:#555;margin:2px 0 6px 0"
-SLIDER_STYLE = {"description_width": "40px"}
+BUTTONS = ("gradient step", "10 steps", "back one step", "reset")
 
 
 def slider_range(v, lo=-4.0, hi=4.0):
@@ -67,28 +86,43 @@ def name_ranges(names):
     return ", ".join(parts)
 
 
+def span(text, *styles):
+    return f'<span style="{";".join(UI[s] for s in styles)}">{text}</span>'
+
+
 def readout_html(r):
-    """The numbers of the status line, as a plain table: a row of labels over a row of values."""
-    cells = [("R", f"{r['R']:.4f}", "#222"), ("size of the gradient", f"{r['grad_norm']:.4f}", "#222")]
-    if r["accuracy"] is not None:
-        cells.append(("accuracy", f"{r['accuracy']:.3f}", "#222"))
-    cells.append((f"next step, eta {r['eta']:g}: predicted change of R", f"{r['next_change']:+.4f}", "#222"))
-    if r["last"] is not None:
+    """The status numbers: a row of labels, a row of values and a row of notes. R and the change of the last step
+    are large; the other numbers are smaller. The columns stay the same before and after the first step."""
+    if r["last"] is None:
+        change, note = span("none yet", "value", "quiet"), ""
+    else:
         predicted, actual = r["last"]
-        colour = "#B00020" if actual > 0 else "#1B6E3A"
-        cells.append(("last step: predicted, actual change", f"{predicted:+.4f}, {actual:+.4f}", colour))
-    pad = "padding:1px 28px 1px 0;text-align:left"
-    head = "".join(f'<td style="{pad};color:#666">{label}</td>' for label, _, _ in cells)
-    vals = "".join(f'<td style="{pad};font-family:monospace;color:{c}">{v}</td>' for _, v, c in cells)
-    return f'<table style="border-collapse:collapse;font-size:13px"><tr>{head}</tr><tr>{vals}</tr></table>'
+        colour = UI["up"] if actual > 0 else UI["down"]
+        change = f'<span style="{UI["big"]};color:{colour}">{actual:+.4f}</span>'
+        note = f"predicted {predicted:+.4f}"
+    cells = [
+        ("R", span(f"{r['R']:.4f}", "big"), ""),
+        ("change of R in the last step", change, note),
+        (f"next step, eta {r['eta']:g}: predicted change", span(f"{r['next_change']:+.4f}", "value"), ""),
+        ("size of the gradient", span(f"{r['grad_norm']:.4f}", "value"), ""),
+    ]
+    if r["accuracy"] is not None:
+        cells.append(("accuracy", span(f"{r['accuracy']:.3f}", "value"), ""))
+    pad = f"padding:0 32px 0 0;text-align:left;vertical-align:bottom;{UI['numbers']}"
+    rows = [
+        "".join(f'<td style="{pad}">{span(label, "small", "quiet")}</td>' for label, _, _ in cells),
+        "".join(f'<td style="{pad}">{value}</td>' for _, value, _ in cells),
+        "".join(f'<td style="{pad}">{span(note, "small", "quiet") if note else ""}</td>' for _, _, note in cells),
+    ]
+    return '<table style="border-collapse:collapse">' + "".join(f"<tr>{row}</tr>" for row in rows) + "</table>"
 
 
 def message_html(text):
-    return f'<div style="font-size:14px;color:#222;margin:6px 0 2px 0;min-height:1.4em">{text}</div>'
+    return f'<div style="{UI["text"]};margin:8px 0 2px 0;min-height:1.4em">{text}</div>'
 
 
 def text_html(text):
-    return f'<div style="{HINT_STYLE}">{text}</div>'
+    return f'<div style="{UI["hint"]};{UI["quiet"]};margin:2px 0 8px 0">{text}</div>'
 
 
 def tip(widget, text):
@@ -115,7 +149,8 @@ class Controller:
 
         S = self.session = session
         self.dpi = dpi
-        self.busy = False
+        self.busy = False  # True while the sliders are set from code: their observers then do nothing
+        self.depth = 0  # how many actions are running; the buttons are disabled while it is above 0
         self.picture = None
         self.last_R = None
         self.use_output = os.environ.get("SLOPEWALK_DISPLAY") == "output"  # fallback: the PNG through display()
@@ -131,8 +166,8 @@ class Controller:
                 description=S.names[k],
                 readout_format=".2f",
                 continuous_update=False,
-                style=SLIDER_STYLE,
-                layout=widgets.Layout(width="250px"),
+                style={"description_width": UI["label"]},
+                layout=widgets.Layout(width=UI["short"]),
             )
             self.sliders.append(tip(slider, f"{S.names[k]}: drag to change this weight in the network"))
         self.panel = self.grouped_panel(widgets) if len(self.sliders) <= 30 else self.dropdown_panel(widgets)
@@ -147,34 +182,41 @@ class Controller:
             step=0.01 if small else 0.1,
             description="eta",
             readout_format=".2f" if small else ".1f",
-            style=SLIDER_STYLE,
-            layout=widgets.Layout(width="320px"),
+            continuous_update=False,
+            style={"description_width": UI["label"]},
+            layout=widgets.Layout(width=UI["long"]),
         )
         tip(self.eta, "eta, the step size: a gradient step moves each weight by eta times its slope")
-        self.buttons = {name: widgets.Button(description=name) for name in ("gradient step", "10 steps", "reset")}
+        self.buttons = {name: widgets.Button(description=name) for name in BUTTONS}
         self.buttons["gradient step"].button_style = "primary"
         tip(self.buttons["gradient step"], "every weight moves against its slope: w <- w - eta x dR/dw")
         tip(self.buttons["10 steps"], "ten gradient steps in a row")
+        tip(self.buttons["back one step"], "undo the last gradient step, and any slider move made after it")
         tip(self.buttons["reset"], "back to the weights the cell started from")
         self.layout_pick = tip(
             widgets.ToggleButtons(options=["wide", "standard"], value=S.layout.style, style={"button_width": "80px"}),
             "wide: all networks in one row; standard: two per row, with larger text on small screens",
         )
         self.layout_pick.observe(self.on_layout, names="value")
-        self.layout_box = widgets.HBox(
-            [widgets.Label("layout", layout=widgets.Layout(margin="0 8px 0 0")), self.layout_pick],
-            layout=widgets.Layout(align_items="center", margin="0 0 0 40px"),
+        self.layout_row = widgets.HBox(
+            [
+                widgets.HTML(
+                    span("layout of the picture", "small", "quiet"), layout=widgets.Layout(margin="0 12px 0 0")
+                ),
+                self.layout_pick,
+            ],
+            layout=widgets.Layout(align_items="center", margin="14px 0 0 0"),
         )
 
         self.message = widgets.HTML()
         self.readout = widgets.HTML()
         self.image = widgets.Image(format="png", layout=widgets.Layout(max_width="100%", height="auto"))
         self.out = widgets.Output()
-        self.status = widgets.VBox([self.readout, self.message], layout=widgets.Layout(margin="4px 0 8px 0"))
+        self.status = widgets.VBox([self.readout, self.message], layout=widgets.Layout(margin="6px 0 8px 0"))
 
         steps_row = widgets.HBox(
-            [self.eta, *self.buttons.values(), self.layout_box],
-            layout=widgets.Layout(align_items="center", flex_flow="row wrap", margin="0 0 10px 0"),
+            [self.eta, *self.buttons.values()],
+            layout=widgets.Layout(align_items="center", flex_flow="row wrap", margin="0 0 12px 0"),
         )
         core = widgets.VBox([widgets.HTML(text_html(HINTS["core"])), steps_row, self.panel, self.frozen_note])
         # tabs only for what the call asked for; the backward pass stays on while its tab exists
@@ -200,16 +242,18 @@ class Controller:
         self.eta.observe(self.on_eta, names="value")
         self.buttons["gradient step"].on_click(lambda _: self.steps(1))
         self.buttons["10 steps"].on_click(lambda _: self.steps(10))
+        self.buttons["back one step"].on_click(lambda _: self.step_back())
         self.buttons["reset"].on_click(lambda _: self.reset())
 
-        # the picture first, then the status line, then the controls
+        # the picture first, then the status, the controls, and last the layout of the picture
         self.picture_box = self.out if self.use_output else self.image
         tail = [] if self.use_output else [self.out]
-        self.root = widgets.VBox([self.picture_box, self.status, self.controls, *tail])
+        self.root = widgets.VBox([self.picture_box, self.status, self.controls, self.layout_row, *tail])
         self.root.layout.width = "100%"
         self.arrange(S.layout.style)
         self.widgets = [self.root]
-        self.say(f"At the start: R = {S.history[0]:.4f}." if "backprop" not in S.views else self.stage_words())
+        self.update_buttons()
+        self.say(self.stage_words() if "backprop" in S.views else "")
 
     # ---------------------------------------------------------------- building
 
@@ -234,22 +278,26 @@ class Controller:
                     head = widgets.HTML(f"<b>{M.unit_title(layer, j)}</b>: weights for {names}")
                     boxes.append(widgets.VBox([head] + [self.sliders[self.index.index(q)] for q in ks]))
                 k += L.in_features + 1
-        return widgets.GridBox(
-            boxes,
-            layout=widgets.Layout(grid_template_columns="repeat(auto-fill, minmax(270px, 1fr))", grid_gap="2px 16px"),
-        )
+        columns = f"repeat(auto-fill, minmax({UI['column']}, 1fr))"
+        return widgets.GridBox(boxes, layout=widgets.Layout(grid_template_columns=columns, grid_gap=f"2px {UI['gap']}"))
 
     def dropdown_panel(self, widgets):
         """More than 30 sliders: choose one weight, then move it."""
         names = [self.session.names[k] for k in self.index]
-        pick = widgets.Dropdown(options=[(nm, i) for i, nm in enumerate(names)], value=0, description="weight")
+        pick = widgets.Dropdown(
+            options=[(nm, i) for i, nm in enumerate(names)],
+            value=0,
+            description="weight",
+            style={"description_width": UI["label"]},
+            layout=widgets.Layout(width=UI["short"]),
+        )
         tip(pick, "choose the weight to move")
-        holder = widgets.HBox([self.sliders[0]])
+        holder = widgets.HBox([self.sliders[0]], layout=widgets.Layout(margin=f"0 0 0 {UI['gap']}"))
         pick.observe(lambda ch: setattr(holder, "children", [self.sliders[ch["new"]]]), names="value")
         return widgets.HBox([pick, holder])
 
     def backprop_tab(self, widgets):
-        """Previous and next stage, the stage, the case the derivation follows, and the formula of the stage."""
+        """Previous and next stage, the stage and the case the text under the picture follows."""
         S = self.session
         n = len(S.backprop_stages)
         self.bp_prev = tip(widgets.Button(description="previous stage"), "the stage before")
@@ -257,7 +305,13 @@ class Controller:
             widgets.Button(description="next stage", button_style="primary"), "the next stage, one layer back"
         )
         self.bp_step = widgets.IntSlider(
-            value=S.backprop_step, min=0, max=n - 1, description="stage", style=SLIDER_STYLE
+            value=S.backprop_step,
+            min=0,
+            max=n - 1,
+            description="stage",
+            continuous_update=False,
+            style={"description_width": UI["label"]},
+            layout=widgets.Layout(width=UI["long"]),
         )
         tip(self.bp_step, "0 is the forward pass; the last stage is the average over the cases")
         letters = [chr(65 + c) if c < 26 else str(c) for c in range(S.data.G)]
@@ -265,10 +319,10 @@ class Controller:
             options=letters,
             value=letters[S.backprop_case],
             description="trace case",
+            style={"description_width": "70px"},
             layout=widgets.Layout(width="190px"),
         )
-        tip(self.bp_case, "the group whose case the panel under the picture writes out")
-        self.bp_caption = widgets.HTML()
+        tip(self.bp_case, "the group whose case the text under the picture follows")
         self.bp_prev.on_click(lambda _: setattr(self.bp_step, "value", max(0, self.bp_step.value - 1)))
         self.bp_next.on_click(lambda _: setattr(self.bp_step, "value", min(n - 1, self.bp_step.value + 1)))
         self.bp_step.observe(self.on_backprop, names="value")
@@ -277,41 +331,69 @@ class Controller:
             [self.bp_prev, self.bp_next, self.bp_step, self.bp_case],
             layout=widgets.Layout(align_items="center", flex_flow="row wrap"),
         )
-        return widgets.VBox([widgets.HTML(text_html(HINTS["backprop"])), row, self.bp_caption])
+        return widgets.VBox([widgets.HTML(text_html(HINTS["backprop"])), row])
 
     def views_tab(self, widgets):
-        """A checkbox per extra panel with a line on what it shows, and the settings of the panels."""
+        """A checkbox per view with a line on what it shows, and the settings of the views."""
         S = self.session
         names = list(S.names)
         self.view_boxes = {
-            v: tip(widgets.Checkbox(value=v in S.views, description=VIEW_LABELS[v], indent=False), VIEW_HELP[v])
+            v: tip(
+                widgets.Checkbox(
+                    value=v in S.views,
+                    description=VIEW_LABELS[v],
+                    indent=False,
+                    layout=widgets.Layout(width="200px"),
+                ),
+                VIEW_HELP[v],
+            )
             for v in VIEWS
             if v != "backprop"
         }
         rows = [
-            widgets.HBox([box, widgets.HTML(f'<span style="color:#666;font-size:12px">{VIEW_HELP[v]}</span>')])
+            widgets.HBox(
+                [box, widgets.HTML(span(VIEW_HELP[v], "small", "quiet"))], layout=widgets.Layout(align_items="center")
+            )
             for v, box in self.view_boxes.items()
         ]
+
+        def setting():  # the label column and width shared by the settings, each with its own layout
+            return dict(style={"description_width": UI["setting_label"]}, layout=widgets.Layout(width=UI["long"]))
+
         self.case_pick = tip(
-            widgets.Dropdown(options=names, value=names[S.case_weight], description="case slopes of"),
-            "the weight of the panel 'each case's slope'",
+            widgets.Dropdown(options=names, value=names[S.case_weight], description="case slopes of", **setting()),
+            "the weight of the view 'each case's slope'",
         )
         a = S.slice_weights[0]
         b = S.slice_weights[1] if len(S.slice_weights) > 1 else None
         self.slice_pick = [
-            tip(widgets.Dropdown(options=names, value=names[a], description="slice over"), "the first weight"),
             tip(
-                widgets.Dropdown(options=["none"] + names, value="none" if b is None else names[b], description="and"),
+                widgets.Dropdown(options=names, value=names[a], description="slice over", **setting()),
+                "the first weight",
+            ),
+            tip(
+                widgets.Dropdown(
+                    options=["none"] + names, value="none" if b is None else names[b], description="and", **setting()
+                ),
                 "the second weight, or none for a curve over one weight",
             ),
         ]
         self.beta = tip(
-            widgets.FloatSlider(value=S.beta, min=0.0, max=0.99, step=0.01, description="beta"),
+            widgets.FloatSlider(
+                value=S.beta, min=0.0, max=0.99, step=0.01, description="beta", continuous_update=False, **setting()
+            ),
             "momentum: the share of the last step that each step keeps",
         )
         self.ahead = tip(
-            widgets.IntSlider(value=S.lookahead_steps, min=1, max=200, description="steps ahead"),
-            "how many steps the momentum panel looks ahead",
+            widgets.IntSlider(
+                value=S.lookahead_steps,
+                min=1,
+                max=200,
+                description="steps ahead",
+                continuous_update=False,
+                **setting(),
+            ),
+            "how many steps the momentum view looks ahead",
         )
         self.log_box = tip(
             widgets.Checkbox(value=S.log_scale, description="R on a log scale", indent=False),
@@ -319,9 +401,10 @@ class Controller:
         )
         for w in [*self.view_boxes.values(), self.case_pick, *self.slice_pick, self.beta, self.ahead, self.log_box]:
             w.observe(self.on_views, names="value")
+        columns = f"repeat(auto-fill, minmax({UI['long']}, 1fr))"
         settings = widgets.GridBox(
             [self.case_pick, *self.slice_pick, self.beta, self.ahead],
-            layout=widgets.Layout(grid_template_columns="repeat(auto-fill, minmax(300px, 1fr))", grid_gap="2px 16px"),
+            layout=widgets.Layout(grid_template_columns=columns, grid_gap=f"2px {UI['gap']}", margin="6px 0 0 0"),
         )
         return widgets.VBox([widgets.HTML(text_html(HINTS["views"])), *rows, self.log_box, settings])
 
@@ -331,9 +414,37 @@ class Controller:
         self.message.value = message_html(text)
 
     def stage_words(self):
-        """The status line for the current stage of the backward pass: where to look in the picture."""
+        """The message for the current stage of the backward pass: where to look in the picture."""
         S = self.session
         return LOOK[S.backprop_stages[S.backprop_step].kind]
+
+    def action_buttons(self):
+        return [*self.buttons.values()] + ([self.bp_prev, self.bp_next] if "backprop" in self.kinds else [])
+
+    def update_buttons(self):
+        """Enables the buttons, except back one step with no step to undo and the stage buttons at the ends."""
+        S = self.session
+        for b in self.action_buttons():
+            b.disabled = False
+        self.buttons["back one step"].disabled = not S.undo
+        if "backprop" in self.kinds:
+            self.bp_prev.disabled = S.backprop_step == 0
+            self.bp_next.disabled = S.backprop_step == len(S.backprop_stages) - 1
+
+    @contextmanager
+    def working(self):
+        """Disables the buttons while an action runs and the picture is drawn again, so that clicks do not queue up;
+        enables them afterwards, also when the action fails."""
+        self.depth += 1
+        if self.depth == 1:
+            for b in self.action_buttons():
+                b.disabled = True
+        try:
+            yield
+        finally:
+            self.depth -= 1
+            if self.depth == 0:
+                self.update_buttons()
 
     def values(self):
         """The full weight vector: the sliders for the weights that move, the network for the others."""
@@ -346,7 +457,10 @@ class Controller:
         if self.busy:
             return
         before = self.last_R
-        self.session.model.set_weights(self.values())
+        S = self.session
+        if change is not None:
+            S.last_moved = self.index[self.sliders.index(change["owner"])]
+        S.model.set_weights(self.values())
         self.redraw()
         if change is not None and before is not None:
             name, old, new = change["owner"].description, change["old"], change["new"]
@@ -395,7 +509,7 @@ class Controller:
         self.picture = None  # the panels changed: a new figure
         self.redraw()
         shown = [VIEW_LABELS[v] for v in S.views if v != "backprop"]
-        self.say("Extra panels: " + (", ".join(shown) if shown else "none") + ".")
+        self.say("Views: " + (", ".join(shown) if shown else "none") + ".")
 
     def sync(self):
         """After steps, reset or record in code: the sliders show the network's weights, then one redraw."""
@@ -416,38 +530,48 @@ class Controller:
     def steps(self, m):
         """m gradient steps from the slider values with the current eta; the session then updates the sliders."""
         S = self.session
-        S.eta = float(self.eta.value)
-        before = S.risk(self.values())
-        S.step(m, S.eta, self.values())
-        after = S.history[-1]
-        if m == 1:
-            p = S.predictions[-1]
-            text = (
-                f"One gradient step with eta {S.eta:g}: {change_words(before, after)}. "
-                f"Predicted change {p.predicted - p.before:+.4f}, actual {p.actual - p.before:+.4f}."
-            )
-        else:
-            text = f"{m} gradient steps with eta {S.eta:g}: {change_words(before, after)}."
-        if after > before:
-            text += " R went up: eta may be too large."
-        self.say(text)
+        with self.working():
+            S.eta = float(self.eta.value)
+            before = S.risk(self.values())
+            S.step(m, S.eta, self.values())
+            after = S.history[-1]
+            if m == 1:
+                p = S.predictions[-1]
+                text = (
+                    f"One gradient step with eta {S.eta:g}: {change_words(before, after)}. "
+                    f"Predicted change {p.predicted - p.before:+.4f}, actual {p.actual - p.before:+.4f}."
+                )
+            else:
+                text = f"{m} gradient steps with eta {S.eta:g}: {change_words(before, after)}."
+            if after > before:
+                text += " R went up: eta may be too large."
+            self.say(text)
+
+    def step_back(self):
+        """Undoes the last gradient step; the session then updates the sliders."""
+        S = self.session
+        with self.working():
+            before = S.risk(self.values())
+            if S.step_back() is not None:
+                self.say(f"Back one step: {change_words(before, S.risk())}.")
 
     def reset(self):
         """Back to the weights at the start, with no steps taken, and the sliders' starting ranges."""
         S = self.session
-        S.reset()
-        self.busy = True
-        try:
-            for k, s in zip(self.index, self.sliders):
-                lo, hi = slider_range(S.w0[k])
-                s.min, s.max = lo, hi
-        finally:
-            self.busy = False
-        self.say(f"Back to the start: the weights the cell started from, R = {S.history[0]:.4f}.")
+        with self.working():
+            S.reset()
+            self.busy = True
+            try:
+                for k, s in zip(self.index, self.sliders):
+                    lo, hi = slider_range(S.w0[k])
+                    s.min, s.max = lo, hi
+            finally:
+                self.busy = False
+            self.say(f"Back to the start: the weights the cell started from, R = {S.history[0]:.4f}.")
 
     def redraw(self):
         S = self.session
-        with self.out:
+        with self.working(), self.out:
             if self.picture is None:
                 self.picture = Picture(S, dpi=self.dpi)
             w = self.values()
@@ -456,10 +580,6 @@ class Controller:
             self.last_R = self.picture.frame.R
             png = self.picture.png()
             self.readout.value = readout_html(S.readouts(self.eta.value, w))
-            if "backprop" in self.kinds:
-                n = len(S.backprop_stages) - 1
-                text = S.backprop_stages[S.backprop_step].text
-                self.bp_caption.value = text_html(f"Stage {S.backprop_step} of {n}. {text[:1].upper()}{text[1:]}.")
             if self.use_output:
                 from IPython.display import Image, clear_output, display
 

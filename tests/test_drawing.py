@@ -83,7 +83,8 @@ def test_line_colours_widths_and_labels(static):
     ax = panels(s.fig)[0]
     lines, labels = weight_lines(ax), edge_texts(ax)
     assert [line.get_color() for line in lines] == [THEME.positive, THEME.negative, THEME.positive]
-    assert [line.get_linewidth() for line in lines] == pytest.approx([0.6 + 1.3 * 0.5, 0.6 + 1.3 * 0.5, 0.6])
+    width = lambda v: THEME.line_width + THEME.line_slope * abs(v)  # noqa: E731
+    assert [line.get_linewidth() for line in lines] == pytest.approx([width(0.5), width(0.5), width(0.0)])
     assert [t.get_text() for t in labels] == ["w1 = 0.50", "w2 = -0.50", "w3 = 0.00"]
     assert [t.get_color() for t in labels] == [THEME.positive, THEME.negative_text, THEME.positive]
     assert all(t.get_fontweight() == "normal" for t in labels)
@@ -93,7 +94,7 @@ def test_line_colours_widths_and_labels(static):
     assert lines[0].get_color() == THEME.changed and lines[1].get_color() == THEME.negative
     assert labels[0].get_text() == "w1 = 0.60" and labels[0].get_color() == THEME.changed
     assert labels[0].get_fontweight() == "bold" and labels[1].get_fontweight() == "normal"
-    assert lines[0].get_linewidth() == pytest.approx(0.6 + 1.3 * 0.6)
+    assert lines[0].get_linewidth() == pytest.approx(width(0.6))
 
 
 def test_mixed_group_is_drawn_black(static):
@@ -113,7 +114,7 @@ def test_history_steps_and_reset_on_the_session(static):
     assert len(s.history) == 4 and s.history[-1] < R0 and s.weights() == pytest.approx(w)
     fig = s.draw()
     hist_ax = [ax for ax in fig.axes if ax.get_title().startswith("R = ")][0]
-    assert hist_ax.get_title() == f"R = {s.history[-1]:.3f}" and len(hist_ax.lines[0].get_xdata()) == 4
+    assert hist_ax.get_title() == f"R = {s.history[-1]:.4f}" and len(hist_ax.lines[0].get_xdata()) == 4
     assert s.reset() == s.w0 and s.weights() == s.w0 and s.history == [R0]
 
 
@@ -135,3 +136,44 @@ def test_session_repr_and_silent_display(static):
     s = explore(net, X, y)
     assert repr(s) == "<slopewalk session: 3 weights, R = 1.003>"
     assert s._ipython_display_() is None
+
+
+def test_weight_labels_in_the_first_panel_only(static):
+    """The weights are the same in every panel, so only panel A labels them; lines keep their width and colour."""
+    s = explore(make("tanh3"), *xor_centres())
+    P = panels(s.fig)
+    assert len(edge_texts(P[0])) == 13 and all(not edge_texts(ax) for ax in P[1:])
+    assert all(len(weight_lines(ax)) == 13 for ax in P)
+
+
+def test_the_weight_moved_last_keeps_its_name(static):
+    s = explore(make("tanh3"), *xor_centres())  # 13 weights: values only on the lines
+    w = s.weights()
+    w[4] += 0.3
+    s.model.set_weights(w)
+    s.last_moved = 4
+    fig = s.draw()
+    texts = [t.get_text() for t in edge_texts(panels(fig)[0])]
+    assert f"w5 = {w[4]:.2f}" in texts and sum(" = " in t for t in texts) == 1 and len(texts) == 13
+    s.step(1)  # a step moves every weight: no name any more
+    assert s.last_moved is None
+    texts = [t.get_text() for t in edge_texts(panels(s.draw())[0])]
+    assert not any(" = " in t for t in texts)
+    many = explore(make("wide"), *xor_centres())  # 49 weights: the name must not cost the other labels
+    many.last_moved = 0
+    texts = [t.get_text() for t in edge_texts(panels(many.draw())[0])]
+    assert len(texts) == 49
+
+
+def test_colours_and_type_scale(static):
+    """Class 1 in a red that reads as text, negative lines in an orange with 3:1 on white, one size for the titles
+    of the panels below the networks."""
+    assert THEME.class_colour[1] == "#C62828" and THEME.negative == "#E86A00"
+    s = explore(make("tanh3"), *xor_centres(), views=("cases", "slice", "line", "hidden", "momentum", "backprop"))
+    lower = s.fig.axes[4:]
+    sizes = {ax.title.get_fontsize() for ax in lower if ax.get_title()} | {
+        ax._left_title.get_fontsize() for ax in lower if ax.get_title(loc="left")
+    }
+    assert sizes == {THEME.panel_title_size}
+    legends = {t.get_fontsize() for ax in lower if ax.get_legend() for t in ax.get_legend().get_texts()}
+    assert legends == {THEME.legend_size}
