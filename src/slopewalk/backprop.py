@@ -43,6 +43,8 @@ def backprop_stages(model):
         "multiclass": "at the output: δak = ∂ℓ/∂ak = pk - yk (yk is 1 for the case's class, else 0)",
         "regression": "at the output: δa = ∂ℓ/∂a = 2(ŷ - y)",
     }[model.task]
+    if regression and model.n_outputs > 1:
+        output = "at the output: δak = ∂ℓ/∂ak = 2(ŷk - yk)/K (ℓ is the mean over the K targets)"
     out = [
         Stage("forward", None, "forward pass: z, h and " + ("ŷ" if regression else "a and p") + " of every case"),
         Stage("output", L - 1, output),
@@ -100,8 +102,8 @@ def backward_pass(model, X, y, w=None):
             d_out = torch.softmax(a, dim=1) - nn.functional.one_hot(y.long(), a.shape[1]).to(a.dtype)
         elif model.task == "binary":
             d_out = torch.sigmoid(a) - y[:, None]
-        else:
-            d_out = 2 * (a - y[:, None])
+        else:  # the mean squared error over the K targets of a case
+            d_out = 2 * (a - y.reshape(a.shape[0], -1)) / a.shape[1]
         deltas = [None] * len(layers)
         dh = [None] * len(layers)
         deriv = [None] * len(layers)
@@ -271,7 +273,7 @@ def overlay(ax, S, F, c, edges):
             with tagging(ax, ("δa",)):
                 for k, ty in enumerate(L.unit_ys(M.n_outputs)):
                     m, sd = D.stats(bp.delta[-1][:, k], c)
-                    box(ax, L.x_a, ty, tag("δa" if M.n_outputs == 1 else f"δa{k}") + num(m, sd), T)
+                    box(ax, L.x_a, ty, tag("δ" + output_name(M, k)) + num(m, sd), T)
         elif s.kind in ("to_h", "delta"):
             l = s.layer
             XZ, XG, XH = L.blocks[l]
@@ -315,13 +317,16 @@ def derivation_lines(S, F, i):
     """The steps of the backward pass for case i, as (stage index, text) pairs."""
     M = S.model
     bp = F.bp
-    y = float(S.data.y[i])
+    yi = S.data.y[i].numpy()
+    y = float(yi) if yi.ndim == 0 else None  # None: several targets
     a = bp.z[-1][i, 0]
     regression = S.task == "regression"
     out = []
     for s_idx, st in enumerate(S.backprop_stages):
         if S.task == "multiclass" and st.kind in ("forward", "output"):
             out += [(s_idx, text) for text in class_lines(bp.z[-1][i], int(y), st.kind)]
+        elif y is None and st.kind in ("forward", "output"):
+            out += [(s_idx, text) for text in target_lines(bp.z[-1][i], yi, st.kind)]
         elif st.kind == "forward":
             if regression:
                 out.append((s_idx, f"forward: ŷ = {a:+.3f}, y = {y:+.3f}"))
@@ -391,8 +396,24 @@ def derivation_lines(S, F, i):
 
 
 def output_name(model, j):
-    """The name of output unit j: a with one output, a0, a1, ... with one per class."""
-    return "a" if model.n_outputs == 1 else f"a{j}"
+    """The name of output unit j: a with one output; a0, a1, ... with one per class (as the labels); a1, a2, ... with
+    one per target (as the inputs x1, x2)."""
+    if model.n_outputs == 1:
+        return "a"
+    return f"a{j}" if model.task == "multiclass" else f"a{j + 1}"
+
+
+def target_lines(a, y, kind):
+    """The lines of the forward and output stages for K targets: the predictions a and the targets y of one case."""
+    K = len(a)
+    if kind == "forward":
+        predictions = ", ".join(f"{v:+.3f}" for v in a)
+        targets = ", ".join(f"{v:+.3f}" for v in y)
+        return [f"forward: ŷ = ({predictions})", f"targets: y = ({targets})"]
+    return [
+        f"δa{k + 1} = 2(ŷ{k + 1} - y{k + 1})/{K} = 2({a[k]:+.3f} - {factor(y[k])})/{K} = {2 * (a[k] - y[k]) / K:+.3f}"
+        for k in range(K)
+    ]
 
 
 def class_lines(a, y, kind):

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Regression with several targets: a network that ends in `nn.Linear(..., K)` (K up to 4) with `task="regression"` and `y` an n x K array. Each case's loss is the mean of its K squared errors, so R is `F.mse_loss` over all of them. Each panel shows a prediction box per target (ŷ1, ŷ2, ...) and a loss box that lists the targets; the backward pass starts from δak = 2(ŷk − yk)/K. Targets count from 1, as inputs do; classes still count from 0, as their labels.
+- Regression with three or more inputs, or with several targets over two inputs, shows each case's prediction against its target, with the diagonal ŷ = y; one input with several targets shows each target's prediction against x1. Targets are told apart by line style and marker shape, not by colour.
+- Panel titles print 0.0 instead of -0.0 for group means near zero.
 - The Backpropagation tab has no stage slider: `previous stage` and `next stage` move through the stages, and the Worked example's title names the stage.
 - `slopewalk.help()` prints the functions with their arguments, the arguments of `explore` and the methods of the session; `slopewalk.help("explore")` or `slopewalk.help("Session.step")` prints one in full.
 - `sine_points` is gone: the examples build their points with torch (`x = torch.linspace(-2, 2, 16)[:, None]`, `y = torch.sin(1.5 * x[:, 0])`). With one input and more than 8 points, explore still makes four groups along x1.

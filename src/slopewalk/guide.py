@@ -10,7 +10,11 @@ from .session import Session, explore
 FUNCTIONS = (explore, clusters, xor_centres, two_points, weight_table)
 OPTIONS = (  # the arguments of explore, one line each
     ("net", "nn.Sequential of nn.Linear layers with nn.Tanh, nn.ReLU, nn.Sigmoid or nothing between them"),
-    ("X, y", "the inputs (n x d) and the labels (0 or 1, or 0 to K-1) or targets (task='regression')"),
+    (
+        "X, y",
+        "the inputs (n x d), and the labels (0 or 1, or 0 to K-1) or the targets (task='regression': n numbers, "
+        "or n x K for a network with K outputs)",
+    ),
     ("groups", "a number per point, one panel per group; default: one per point up to 8 points, else per class"),
     ("eta", "the step size of a gradient step"),
     ("title", "a title above the picture"),

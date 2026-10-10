@@ -116,10 +116,147 @@ def test_two_inputs_and_three_inputs(static):
     assert any(ax.get_title().startswith("prediction over the input plane") for ax in fig.axes)
     net3 = make("three_inputs")
     X3, y3 = regression_points(net3, n=5)
-    fig3 = explore(net3, X3, y3, task="regression").fig
-    assert "3 inputs: no picture of the input plane" in texts(fig3)
+    fig3 = explore(net3, X3, y3, task="regression").fig  # more inputs than a plane shows: prediction against target
+    assert any(ax.get_title().startswith("each case's prediction against its target") for ax in fig3.axes)
 
 
 def test_binary_one_input_shows_p_against_x(static):
     s = explore(make("one_input"), [-1.0, 0.0, 2.0], [0, 1, 1])
     assert any(ax.get_title() == "p for class 1 against x1" for ax in s.fig.axes)
+
+
+# ---------------------------------------------------------------- several targets
+
+TARGETS = {
+    "one_input_two_targets": lambda: nn.Sequential(nn.Linear(1, 3), nn.Tanh(), nn.Linear(3, 2)),
+    "three_inputs_two_targets": lambda: nn.Sequential(nn.Linear(3, 4), nn.Tanh(), nn.Linear(4, 2)),
+    "linear_three_targets": lambda: nn.Sequential(nn.Linear(2, 3)),
+}
+
+
+def target_points(net, n=12, seed=4):
+    """n random points and K targets per point for a network with K outputs."""
+    linears = [m for m in net if isinstance(m, nn.Linear)]
+    g = torch.Generator().manual_seed(seed)
+    return torch.randn(n, linears[0].in_features, generator=g), torch.randn(n, linears[-1].out_features, generator=g)
+
+
+def wave():
+    """16 points on two curves of x: the targets sin(1.5 x) and cos(1.5 x), plus noise, built with torch."""
+    g = torch.Generator().manual_seed(0)
+    x = torch.linspace(-2, 2, 16)[:, None]
+    Y = torch.stack([torch.sin(1.5 * x[:, 0]), torch.cos(1.5 * x[:, 0])], dim=1)
+    return x, Y + 0.05 * torch.randn(16, 2, generator=g)
+
+
+@pytest.mark.parametrize("name", list(TARGETS))
+def test_several_targets_numbers(name):
+    """R is F.mse_loss over all cases and targets; the slopes match autograd and central differences; each case's
+    loss is the mean over its targets, so the per-case slopes average to the slopes, and the backward pass of the
+    stages gives the same per-case slopes, with delta a = 2(y-hat - y)/K at the output."""
+    from slopewalk.backprop import backward_pass
+
+    torch.manual_seed(0)
+    net = TARGETS[name]()
+    X, Y = target_points(net)
+    M = Model(net, task="regression")
+    K = Y.shape[1]
+    with torch.no_grad():
+        assert M.risk(X, Y) == pytest.approx(F.mse_loss(net(X), Y).item(), abs=1e-6)
+        out = M.forward(X, Y)
+        assert out.a.shape == (12, K) and out.p is None
+        assert out.loss == pytest.approx(((net(X) - Y) ** 2).mean(1).numpy(), abs=1e-6)
+    ref = copy.deepcopy(net)
+    F.mse_loss(ref(X), Y).backward()
+    flat = []
+    for m in ref:
+        if isinstance(m, nn.Linear):
+            for j in range(m.out_features):
+                flat += m.weight.grad[j].tolist() + [m.bias.grad[j].item()]
+    g = M.slopes(X, Y)
+    assert g.tolist() == pytest.approx(flat, abs=1e-6)
+    M64 = Model(copy.deepcopy(net).double(), task="regression")
+    w = M64.get_weights()
+    for k in range(len(w)):
+        up, down = list(w), list(w)
+        up[k] += 1e-6
+        down[k] -= 1e-6
+        fd = (M64.risk(X.double(), Y.double(), up) - M64.risk(X.double(), Y.double(), down)) / 2e-6
+        assert g[k] == pytest.approx(fd, abs=1e-4)
+    cases = M.case_slopes(X, Y)
+    assert cases.mean(0) == pytest.approx(g, abs=1e-6)
+    bp = backward_pass(M, X, Y)
+    assert bp.grads == pytest.approx(cases, abs=1e-6)
+    with torch.no_grad():
+        assert bp.delta[-1] == pytest.approx((2 * (net(X) - Y) / K).numpy(), abs=1e-6)
+    W = torch.tensor(w, dtype=torch.float64)[None, :] + 0.2 * torch.randn(4, len(w), dtype=torch.float64)
+    assert M.risk_batch(X, Y, W.numpy()) == pytest.approx([M.risk(X, Y, row.tolist()) for row in W], abs=1e-5)
+
+
+@pytest.mark.parametrize(
+    "y, task, outputs, fragment",
+    [
+        ("two_columns", None, 2, "y has 2 columns, one per target: pass task='regression'"),
+        ("two_columns", "regression", 3, "y has 2 targets per point, but the network has 3 output(s)"),
+        ("one_column", "regression", 2, "the network has 2 outputs, so y needs 2 targets per point"),
+    ],
+)
+def test_several_targets_are_checked(y, task, outputs, fragment):
+    from slopewalk.data import prepare
+
+    X = torch.randn(5, 2)
+    Y = torch.randn(5, 2) if y == "two_columns" else torch.randn(5)
+    with pytest.raises(ValueError, match=re.escape(fragment)):
+        prepare(X, Y, n_inputs=2, task=task, n_outputs=outputs)
+    assert prepare(X, torch.randn(5, 1), n_inputs=2, task="regression").y.shape == (5,)  # one column: one target
+
+
+def test_several_targets_picture(static):
+    """One input, two targets: a prediction box per target, the loss box lists the targets, the panel below shows
+    each target's prediction against x1 with its points, the slider groups count the targets from 1."""
+    torch.manual_seed(0)
+    x, Y = wave()
+    s = explore(TARGETS["one_input_two_targets"](), x, Y, task="regression", eta=0.2)
+    P = panels(s.fig)
+    assert len(P) == 4 and P[0].get_title().startswith("A: mean of 4 points (-1.6):  loss ")
+    starts = [t.get_text().split("\n")[0] for t in P[0].texts]
+    assert "ŷ1" in starts and "ŷ2" in starts
+    loss = [t.get_text() for t in P[0].texts if "\nloss " in t.get_text()][0]
+    assert loss.startswith("y1 ") and "\ny2 " in loss and "change\nfrom start\n+0.000" in loss
+    curves = [ax for ax in s.fig.axes if ax.get_title() == "each target's prediction and its points"]
+    assert len(curves) == 1 and [ln.get_label() for ln in curves[0].lines] == ["ŷ1", "ŷ2"]
+    assert [s.model.unit_title(1, j) for j in range(2)] == ["output unit 1", "output unit 2"]
+    R0 = s.risk()
+    s.step(50)
+    assert s.risk() < R0
+
+
+@pytest.mark.parametrize("inputs, outputs", [(3, 1), (2, 2), (3, 2)])
+def test_more_inputs_or_targets_show_prediction_against_target(inputs, outputs, static):
+    """Three or more inputs, or two inputs with several targets: each case's prediction against its target, with
+    the diagonal."""
+    torch.manual_seed(0)
+    X = torch.rand(30, inputs) * 4 - 2
+    Y = torch.randn(30, outputs) if outputs > 1 else X[:, 0] * X[:, 1]
+    net = nn.Sequential(nn.Linear(inputs, 3), nn.Tanh(), nn.Linear(3, outputs))
+    s = explore(net, X, Y, task="regression", views=("hidden", "cases", "slice", "line", "momentum"))
+    ax = [a for a in s.fig.axes if a.get_title().startswith("each case's prediction against its target")]
+    assert len(ax) == 1
+    marks = [c for c in ax[0].collections if len(c.get_offsets()) == 30]
+    assert len(marks) == outputs
+
+
+def test_several_targets_backward_pass(static):
+    torch.manual_seed(0)
+    x, Y = wave()
+    s = explore(TARGETS["one_input_two_targets"](), x, Y, task="regression", views="backprop", backprop_step=1)
+    assert s.backprop_stages[1].text == "at the output: δak = ∂ℓ/∂ak = 2(ŷk - yk)/K (ℓ is the mean over the K targets)"
+    from slopewalk.backprop import derivation_lines
+    from slopewalk.picture import make_frame
+
+    lines = [t for _, t in derivation_lines(s, make_frame(s), 0)]
+    assert lines[0].startswith("forward: ŷ = (") and lines[1].startswith("targets: y = (")
+    assert lines[2].startswith("δa1 = 2(ŷ1 - y1)/2 = 2(") and lines[3].startswith("δa2 = 2(ŷ2 - y2)/2 = 2(")
+    assert any(t.startswith("w7: δa1 × h1 = ") for t in lines)  # w1 to w6: the first layer
+    deltas = [t.get_text().split("\n")[0] for t in panels(s.fig)[0].texts if t.get_text().startswith("δa")]
+    assert deltas == ["δa1", "δa2"]

@@ -61,6 +61,8 @@ LOOK = {  # where to look in the picture at each stage of the backward pass
     "output multiclass": "Under each score ak, the purple box is δak = pk - yk of each case: yk is 1 for the case's "
     "class and 0 for the others.",
     "output regression": "Under ŷ, the purple box is δa = 2(ŷ - y) of each case.",
+    "output regression several": "Under each ŷk, the purple box is δak = 2(ŷk - yk)/K of each case, K the number of "
+    "targets.",
     "weights": "On the purple lines, each number is δ of the unit times the input of its line.",
     "to_h": "The purple arrows carry δ back along the weights to each h.",
     "delta": "The purple tangents on the curves: their slope multiplies ∂ℓ/∂h to give δ.",
@@ -528,7 +530,8 @@ class Controller:
         """The message for the current stage of the backward pass: where to look in the picture."""
         S = self.session
         kind = S.backprop_stages[S.backprop_step].kind
-        return LOOK.get(f"{kind} {S.task}", LOOK[kind])
+        several = " several" if S.task == "regression" and S.model.n_outputs > 1 else ""
+        return LOOK.get(f"{kind} {S.task}{several}", LOOK.get(f"{kind} {S.task}", LOOK[kind]))
 
     def action_buttons(self):
         return [*self.buttons.values()] + ([self.bp_prev, self.bp_next] if "backprop" in self.kinds else [])

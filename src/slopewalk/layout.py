@@ -55,7 +55,8 @@ class Layout:
             self.blocks.append((x, x + 0.75, x + 1.5))  # x of the z box, of the glyph and of the h box
             x += 2.75
         if task == "regression":
-            self.x_a, self.x_sigmoid, self.x_p, self.x_loss = x, None, None, x + 1.1 + extra
+            gap = 1.1 if outputs == 1 else 1.6  # several targets: room for their arrows into the loss box
+            self.x_a, self.x_sigmoid, self.x_p, self.x_loss = x, None, None, x + gap + extra
         else:
             self.x_a, self.x_sigmoid, self.x_p, self.x_loss = x, x + 0.75, x + 1.5, x + 2.4 + extra
         self.x_input_value = -0.24 * f  # the right edge of an input's value box, left of its circle

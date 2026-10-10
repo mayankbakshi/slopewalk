@@ -278,7 +278,29 @@ BOXES = {
         {"views": "backprop", "backprop_step": 1},
     ),
     "four_classes": lambda: (make("softmax_only"), *four_class_centres(), {"views": "backprop", "backprop_step": 1}),
+    "two_targets": lambda: (
+        nn.Sequential(nn.Linear(1, 3), nn.Tanh(), nn.Linear(3, 2)),
+        *two_targets(),
+        {"task": "regression"},
+    ),
+    "two_targets_backprop": lambda: (
+        nn.Sequential(nn.Linear(1, 3), nn.Tanh(), nn.Linear(3, 2)),
+        *two_targets(),
+        {"task": "regression", "views": "backprop", "backprop_step": 1},
+    ),
+    "four_targets_single_points": lambda: (
+        nn.Sequential(nn.Linear(2, 3), nn.Tanh(), nn.Linear(3, 4)),
+        torch.tensor([[0.0, 1.0], [1.0, 0.0], [-1.0, 0.5]]),
+        torch.tensor([[0.1, 0.2, 0.3, 0.4], [0.5, -0.6, 0.7, -0.8], [0.0, 1.0, -1.0, 0.5]]),
+        None,
+        {"task": "regression"},
+    ),
 }
+
+
+def two_targets():
+    x = torch.linspace(-2, 2, 16)[:, None]
+    return x, torch.stack([torch.sin(1.5 * x[:, 0]), torch.cos(1.5 * x[:, 0])], dim=1), None
 
 
 @pytest.mark.parametrize("style", ["standard", "wide"])
@@ -288,7 +310,8 @@ def test_boxes_do_not_overlap(name, style, static):
     activation curves keep clear of each other, in both layouts and at the text sizes of each."""
     torch.manual_seed(0)
     net, X, y, groups, options = BOXES[name]()
-    task = "regression" if name == "regression" else None
+    options = dict(options)
+    task = "regression" if name == "regression" else options.pop("task", None)
     s = explore(net, X, y, groups, layout=style, task=task, **options)
     for ax in panels(s.fig):
         _, boxes, glyphs = boxes_of(s.fig, ax, s.theme.edge_label_size)

@@ -440,12 +440,14 @@ def draw_case(ax, S, F, c, styles=None):
             )
     (am, as_), (lm, _) = D.stats(out.a, c), D.stats(out.loss, c)
     npts = int(D.gsel[c].sum())
-    where = "(" + ", ".join(f"{v:.1f}" for v in xm) + ")"
+    where = "(" + ", ".join(f"{v:.1f}".replace("-0.0", "0.0") if abs(v) < 0.05 else f"{v:.1f}" for v in xm) + ")"
     lead = f"{letter(c)}: {'mean of ' + str(npts) + ' points ' if npts > 1 else ''}{where}"
     change = f"change\nfrom start\n{lm - S.loss0[c]:+.3f}"
     loss_box = dict(boxstyle="round,pad=0.3", fc=tint, ec=col, lw=0.8)
     if D.task == "multiclass":
         title = draw_classes(ax, S, F, c, tag, obstacles, arrow, (lead, change, loss_box))
+    elif D.task == "regression" and M.n_outputs > 1:
+        title = draw_targets(ax, S, F, c, tag, arrow, (lead, change, loss_box))
     elif D.task == "regression":
         box_a = dict(fontsize=T.node_size, ha="center", va="center", zorder=5, bbox=T.value_box, color=T.ink)
         with tagging(ax, ("a",)):
@@ -512,6 +514,36 @@ def draw_case(ax, S, F, c, styles=None):
             solid_capstyle="round",
         )
     return edges, obstacles
+
+
+def draw_targets(ax, S, F, c, tag, arrow, parts):
+    """The output of network panel c for K targets (regression): a prediction box ŷ1, ŷ2, ... per target, each with
+    an arrow into the loss box, which lists the targets y1, y2, ... (the loss is the mean of the K squared errors).
+    Returns the panel title."""
+    M, D, L, T = S.model, S.data, S.layout, S.theme
+    lead, change, loss_box = parts
+    K = M.n_outputs
+    (am, as_), (ym, ys), (lm, _) = D.stats(F.out.a, c), D.stats(D.y.numpy(), c), D.stats(F.out.loss, c)
+    box = dict(fontsize=T.node_size, ha="center", va="center", zorder=5, bbox=T.value_box, color=T.ink)
+    end = (L.x_loss - 0.5 * L.text_scale, 1.2)
+    for k, ty in enumerate(L.unit_ys(K)):
+        with tagging(ax, ("a",)):
+            ax.text(L.x_a, ty, tag(f"ŷ{k + 1}") + num(am[k], as_[k]), **box)
+        ax.annotate("", xy=end, xytext=(L.x_a + BW, ty), arrowprops=arrow)
+    one = int(D.gsel[c].sum()) == 1
+    targets = [f"y{k + 1} = {ym[k]:+.2f}" if one else f"y{k + 1} {ym[k]:+.2f} ±{ys[k]:.2f}" for k in range(K)]
+    with tagging(ax, ("loss",)):
+        ax.text(
+            L.x_loss,
+            1.2,
+            "\n".join(targets) + f"\nloss {lm:.3f}\n{change}",
+            fontsize=T.node_size,
+            ha="center",
+            va="center",
+            color=T.ink,
+            bbox=loss_box,
+        )
+    return f"{lead}:  loss {lm:.3f}"
 
 
 def draw_classes(ax, S, F, c, tag, obstacles, arrow, parts):
@@ -681,6 +713,13 @@ def draw_input_plane(ax, S, F):
         draw_class_plane(ax, S, F, gx)
         S.model.set_weights(w)
         return
+    if D.task == "regression" and (S.model.n_outputs > 1 or D.d > 2):
+        if D.d == 1:
+            draw_target_curves(ax, S, F)
+        else:  # more inputs than a plane shows, or several targets over a plane
+            draw_parity(ax, S, F)
+        S.model.set_weights(w)
+        return
     if D.d == 1:
         u = line_grid(S)
         a = net_on(S, u[:, None], w)
@@ -805,6 +844,73 @@ def draw_class_plane(ax, S, F, gx):
     ax.set_ylim(lo, hi)
     ax.set_aspect("equal")
     ax.set_title("the most likely class and the boundaries", fontsize=T.panel_title_size)
+
+
+LINE_STYLES, MARKERS = ("-", "--", ":", "-."), ("o", "s", "^", "D")  # one per target: regression stays neutral
+
+
+def draw_target_curves(ax, S, F):
+    """Regression, one input, several targets: the prediction of each target against x1, one line style each, with
+    the points of that target, one marker shape each; once the weights moved, the starting curves, thin."""
+    D, T = S.data, S.theme
+    u = line_grid(S)
+    A = net_on(S, u[:, None], F.w)
+    X, Y = D.X.numpy(), D.y.numpy()
+    if F.changed:
+        A0 = start_values(S, "line", u[:, None])
+        for k in range(A.shape[1]):
+            ax.plot(u, A0[:, k], LINE_STYLES[k], color=T.start_colour, lw=1.0, label="start" if k == 0 else None)
+    for k in range(A.shape[1]):
+        ax.plot(u, A[:, k], LINE_STYLES[k], color=T.neutral_colour, lw=2, label=f"ŷ{k + 1}")
+        ax.scatter(
+            X[:, 0], Y[:, k], marker=MARKERS[k], s=22, color=T.point_neutral, edgecolor=T.marker_edge, lw=0.3, zorder=3
+        )
+    ax.set_xlabel("x1")
+    ax.set_ylabel("ŷ and y")
+    ax.legend(fontsize=T.legend_size, loc="best")
+    ax.set_title("each target's prediction and its points", fontsize=T.panel_title_size)
+
+
+def draw_parity(ax, S, F):
+    """Regression with several targets over two inputs, or with more inputs than a plane shows: each case's
+    prediction against its target, one marker shape per target, and the diagonal where they are equal."""
+    D, T = S.data, S.theme
+    Y = D.y.numpy().reshape(D.n, -1)
+    A = np.asarray(F.out.a, dtype=float).reshape(D.n, -1)
+    lo, hi = float(min(Y.min(), A.min())), float(max(Y.max(), A.max()))
+    pad = 0.08 * (hi - lo) if hi > lo else 1.0
+    lo, hi = lo - pad, hi + pad
+    ax.plot([lo, hi], [lo, hi], color=T.reference_line, lw=1.0, zorder=1, label="ŷ = y")
+    for k in range(Y.shape[1]):
+        ax.scatter(
+            Y[:, k],
+            A[:, k],
+            marker=MARKERS[k],
+            s=26 if D.n <= 40 else 12,
+            color=T.point_neutral,
+            edgecolor=T.marker_edge,
+            lw=0.3,
+            zorder=3,
+            label=f"target {k + 1}" if Y.shape[1] > 1 else "cases",
+        )
+    for c in range(D.G):  # the group letters at the group's mean, first target
+        sel = D.gsel[c]
+        ax.text(
+            float(Y[sel, 0].mean()),
+            float(A[sel, 0].mean()),
+            f"  {letter(c)}",
+            fontsize=T.letter_size,
+            path_effects=halo(T),
+            color=T.ink,
+            zorder=4,
+        )
+    ax.set_xlim(lo, hi)
+    ax.set_ylim(lo, hi)
+    ax.set_aspect("equal")
+    ax.set_xlabel("target y")
+    ax.set_ylabel("prediction ŷ")
+    ax.legend(fontsize=T.legend_size, loc="upper left")
+    ax.set_title("each case's prediction against its target;\non the diagonal ŷ = y", fontsize=T.panel_title_size)
 
 
 # ---------------------------------------------------------------- R over the steps

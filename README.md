@@ -32,7 +32,7 @@ Options of `explore`, all keyword-only; without them the picture is as above:
 
 | option | effect |
 |---|---|
-| `task="regression"` | the output is a prediction and R the mean squared error; `y` holds numbers. Labels other than 0 and 1 without this option raise an error. |
+| `task="regression"` | the outputs are predictions and R the mean squared error; `y` holds numbers: one per point, or an n x K array for a network that ends in `nn.Linear(..., K)` (K targets, up to 4). Labels other than 0 and 1 without this option raise an error. |
 | `params=["w10", "w11"]`, `"output"`, `"layer:1"` | only these weights get sliders and move in a step; the others are drawn lighter and stay fixed. |
 | `views=("backprop", "slice", "line", "hidden", "momentum", "cases")` | extra views, see below. |
 | `backprop_step=3`, `backprop_case="B"` | the stage of the backward pass drawn, and the group whose case the derivation follows; a step above 0 turns the view on. |
@@ -72,7 +72,7 @@ Changing tabs leaves the picture as it is.
 
 ## Supported networks
 
-`nn.Sequential` of `nn.Linear` layers (with bias) with `nn.Tanh`, `nn.ReLU`, `nn.Sigmoid` or nothing between them, ending in `nn.Linear(..., 1)`: its output is the score a of class 1, and R is the cross-entropy, as `F.binary_cross_entropy_with_logits`; with `task="regression"` it is the prediction and R the mean squared error, as `F.mse_loss`. A network that ends in `nn.Linear(..., K)` (K from 2 to 4) has one score per class: the labels are 0 to K-1, and R is the cross-entropy, as `F.cross_entropy`. The task follows from the outputs (`task="multiclass"` for K outputs). The network must be on the CPU in float32 or float64. Anything else, and points with NaN, the wrong shape or labels that do not fit the outputs, raise `ValueError` with the reason.
+`nn.Sequential` of `nn.Linear` layers (with bias) with `nn.Tanh`, `nn.ReLU`, `nn.Sigmoid` or nothing between them, ending in `nn.Linear(..., 1)`: its output is the score a of class 1, and R is the cross-entropy, as `F.binary_cross_entropy_with_logits`; with `task="regression"` it is the prediction and R the mean squared error, as `F.mse_loss`. A network that ends in `nn.Linear(..., K)` (K from 2 to 4) has one score per class: the labels are 0 to K-1, and R is the cross-entropy, as `F.cross_entropy`. The task follows from the outputs (`task="multiclass"` for K outputs). With `task="regression"` the same network predicts K targets: `y` is an n x K array, each case's loss is the mean of its K squared errors, and R is `F.mse_loss` over all of them. Any number of inputs works; with one input the panel below the networks shows the prediction against x1, with two inputs and one target the prediction over the plane, and otherwise each case's prediction against its target. The network must be on the CPU in float32 or float64. Anything else, and points with NaN, the wrong shape or labels that do not fit the outputs, raise `ValueError` with the reason.
 
 Weight names: layer by layer, unit by unit, each unit's incoming weights in the order of its inputs, then its bias. For `nn.Sequential(nn.Linear(2, 3), nn.Tanh(), nn.Linear(3, 1))` this gives w1, w2, w3 (unit 1: x1, x2, bias), w4 to w6 (unit 2), w7 to w9 (unit 3), w10 to w12 (output weights) and w13 (output bias). Rows grow with the number of units up to 12 per layer; beyond that the drawing gets crowded and the values move from the lines to the table.
 

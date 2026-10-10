@@ -111,9 +111,9 @@ def prepare(X, y, groups=None, n_inputs=None, dtype=torch.float32, task=None, n_
 
     X: n points with n_inputs numbers each (a list of points, an array or a tensor). A flat X is one point, except for
     a network with one input, where it is n points. y: n labels (0 or 1; 0 to K-1 for a network with K outputs) or
-    targets (task='regression'). groups None: one group per point up to 8 points; more points: one group per class
-    (classification), or for regression four groups of neighbouring points along x1 (one input) or a single group
-    (several inputs).
+    targets (task='regression': n numbers, or n x K for a network with K outputs). groups None: one group per point
+    up to 8 points; more points: one group per class (classification), or for regression four groups of neighbouring
+    points along x1 (one input) or a single group (several inputs).
     """
     Xa = as_numbers(X, "X")
     if Xa.ndim == 0:
@@ -135,9 +135,35 @@ def prepare(X, y, groups=None, n_inputs=None, dtype=torch.float32, task=None, n_
         raise ValueError("slopewalk: X has no points.")
     if n_inputs is not None and d != n_inputs:
         raise ValueError(f"slopewalk: the points of X have {d} inputs, but the network has {n_inputs}.")
-    ya = as_numbers(y, "y").reshape(-1)
-    if ya.shape[0] != n:
-        raise ValueError(f"slopewalk: y has {ya.shape[0]} values for {n} points; give one label per point.")
+    ya = as_numbers(y, "y")
+    if ya.ndim == 2 and ya.shape[1] == 1:
+        ya = ya[:, 0]
+    if ya.ndim == 2:  # one column per target
+        if task != "regression":
+            raise ValueError(
+                f"slopewalk: y has {ya.shape[1]} columns, one per target: pass task='regression' (for classes, y holds "
+                "one label per point)."
+            )
+        if ya.shape[0] != n:
+            raise ValueError(f"slopewalk: y has {ya.shape[0]} rows for {n} points; give one row of targets per point.")
+        if ya.shape[1] != n_outputs:
+            raise ValueError(
+                f"slopewalk: y has {ya.shape[1]} targets per point, but the network has {n_outputs} output(s); end it "
+                f"with nn.Linear(..., {ya.shape[1]})."
+            )
+    elif ya.ndim > 2:
+        raise ValueError(
+            f"slopewalk: y must hold one value per point, or one row of targets per point, not {ya.shape}."
+        )
+    else:
+        ya = ya.reshape(-1)
+        if ya.shape[0] != n:
+            raise ValueError(f"slopewalk: y has {ya.shape[0]} values for {n} points; give one label per point.")
+        if task == "regression" and n_outputs > 1:
+            raise ValueError(
+                f"slopewalk: the network has {n_outputs} outputs, so y needs {n_outputs} targets per point: an n x "
+                f"{n_outputs} array, one column per output."
+            )
     check_finite(Xa, "X")
     check_finite(ya, "y")
     task = infer_task(ya, task, n_outputs)

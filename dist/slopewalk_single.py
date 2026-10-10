@@ -53,13 +53,13 @@ ACTIVATIONS = {
 SIGMOID = ACTIVATIONS[nn.Sigmoid]
 SUPPORTED = "nn.Linear with nn.Tanh, nn.ReLU or nn.Sigmoid between them"
 TASKS = ("binary", "multiclass", "regression")
-MAX_CLASSES = 4  # one colour per class in the picture, none of them a colour that means something else
+MAX_OUTPUTS = 4  # one colour per class, none of them a colour that means something else; or up to 4 targets
 BATCH_CELLS = 400_000  # risk_batch handles at most this many (weight vector, point) pairs at once
 
 Weight = namedtuple("Weight", "name layer unit input value")
 # hidden: [(z, h), ...] per hidden layer; a: the score (binary), the scores of the classes (multiclass, n x K) or the
-# prediction (regression); p: sigmoid(a) for binary, softmax(a) for multiclass (n x K), None for regression; loss:
-# per point
+# prediction (regression, n x K for K targets); p: sigmoid(a) for binary, softmax(a) for multiclass (n x K), None for
+# regression; loss: per point
 Values = namedtuple("Values", "hidden a p loss")
 
 
@@ -97,13 +97,14 @@ def parse_layers(net):
     if not layers or layers[-1].act is not None:
         raise ValueError(
             "slopewalk: the network must end with nn.Linear, without an activation: nn.Linear(..., 1) for the score "
-            "of class 1 (or the prediction for task='regression'), nn.Linear(..., K) for the scores of K classes."
+            "of class 1 (or the prediction for task='regression'), nn.Linear(..., K) for the scores of K classes (or K "
+            "targets with task='regression')."
         )
-    if layers[-1].out_features > MAX_CLASSES:
+    if layers[-1].out_features > MAX_OUTPUTS:
         k = layers[-1].out_features
         raise ValueError(
-            f"slopewalk: the network ends with nn.Linear(..., {k}), the scores of {k} classes; slopewalk draws up to "
-            f"{MAX_CLASSES} classes, one colour each."
+            f"slopewalk: the network ends with nn.Linear(..., {k}), {k} outputs; slopewalk draws up to {MAX_OUTPUTS}: "
+            f"the scores of up to {MAX_OUTPUTS} classes, one colour each, or up to {MAX_OUTPUTS} targets."
         )
     for L in layers:
         if L.linear.bias is None:
@@ -123,10 +124,10 @@ def check_task(task, n_outputs):
             "slopewalk: task='multiclass' needs one output per class: end the network with nn.Linear(..., K) for K "
             "classes."
         )
-    if task != "multiclass" and n_outputs > 1:
+    if task == "binary" and n_outputs > 1:
         raise ValueError(
-            f"slopewalk: the network has {n_outputs} outputs, one score per class, which is task='multiclass'. For "
-            f"task='{task}', end it with nn.Linear(..., 1)."
+            f"slopewalk: the network has {n_outputs} outputs: one score per class is task='multiclass', and "
+            f"{n_outputs} targets task='regression'. For task='binary', end it with nn.Linear(..., 1)."
         )
     return task
 
@@ -139,8 +140,8 @@ class Model:
     gives w1 to w3 (unit 1), w4 to w6, w7 to w9, w10 to w12 (output weights) and w13 (output bias).
     task: "binary" (one output, the score of class 1; R is the log loss, as F.binary_cross_entropy_with_logits),
     "multiclass" (K outputs, the scores of the classes 0 to K-1; R is the cross-entropy, as F.cross_entropy) or
-    "regression" (one output, the prediction; R is the mean squared error, as F.mse_loss). None: multiclass for a
-    network with several outputs, else binary.
+    "regression" (one output per target; R is the mean squared error over all cases and targets, as F.mse_loss, so
+    each case's loss is the mean over its targets). None: multiclass for a network with several outputs, else binary.
     """
 
     def __init__(self, net, task=None):
@@ -179,8 +180,11 @@ class Model:
         return f"{j + 1}" if len(self.hidden) == 1 else f"{layer + 1},{j + 1}"
 
     def unit_title(self, layer, j):
+        """The title of a unit's slider group. Classes count from 0, as their labels; targets from 1, as inputs."""
         if layer == len(self.layers) - 1:
-            return "output unit" if self.n_outputs == 1 else f"output unit, class {j}"
+            if self.n_outputs == 1:
+                return "output unit"
+            return f"output unit, class {j}" if self.task == "multiclass" else f"output unit {j + 1}"
         return f"unit {j + 1}" if len(self.hidden) == 1 else f"layer {layer + 1}, unit {j + 1}"
 
     def input_labels(self, layer):
@@ -257,16 +261,19 @@ class Model:
 
     def loss(self, a, y, reduction="mean"):
         """The loss of the task: log loss on the score a (binary), cross-entropy on the scores a (n x K, multiclass;
-        the labels y are the classes) or squared error of the prediction a (regression)."""
+        the labels y are the classes) or squared error of the prediction a (regression; with several targets, a and y
+        are n x K and a case's loss is the mean over its targets, so that R is F.mse_loss of all of them)."""
         if self.task == "regression":
+            if reduction == "none" and self.n_outputs > 1:
+                return F.mse_loss(a, y, reduction="none").mean(-1)
             return F.mse_loss(a, y, reduction=reduction)
         if self.task == "multiclass":
             return F.cross_entropy(a, y.long(), reduction=reduction)
         return F.binary_cross_entropy_with_logits(a, y, reduction=reduction)
 
     def scores(self, t):
-        """The network's output t (n x outputs) as the loss takes it: n x K for multiclass, else n numbers."""
-        return t if self.task == "multiclass" else t.reshape(-1)
+        """The network's output t (n x outputs) as the loss takes it: n numbers for one output, else n x K."""
+        return t.reshape(-1) if self.n_outputs == 1 else t
 
     def forward(self, X, y, w=None):
         """Values at w (default: the current weights): (z, h) per hidden layer, then a, p and the loss, per point."""
@@ -346,6 +353,8 @@ class Model:
                     k += o * (m + 1)
                 if self.task == "multiclass":  # one row of K scores per (weight vector, point), in that order
                     losses = self.loss(t.reshape(G * n, -1), y.repeat(G), reduction="none").reshape(G, n)
+                elif self.n_outputs > 1:  # several targets: a case's loss is the mean over them
+                    losses = ((t - y) ** 2).mean(-1)
                 else:
                     losses = self.loss(t.reshape(G, n), y.expand(G, n), reduction="none")
                 out.append(losses.mean(1))
@@ -506,9 +515,9 @@ def prepare(X, y, groups=None, n_inputs=None, dtype=torch.float32, task=None, n_
 
     X: n points with n_inputs numbers each (a list of points, an array or a tensor). A flat X is one point, except for
     a network with one input, where it is n points. y: n labels (0 or 1; 0 to K-1 for a network with K outputs) or
-    targets (task='regression'). groups None: one group per point up to 8 points; more points: one group per class
-    (classification), or for regression four groups of neighbouring points along x1 (one input) or a single group
-    (several inputs).
+    targets (task='regression': n numbers, or n x K for a network with K outputs). groups None: one group per point
+    up to 8 points; more points: one group per class (classification), or for regression four groups of neighbouring
+    points along x1 (one input) or a single group (several inputs).
     """
     Xa = as_numbers(X, "X")
     if Xa.ndim == 0:
@@ -530,9 +539,35 @@ def prepare(X, y, groups=None, n_inputs=None, dtype=torch.float32, task=None, n_
         raise ValueError("slopewalk: X has no points.")
     if n_inputs is not None and d != n_inputs:
         raise ValueError(f"slopewalk: the points of X have {d} inputs, but the network has {n_inputs}.")
-    ya = as_numbers(y, "y").reshape(-1)
-    if ya.shape[0] != n:
-        raise ValueError(f"slopewalk: y has {ya.shape[0]} values for {n} points; give one label per point.")
+    ya = as_numbers(y, "y")
+    if ya.ndim == 2 and ya.shape[1] == 1:
+        ya = ya[:, 0]
+    if ya.ndim == 2:  # one column per target
+        if task != "regression":
+            raise ValueError(
+                f"slopewalk: y has {ya.shape[1]} columns, one per target: pass task='regression' (for classes, y holds "
+                "one label per point)."
+            )
+        if ya.shape[0] != n:
+            raise ValueError(f"slopewalk: y has {ya.shape[0]} rows for {n} points; give one row of targets per point.")
+        if ya.shape[1] != n_outputs:
+            raise ValueError(
+                f"slopewalk: y has {ya.shape[1]} targets per point, but the network has {n_outputs} output(s); end it "
+                f"with nn.Linear(..., {ya.shape[1]})."
+            )
+    elif ya.ndim > 2:
+        raise ValueError(
+            f"slopewalk: y must hold one value per point, or one row of targets per point, not {ya.shape}."
+        )
+    else:
+        ya = ya.reshape(-1)
+        if ya.shape[0] != n:
+            raise ValueError(f"slopewalk: y has {ya.shape[0]} values for {n} points; give one label per point.")
+        if task == "regression" and n_outputs > 1:
+            raise ValueError(
+                f"slopewalk: the network has {n_outputs} outputs, so y needs {n_outputs} targets per point: an n x "
+                f"{n_outputs} array, one column per output."
+            )
     check_finite(Xa, "X")
     check_finite(ya, "y")
     task = infer_task(ya, task, n_outputs)
@@ -614,7 +649,8 @@ class Layout:
             self.blocks.append((x, x + 0.75, x + 1.5))  # x of the z box, of the glyph and of the h box
             x += 2.75
         if task == "regression":
-            self.x_a, self.x_sigmoid, self.x_p, self.x_loss = x, None, None, x + 1.1 + extra
+            gap = 1.1 if outputs == 1 else 1.6  # several targets: room for their arrows into the loss box
+            self.x_a, self.x_sigmoid, self.x_p, self.x_loss = x, None, None, x + gap + extra
         else:
             self.x_a, self.x_sigmoid, self.x_p, self.x_loss = x, x + 0.75, x + 1.5, x + 2.4 + extra
         self.x_input_value = -0.24 * f  # the right edge of an input's value box, left of its circle
@@ -1180,12 +1216,14 @@ def draw_case(ax, S, F, c, styles=None):
             )
     (am, as_), (lm, _) = D.stats(out.a, c), D.stats(out.loss, c)
     npts = int(D.gsel[c].sum())
-    where = "(" + ", ".join(f"{v:.1f}" for v in xm) + ")"
+    where = "(" + ", ".join(f"{v:.1f}".replace("-0.0", "0.0") if abs(v) < 0.05 else f"{v:.1f}" for v in xm) + ")"
     lead = f"{letter(c)}: {'mean of ' + str(npts) + ' points ' if npts > 1 else ''}{where}"
     change = f"change\nfrom start\n{lm - S.loss0[c]:+.3f}"
     loss_box = dict(boxstyle="round,pad=0.3", fc=tint, ec=col, lw=0.8)
     if D.task == "multiclass":
         title = draw_classes(ax, S, F, c, tag, obstacles, arrow, (lead, change, loss_box))
+    elif D.task == "regression" and M.n_outputs > 1:
+        title = draw_targets(ax, S, F, c, tag, arrow, (lead, change, loss_box))
     elif D.task == "regression":
         box_a = dict(fontsize=T.node_size, ha="center", va="center", zorder=5, bbox=T.value_box, color=T.ink)
         with tagging(ax, ("a",)):
@@ -1252,6 +1290,36 @@ def draw_case(ax, S, F, c, styles=None):
             solid_capstyle="round",
         )
     return edges, obstacles
+
+
+def draw_targets(ax, S, F, c, tag, arrow, parts):
+    """The output of network panel c for K targets (regression): a prediction box ŷ1, ŷ2, ... per target, each with
+    an arrow into the loss box, which lists the targets y1, y2, ... (the loss is the mean of the K squared errors).
+    Returns the panel title."""
+    M, D, L, T = S.model, S.data, S.layout, S.theme
+    lead, change, loss_box = parts
+    K = M.n_outputs
+    (am, as_), (ym, ys), (lm, _) = D.stats(F.out.a, c), D.stats(D.y.numpy(), c), D.stats(F.out.loss, c)
+    box = dict(fontsize=T.node_size, ha="center", va="center", zorder=5, bbox=T.value_box, color=T.ink)
+    end = (L.x_loss - 0.5 * L.text_scale, 1.2)
+    for k, ty in enumerate(L.unit_ys(K)):
+        with tagging(ax, ("a",)):
+            ax.text(L.x_a, ty, tag(f"ŷ{k + 1}") + num(am[k], as_[k]), **box)
+        ax.annotate("", xy=end, xytext=(L.x_a + BW, ty), arrowprops=arrow)
+    one = int(D.gsel[c].sum()) == 1
+    targets = [f"y{k + 1} = {ym[k]:+.2f}" if one else f"y{k + 1} {ym[k]:+.2f} ±{ys[k]:.2f}" for k in range(K)]
+    with tagging(ax, ("loss",)):
+        ax.text(
+            L.x_loss,
+            1.2,
+            "\n".join(targets) + f"\nloss {lm:.3f}\n{change}",
+            fontsize=T.node_size,
+            ha="center",
+            va="center",
+            color=T.ink,
+            bbox=loss_box,
+        )
+    return f"{lead}:  loss {lm:.3f}"
 
 
 def draw_classes(ax, S, F, c, tag, obstacles, arrow, parts):
@@ -1421,6 +1489,13 @@ def draw_input_plane(ax, S, F):
         draw_class_plane(ax, S, F, gx)
         S.model.set_weights(w)
         return
+    if D.task == "regression" and (S.model.n_outputs > 1 or D.d > 2):
+        if D.d == 1:
+            draw_target_curves(ax, S, F)
+        else:  # more inputs than a plane shows, or several targets over a plane
+            draw_parity(ax, S, F)
+        S.model.set_weights(w)
+        return
     if D.d == 1:
         u = line_grid(S)
         a = net_on(S, u[:, None], w)
@@ -1545,6 +1620,73 @@ def draw_class_plane(ax, S, F, gx):
     ax.set_ylim(lo, hi)
     ax.set_aspect("equal")
     ax.set_title("the most likely class and the boundaries", fontsize=T.panel_title_size)
+
+
+LINE_STYLES, MARKERS = ("-", "--", ":", "-."), ("o", "s", "^", "D")  # one per target: regression stays neutral
+
+
+def draw_target_curves(ax, S, F):
+    """Regression, one input, several targets: the prediction of each target against x1, one line style each, with
+    the points of that target, one marker shape each; once the weights moved, the starting curves, thin."""
+    D, T = S.data, S.theme
+    u = line_grid(S)
+    A = net_on(S, u[:, None], F.w)
+    X, Y = D.X.numpy(), D.y.numpy()
+    if F.changed:
+        A0 = start_values(S, "line", u[:, None])
+        for k in range(A.shape[1]):
+            ax.plot(u, A0[:, k], LINE_STYLES[k], color=T.start_colour, lw=1.0, label="start" if k == 0 else None)
+    for k in range(A.shape[1]):
+        ax.plot(u, A[:, k], LINE_STYLES[k], color=T.neutral_colour, lw=2, label=f"ŷ{k + 1}")
+        ax.scatter(
+            X[:, 0], Y[:, k], marker=MARKERS[k], s=22, color=T.point_neutral, edgecolor=T.marker_edge, lw=0.3, zorder=3
+        )
+    ax.set_xlabel("x1")
+    ax.set_ylabel("ŷ and y")
+    ax.legend(fontsize=T.legend_size, loc="best")
+    ax.set_title("each target's prediction and its points", fontsize=T.panel_title_size)
+
+
+def draw_parity(ax, S, F):
+    """Regression with several targets over two inputs, or with more inputs than a plane shows: each case's
+    prediction against its target, one marker shape per target, and the diagonal where they are equal."""
+    D, T = S.data, S.theme
+    Y = D.y.numpy().reshape(D.n, -1)
+    A = np.asarray(F.out.a, dtype=float).reshape(D.n, -1)
+    lo, hi = float(min(Y.min(), A.min())), float(max(Y.max(), A.max()))
+    pad = 0.08 * (hi - lo) if hi > lo else 1.0
+    lo, hi = lo - pad, hi + pad
+    ax.plot([lo, hi], [lo, hi], color=T.reference_line, lw=1.0, zorder=1, label="ŷ = y")
+    for k in range(Y.shape[1]):
+        ax.scatter(
+            Y[:, k],
+            A[:, k],
+            marker=MARKERS[k],
+            s=26 if D.n <= 40 else 12,
+            color=T.point_neutral,
+            edgecolor=T.marker_edge,
+            lw=0.3,
+            zorder=3,
+            label=f"target {k + 1}" if Y.shape[1] > 1 else "cases",
+        )
+    for c in range(D.G):  # the group letters at the group's mean, first target
+        sel = D.gsel[c]
+        ax.text(
+            float(Y[sel, 0].mean()),
+            float(A[sel, 0].mean()),
+            f"  {letter(c)}",
+            fontsize=T.letter_size,
+            path_effects=halo(T),
+            color=T.ink,
+            zorder=4,
+        )
+    ax.set_xlim(lo, hi)
+    ax.set_ylim(lo, hi)
+    ax.set_aspect("equal")
+    ax.set_xlabel("target y")
+    ax.set_ylabel("prediction ŷ")
+    ax.legend(fontsize=T.legend_size, loc="upper left")
+    ax.set_title("each case's prediction against its target;\non the diagonal ŷ = y", fontsize=T.panel_title_size)
 
 
 # ---------------------------------------------------------------- R over the steps
@@ -1718,6 +1860,8 @@ def point_colours(S):
     y = D.y.numpy()
     if D.task in ("binary", "multiclass"):
         return [T.class_colour[int(v)] for v in y]
+    if y.ndim > 1:  # several targets: no single value to colour by
+        return [T.point_neutral] * len(y)
     import matplotlib
 
     cmap = (
@@ -1769,6 +1913,8 @@ def draw_cases(ax, S, F):
     ax.set_xlim(-0.6, D.G - 0.4)
     ax.set_ylabel("slope of the case's own loss")
     formula = {"binary": "(p - y) da/dw", "multiclass": "Σk (pk - yk) dak/dw", "regression": "2(ŷ - y) dŷ/dw"}[D.task]
+    if D.task == "regression" and S.model.n_outputs > 1:
+        formula = "Σk 2(ŷk - yk)/K dŷk/dw"
     title = f"each case's slope along {name}, {formula};\nbars: group means; dashed: the average"
     ax.set_title(title, fontsize=T.panel_title_size)
     ax.legend(fontsize=T.legend_size, loc="best")
@@ -1946,6 +2092,47 @@ def output_layer(S, w):
     return V[:, :-1], V[:, -1]
 
 
+def draw_hidden_targets(ax, S, F, H, small, label):
+    """draw_hidden for K targets (regression). One unit: the prediction of each target against h, one line style
+    each, with the targets of the cases. More units: the cases at their hidden values (two units as they are, three
+    in 3-D, more along the two directions in which h varies most)."""
+    D, T = S.data, S.theme
+    m = H.shape[1]
+    V, b = output_layer(S, F.w)
+    Y = D.y.numpy()
+    dots = dict(s=small, color=T.point_neutral, edgecolor=T.marker_edge)
+    what = "each target's prediction against h" if m == 1 else "the points of the cases"
+    if m == 1:
+        lo, hi = window(H[:, 0], minimum=0.6)
+        u = np.linspace(lo, hi, 101)
+        for k in range(len(b)):
+            ax.plot(u, V[k, 0] * u + b[k], LINE_STYLES[k], color=T.neutral_colour, lw=1.5, label=f"ŷ{k + 1}")
+            ax.scatter(H[:, 0], Y[:, k], marker=MARKERS[k], lw=0.3, zorder=3, **dots)
+        ax.set_xlabel(f"{label}1")
+        ax.set_ylabel("ŷ and y")
+        ax.legend(fontsize=T.legend_size, loc="best")
+    elif m == 3 and hasattr(ax, "set_zlim"):
+        ax.scatter(H[:, 0], H[:, 1], H[:, 2], linewidths=0.3, depthshade=False, **dots)
+        for q in range(3):
+            getattr(ax, f"set_{'xyz'[q]}lim")(*window(H[:, q], minimum=0.6))
+        ax.set_xlabel(f"{label}1")
+        ax.set_ylabel(f"{label}2")
+        ax.set_zlabel(f"{label}3")
+        ax.view_init(elev=20, azim=-60)
+    else:
+        if m == 2:
+            two = H
+            ax.set_xlabel(f"{label}1")
+            ax.set_ylabel(f"{label}2")
+        else:
+            centred = H - H.mean(0)
+            two = centred @ np.linalg.svd(centred, full_matrices=False)[2][:2].T
+            ax.set_xlabel("direction of h with the largest spread")
+            ax.set_ylabel("the next one")
+        ax.scatter(two[:, 0], two[:, 1], lw=0.3, zorder=3, **dots)
+    ax.set_title(f"the cases at their hidden values,\n{what}", fontsize=T.panel_title_size)
+
+
 def draw_hidden_classes(ax, S, F, H, colours, small, label):
     """draw_hidden for K classes. One unit: p of each class against h, each case on the curve of its class. Two
     units: the most likely class over the (h1, h2) plane, with the boundaries. Three: the cases in 3-D; more: along
@@ -2025,6 +2212,9 @@ def draw_hidden(ax, S, F):
     label = "h" if len(S.model.hidden) == 1 else f"h{len(S.model.hidden)},"
     if D.task == "multiclass":
         draw_hidden_classes(ax, S, F, H, colours, small, label)
+        return
+    if S.model.n_outputs > 1:
+        draw_hidden_targets(ax, S, F, H, small, label)
         return
     v, b = output_weights(S, F.w)
     binary = D.task == "binary"
@@ -2163,6 +2353,8 @@ def backprop_stages(model):
         "multiclass": "at the output: δak = ∂ℓ/∂ak = pk - yk (yk is 1 for the case's class, else 0)",
         "regression": "at the output: δa = ∂ℓ/∂a = 2(ŷ - y)",
     }[model.task]
+    if regression and model.n_outputs > 1:
+        output = "at the output: δak = ∂ℓ/∂ak = 2(ŷk - yk)/K (ℓ is the mean over the K targets)"
     out = [
         Stage("forward", None, "forward pass: z, h and " + ("ŷ" if regression else "a and p") + " of every case"),
         Stage("output", L - 1, output),
@@ -2220,8 +2412,8 @@ def backward_pass(model, X, y, w=None):
             d_out = torch.softmax(a, dim=1) - nn.functional.one_hot(y.long(), a.shape[1]).to(a.dtype)
         elif model.task == "binary":
             d_out = torch.sigmoid(a) - y[:, None]
-        else:
-            d_out = 2 * (a - y[:, None])
+        else:  # the mean squared error over the K targets of a case
+            d_out = 2 * (a - y.reshape(a.shape[0], -1)) / a.shape[1]
         deltas = [None] * len(layers)
         dh = [None] * len(layers)
         deriv = [None] * len(layers)
@@ -2391,7 +2583,7 @@ def overlay(ax, S, F, c, edges):
             with tagging(ax, ("δa",)):
                 for k, ty in enumerate(L.unit_ys(M.n_outputs)):
                     m, sd = D.stats(bp.delta[-1][:, k], c)
-                    box(ax, L.x_a, ty, tag("δa" if M.n_outputs == 1 else f"δa{k}") + num(m, sd), T)
+                    box(ax, L.x_a, ty, tag("δ" + output_name(M, k)) + num(m, sd), T)
         elif s.kind in ("to_h", "delta"):
             l = s.layer
             XZ, XG, XH = L.blocks[l]
@@ -2435,13 +2627,16 @@ def derivation_lines(S, F, i):
     """The steps of the backward pass for case i, as (stage index, text) pairs."""
     M = S.model
     bp = F.bp
-    y = float(S.data.y[i])
+    yi = S.data.y[i].numpy()
+    y = float(yi) if yi.ndim == 0 else None  # None: several targets
     a = bp.z[-1][i, 0]
     regression = S.task == "regression"
     out = []
     for s_idx, st in enumerate(S.backprop_stages):
         if S.task == "multiclass" and st.kind in ("forward", "output"):
             out += [(s_idx, text) for text in class_lines(bp.z[-1][i], int(y), st.kind)]
+        elif y is None and st.kind in ("forward", "output"):
+            out += [(s_idx, text) for text in target_lines(bp.z[-1][i], yi, st.kind)]
         elif st.kind == "forward":
             if regression:
                 out.append((s_idx, f"forward: ŷ = {a:+.3f}, y = {y:+.3f}"))
@@ -2511,8 +2706,24 @@ def derivation_lines(S, F, i):
 
 
 def output_name(model, j):
-    """The name of output unit j: a with one output, a0, a1, ... with one per class."""
-    return "a" if model.n_outputs == 1 else f"a{j}"
+    """The name of output unit j: a with one output; a0, a1, ... with one per class (as the labels); a1, a2, ... with
+    one per target (as the inputs x1, x2)."""
+    if model.n_outputs == 1:
+        return "a"
+    return f"a{j}" if model.task == "multiclass" else f"a{j + 1}"
+
+
+def target_lines(a, y, kind):
+    """The lines of the forward and output stages for K targets: the predictions a and the targets y of one case."""
+    K = len(a)
+    if kind == "forward":
+        predictions = ", ".join(f"{v:+.3f}" for v in a)
+        targets = ", ".join(f"{v:+.3f}" for v in y)
+        return [f"forward: ŷ = ({predictions})", f"targets: y = ({targets})"]
+    return [
+        f"δa{k + 1} = 2(ŷ{k + 1} - y{k + 1})/{K} = 2({a[k]:+.3f} - {factor(y[k])})/{K} = {2 * (a[k] - y[k]) / K:+.3f}"
+        for k in range(K)
+    ]
 
 
 def class_lines(a, y, kind):
@@ -2822,6 +3033,8 @@ LOOK = {  # where to look in the picture at each stage of the backward pass
     "output multiclass": "Under each score ak, the purple box is δak = pk - yk of each case: yk is 1 for the case's "
     "class and 0 for the others.",
     "output regression": "Under ŷ, the purple box is δa = 2(ŷ - y) of each case.",
+    "output regression several": "Under each ŷk, the purple box is δak = 2(ŷk - yk)/K of each case, K the number of "
+    "targets.",
     "weights": "On the purple lines, each number is δ of the unit times the input of its line.",
     "to_h": "The purple arrows carry δ back along the weights to each h.",
     "delta": "The purple tangents on the curves: their slope multiplies ∂ℓ/∂h to give δ.",
@@ -3289,7 +3502,8 @@ class Controller:
         """The message for the current stage of the backward pass: where to look in the picture."""
         S = self.session
         kind = S.backprop_stages[S.backprop_step].kind
-        return LOOK.get(f"{kind} {S.task}", LOOK[kind])
+        several = " several" if S.task == "regression" and S.model.n_outputs > 1 else ""
+        return LOOK.get(f"{kind} {S.task}{several}", LOOK.get(f"{kind} {S.task}", LOOK[kind]))
 
     def action_buttons(self):
         return [*self.buttons.values()] + ([self.bp_prev, self.bp_next] if "backprop" in self.kinds else [])
@@ -4090,7 +4304,8 @@ def explore(
     net: nn.Sequential of nn.Linear layers with nn.Tanh, nn.ReLU, nn.Sigmoid or nothing between them, ending in
     nn.Linear(..., 1) or nn.Linear(..., K). One output is the score a of class 1 (labels 0 or 1; R is the average log
     loss) or, with task="regression", the prediction (R is the mean squared error). K outputs, for K classes up to 4,
-    are the scores of the classes (labels 0 to K-1; R is the average cross-entropy; task="multiclass").
+    are the scores of the classes (labels 0 to K-1; R is the average cross-entropy; task="multiclass"), or with
+    task="regression" the predictions of K targets (y an n x K array; R is the mean squared error over all of them).
     groups: a number per point; one panel per group. None: one panel per point (up to 8 points), else one per class.
     eta: the step size of the gradient step buttons (a slider).
     params: the weights that move: a list of names such as ["w10", "w11"], "output" or "layer:k". The others are
@@ -4156,7 +4371,11 @@ def explore(
 FUNCTIONS = (explore, clusters, xor_centres, two_points, weight_table)
 OPTIONS = (  # the arguments of explore, one line each
     ("net", "nn.Sequential of nn.Linear layers with nn.Tanh, nn.ReLU, nn.Sigmoid or nothing between them"),
-    ("X, y", "the inputs (n x d) and the labels (0 or 1, or 0 to K-1) or targets (task='regression')"),
+    (
+        "X, y",
+        "the inputs (n x d), and the labels (0 or 1, or 0 to K-1) or the targets (task='regression': n numbers, "
+        "or n x K for a network with K outputs)",
+    ),
     ("groups", "a number per point, one panel per group; default: one per point up to 8 points, else per class"),
     ("eta", "the step size of a gradient step"),
     ("title", "a title above the picture"),

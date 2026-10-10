@@ -121,8 +121,8 @@ def test_default_groups_are_the_classes():
         ),
         ([0, 1, 1.5], 3, None, "label 1.5"),
         ([0, -1, 1], 3, None, "label -1"),
-        ([0, 1, 2], 3, "binary", "has 3 outputs, one score per class, which is task='multiclass'"),
-        ([0, 1, 2], 3, "regression", "For task='regression', end it with nn.Linear(..., 1)"),
+        ([0, 1, 2], 3, "binary", "has 3 outputs: one score per class is task='multiclass'"),
+        ([0, 1, 2], 3, "regression", "the network has 3 outputs, so y needs 3 targets per point"),
         ([0, 1, 1], 1, "multiclass", "needs one output per class"),
         ([0, 1, 2], 1, None, "For 3 classes, end the network with nn.Linear(..., 3) and use the labels 0 to 2"),
     ],
@@ -135,7 +135,7 @@ def test_labels_and_task_are_checked(y, n_outputs, task, fragment):
 
 
 def test_more_than_four_classes_are_refused():
-    with pytest.raises(ValueError, match=r"nn.Linear\(..., 5\), the scores of 5 classes; slopewalk draws up to 4"):
+    with pytest.raises(ValueError, match=r"nn.Linear\(..., 5\), 5 outputs; slopewalk draws up to 4"):
         Model(nn.Sequential(nn.Linear(2, 5)))
 
 

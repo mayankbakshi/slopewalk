@@ -9,7 +9,7 @@ Every function takes (ax, S, F) like the panels in draw.py.
 
 import numpy as np
 
-from .draw import class_boundaries, class_shading, halo, letter, softmax
+from .draw import LINE_STYLES, MARKERS, class_boundaries, class_shading, halo, letter, softmax
 
 VIEWS = ("backprop", "cases", "slice", "line", "hidden", "momentum")
 
@@ -25,6 +25,8 @@ def point_colours(S):
     y = D.y.numpy()
     if D.task in ("binary", "multiclass"):
         return [T.class_colour[int(v)] for v in y]
+    if y.ndim > 1:  # several targets: no single value to colour by
+        return [T.point_neutral] * len(y)
     import matplotlib
 
     cmap = (
@@ -76,6 +78,8 @@ def draw_cases(ax, S, F):
     ax.set_xlim(-0.6, D.G - 0.4)
     ax.set_ylabel("slope of the case's own loss")
     formula = {"binary": "(p - y) da/dw", "multiclass": "Σk (pk - yk) dak/dw", "regression": "2(ŷ - y) dŷ/dw"}[D.task]
+    if D.task == "regression" and S.model.n_outputs > 1:
+        formula = "Σk 2(ŷk - yk)/K dŷk/dw"
     title = f"each case's slope along {name}, {formula};\nbars: group means; dashed: the average"
     ax.set_title(title, fontsize=T.panel_title_size)
     ax.legend(fontsize=T.legend_size, loc="best")
@@ -253,6 +257,47 @@ def output_layer(S, w):
     return V[:, :-1], V[:, -1]
 
 
+def draw_hidden_targets(ax, S, F, H, small, label):
+    """draw_hidden for K targets (regression). One unit: the prediction of each target against h, one line style
+    each, with the targets of the cases. More units: the cases at their hidden values (two units as they are, three
+    in 3-D, more along the two directions in which h varies most)."""
+    D, T = S.data, S.theme
+    m = H.shape[1]
+    V, b = output_layer(S, F.w)
+    Y = D.y.numpy()
+    dots = dict(s=small, color=T.point_neutral, edgecolor=T.marker_edge)
+    what = "each target's prediction against h" if m == 1 else "the points of the cases"
+    if m == 1:
+        lo, hi = window(H[:, 0], minimum=0.6)
+        u = np.linspace(lo, hi, 101)
+        for k in range(len(b)):
+            ax.plot(u, V[k, 0] * u + b[k], LINE_STYLES[k], color=T.neutral_colour, lw=1.5, label=f"ŷ{k + 1}")
+            ax.scatter(H[:, 0], Y[:, k], marker=MARKERS[k], lw=0.3, zorder=3, **dots)
+        ax.set_xlabel(f"{label}1")
+        ax.set_ylabel("ŷ and y")
+        ax.legend(fontsize=T.legend_size, loc="best")
+    elif m == 3 and hasattr(ax, "set_zlim"):
+        ax.scatter(H[:, 0], H[:, 1], H[:, 2], linewidths=0.3, depthshade=False, **dots)
+        for q in range(3):
+            getattr(ax, f"set_{'xyz'[q]}lim")(*window(H[:, q], minimum=0.6))
+        ax.set_xlabel(f"{label}1")
+        ax.set_ylabel(f"{label}2")
+        ax.set_zlabel(f"{label}3")
+        ax.view_init(elev=20, azim=-60)
+    else:
+        if m == 2:
+            two = H
+            ax.set_xlabel(f"{label}1")
+            ax.set_ylabel(f"{label}2")
+        else:
+            centred = H - H.mean(0)
+            two = centred @ np.linalg.svd(centred, full_matrices=False)[2][:2].T
+            ax.set_xlabel("direction of h with the largest spread")
+            ax.set_ylabel("the next one")
+        ax.scatter(two[:, 0], two[:, 1], lw=0.3, zorder=3, **dots)
+    ax.set_title(f"the cases at their hidden values,\n{what}", fontsize=T.panel_title_size)
+
+
 def draw_hidden_classes(ax, S, F, H, colours, small, label):
     """draw_hidden for K classes. One unit: p of each class against h, each case on the curve of its class. Two
     units: the most likely class over the (h1, h2) plane, with the boundaries. Three: the cases in 3-D; more: along
@@ -332,6 +377,9 @@ def draw_hidden(ax, S, F):
     label = "h" if len(S.model.hidden) == 1 else f"h{len(S.model.hidden)},"
     if D.task == "multiclass":
         draw_hidden_classes(ax, S, F, H, colours, small, label)
+        return
+    if S.model.n_outputs > 1:
+        draw_hidden_targets(ax, S, F, H, small, label)
         return
     v, b = output_weights(S, F.w)
     binary = D.task == "binary"
