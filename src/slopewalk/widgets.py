@@ -309,9 +309,23 @@ class Controller:
         def label(text, left="0"):
             return widgets.HTML(span(text, "small", "quiet"), layout=widgets.Layout(margin=f"0 12px 0 {left}"))
 
+        row = [label("layout of the picture"), self.layout_pick, label("colours", "32px"), self.theme_pick]
+        self.show_boxes = {}
+        if S.focus:  # the call asked for one group: the others can be added, any one can be taken away
+            row.append(label("show", "32px"))
+            for c in range(S.data.G):
+                box = widgets.Checkbox(
+                    value=c in S.shown,
+                    description=chr(65 + c) if c < 26 else str(c),
+                    indent=False,
+                    layout=widgets.Layout(width="52px"),
+                )
+                tip(box, f"draw the network for group {chr(65 + c) if c < 26 else c}")
+                box.observe(self.on_show, names="value")
+                self.show_boxes[c] = box
+                row.append(box)
         self.layout_row = widgets.HBox(
-            [label("layout of the picture"), self.layout_pick, label("colours", "32px"), self.theme_pick],
-            layout=widgets.Layout(align_items="center", flex_flow="row wrap", margin="14px 0 0 0"),
+            row, layout=widgets.Layout(align_items="center", flex_flow="row wrap", margin="14px 0 0 0")
         )
 
         self.message = widgets.HTML()
@@ -637,6 +651,26 @@ class Controller:
         self.redraw()
         where = "all networks in one row" if change["new"] == "wide" else "two networks per row, larger text"
         self.say(f"Layout {change['new']}: {where}.")
+
+    def on_show(self, change):
+        """A group's checkbox: its network panel comes or goes (a new figure); the last one cannot be taken away."""
+        if self.busy:
+            return
+        chosen = [c for c, box in self.show_boxes.items() if box.value]
+        if not chosen:
+            self.busy = True
+            try:
+                change["owner"].value = True
+            finally:
+                self.busy = False
+            self.say("One group stays shown.")
+            return
+        S = self.session
+        S.set_shown(chosen)
+        self.picture = None
+        self.redraw()
+        letters = ", ".join(chr(65 + c) if c < 26 else str(c) for c in chosen)
+        self.say(f"Networks shown for {letters}" + (", drawn larger." if len(chosen) == 1 else "."))
 
     def on_theme(self, change):
         """Switches the colours of the picture and the controls: a new figure."""

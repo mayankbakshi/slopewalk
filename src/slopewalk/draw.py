@@ -16,7 +16,7 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import BoxStyle, Rectangle
 from matplotlib.text import Text
 
-from .layout import BOTTOM_HEIGHT, BW, LABEL_TOLERANCE, PANEL_GAP, TABLE_ROWS, place_labels
+from .layout import BOTTOM_HEIGHT, BW, LABEL_TOLERANCE, PANEL_GAP, TABLE_ROWS, TABLE_SHARE, place_labels
 from .model import SIGMOID
 
 
@@ -363,9 +363,11 @@ def put_labels(ax, S, F, edges, labels, positions, spec):
 
 
 def draw_shared_note(ax, S):
-    """Network panels after the first: their lines carry no numbers, because the weights are those of panel A."""
+    """Network panels after the first: their lines carry no numbers, because the weights are those of the first
+    panel (A, or the first group shown)."""
     T = S.theme
-    ax.text(0.01, 0.02, "weights as in A", transform=ax.transAxes, fontsize=T.glyph_name_size, color=T.curve)
+    note = f"weights as in {letter(S.shown[0])}"
+    ax.text(0.01, 0.02, note, transform=ax.transAxes, fontsize=T.glyph_name_size, color=T.curve)
 
 
 def style_panel(ax, T):
@@ -412,7 +414,7 @@ def draw_case(ax, S, F, c, styles=None):
     h_value = dict(value, bbox=dict(T.value_box, ec=T.hidden, lw=1.2))  # the hidden layer: a green border
     edges, obstacles = [], []  # edges: (k, source, target, preferred label fraction); obstacles: boxes to keep clear
     # in the backpropagation view the names of the values are written once, in panel A; the other panels show values
-    tag = (lambda name: f"{name}\n") if c == 0 or F.stage is None else (lambda name: "")
+    tag = (lambda name: f"{name}\n") if c == S.shown[0] or F.stage is None else (lambda name: "")
     src = [(0.12, yy) for yy in L.y_inputs]
     src_x, k = 0.0, 0
     for l, layer in enumerate(M.layers):
@@ -1006,6 +1008,17 @@ def draw_history(ax, S, F):
 # ---------------------------------------------------------------- the slope table
 
 
+def height_inches(ax):
+    """The height of a panel in inches, from the height ratios of the figure's grid: the same for every frame."""
+    spec = ax.get_subplotspec()
+    if spec is None:
+        return BOTTOM_HEIGHT
+    top = spec.get_topmost_subplotspec()
+    grid = top.get_gridspec()
+    ratios = list(grid.get_height_ratios() or [1] * grid.nrows)
+    return sum(ratios[top.rowspan.start : top.rowspan.stop]) / sum(ratios) * ax.figure.get_figheight()
+
+
 def width_share(ax):
     """The panel's share of the width of its row, from the width ratios of its grid: the same for every frame,
     before and after the layout."""
@@ -1067,7 +1080,7 @@ def draw_slope_table(ax, S, F):
     per_block = max(TABLE_ROWS, -(-len(rows) // 2))  # at most two blocks, taller ones for many weights
     blocks = [rows[i : i + per_block] for i in range(0, len(rows), per_block)]
     n_blocks = len(blocks)
-    space = BOTTOM_HEIGHT * 72 * 0.8  # points of the panel's height for the rows; the title and margins take the rest
+    space = height_inches(ax) * 72 * TABLE_SHARE  # points of the panel's height for the rows
     rows_needed = max(len(b) for b in blocks) + 1  # the header and the longest block
     gap = 0.03
     width = (1 - gap * (n_blocks - 1)) / n_blocks

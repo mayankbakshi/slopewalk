@@ -93,6 +93,7 @@ class Session:
         width=None,
         backprop_step=0,
         backprop_case=0,
+        focus=None,
     ):
         self.model = Model(net)
         M = self.model
@@ -100,6 +101,7 @@ class Session:
         self.task = self.model.task = self.data.task
         self.layout = Layout(M.n_inputs, M.hidden, self.task, style=layout, width=width, outputs=M.n_outputs)
         self.base_theme, self.theme_name = THEMES["light"], "light"
+        self.shown = list(range(self.data.G))
         self.set_theme(theme)
         self.title = title
         self.eta = check_eta(eta)
@@ -129,6 +131,8 @@ class Session:
         self.backprop_case = self.group_index(backprop_case)
         if self.backprop_step > 0:
             self.views = as_views(self.views + ("backprop",))
+        self.focus = focus is not None  # the call asked for one group: the widgets offer the others as checkboxes
+        self.set_shown([self.group_index(focus)] if self.focus else range(self.data.G))
         self.w0 = self.model.get_weights()
         start = self.model.forward(self.data.X, self.data.y)
         self.loss0 = [self.data.stats(start.loss, c)[0] for c in range(self.data.G)]
@@ -163,7 +167,8 @@ class Session:
         """Switches the layout of the picture: "standard" or "wide" (the widgets also move the controls)."""
         M = self.model
         self.layout = Layout(M.n_inputs, M.hidden, self.task, style=style, width=width, outputs=M.n_outputs)
-        self.theme = self.base_theme.scaled(self.layout.text_scale)
+        self.layout.focus(len(self.shown) == 1)
+        self.scale_theme()
 
     def set_theme(self, theme):
         """The colours of the picture and the controls: "light", "dark", "auto" (the editor's theme where the kernel
@@ -172,7 +177,21 @@ class Session:
             theme = auto_theme()
         self.base_theme = as_theme(theme)
         self.theme_name = theme if isinstance(theme, str) else ("light" if theme is None else "custom")
-        self.theme = self.base_theme.scaled(self.layout.text_scale)
+        self.scale_theme()
+
+    def set_shown(self, groups):
+        """The groups drawn as network panels, in the order of the groups: all of them, or any non-empty subset by
+        letter or index. One group alone is drawn larger. R, the table and the panels below stay over every point."""
+        chosen = sorted({self.group_index(g) for g in groups})
+        if not chosen:
+            raise ValueError("slopewalk: at least one group must be shown.")
+        self.shown = chosen
+        self.layout.focus(len(chosen) == 1)
+        self.scale_theme()
+
+    def scale_theme(self):
+        """The theme at the text size of the layout: larger in the wide layout, and for one panel shown alone."""
+        self.theme = self.base_theme.scaled(self.layout.text_scale * self.layout.zoom)
 
     def weight_index(self, v):
         """The index of a weight given by its name ("w10") or its index."""
@@ -418,6 +437,7 @@ def explore(
     backprop_step=0,
     backprop_case=0,
     theme="auto",
+    focus=None,
 ):
     """Gradient descent by hand on `net`, with inputs X (n x d) and labels y.
 
@@ -442,6 +462,8 @@ def explore(
     theme: the colours of the picture and its controls: "light", "dark", or "auto" (the default), which follows the
     editor's theme where the kernel can read it (VS Code, and JupyterLab or Notebook 7, on the same machine) and is
     light elsewhere, Colab included; SLOPEWALK_THEME=dark (or light) in the environment chooses for every notebook.
+    focus: one group ("A" or 0) drawn alone and larger, for a close look at one case; checkboxes under the controls
+    add the other groups. R, the table and the panels below the networks stay over every point.
 
     Draws one copy of the network per group (every value a mean ± standard deviation over the group), with each
     weight on its line, the units as z, activation and h, then the output and the loss with its change from the
@@ -474,6 +496,7 @@ def explore(
         width=width,
         backprop_step=backprop_step,
         backprop_case=backprop_case,
+        focus=focus,
     )
     session.set_theme(theme)
     if os.environ.get("NB_STATIC") == "1":

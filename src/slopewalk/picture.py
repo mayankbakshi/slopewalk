@@ -101,30 +101,36 @@ class Picture:
         self.S = S
         D, L = S.data, S.layout
         self.panels = bottom_panels(S)
-        per_row, rows = L.per_row(D.G), L.rows(D.G)
+        shown = list(S.shown)  # the groups drawn as network panels
+        per_row, rows = L.per_row(len(shown)), L.rows(len(shown))
         with_sd = any(sel.sum() > 1 for sel in D.gsel)  # groups of points: the boxes show mean and standard deviation
         backprop = "backprop" in S.views  # taller rows: room for the backward boxes under the units
         lower = L.lower_rows(self.panels, S.model.n_weights)
         n_bottom = len(lower)
-        size = (L.width, L.row_height(with_sd, backprop) * rows + BOTTOM_HEIGHT * n_bottom)
+        first = L.first_row_height(S.model.n_weights, S.theme.table_size, S.theme.table_leading)
+        bottoms = [first] + [BOTTOM_HEIGHT] * (n_bottom - 1)  # the first lower row holds the table
+        size = (L.width, L.row_height(with_sd, backprop) * rows + sum(bottoms))
         if pyplot:
             fig = plt.figure(figsize=size, facecolor=S.theme.paper)
         else:
             fig = Figure(figsize=size, dpi=dpi, facecolor=S.theme.paper)
             FigureCanvasAgg(fig)
-        heights = [L.row_height(with_sd, backprop)] * rows + [BOTTOM_HEIGHT] * n_bottom
+        heights = [L.row_height(with_sd, backprop)] * rows + bottoms
         gs = fig.add_gridspec(rows + n_bottom, 1, height_ratios=heights)  # every row has its own grid and spacing
         self.case_axes = []
-        alone = D.G == 1 and (L.style == "wide" or L.narrow())  # one panel: as wide as one of two, in the middle
+        share = L.panel_share()  # one panel alone: larger than one of two side by side, in the middle of its row
         for r in range(rows):
-            if alone:
-                cells = gs[r, 0].subgridspec(1, 3, width_ratios=[1, 2, 1], wspace=0)
+            if len(shown) == 1 and share < 1.0:
+                side = (1 - share) / 2
+                cells = gs[r, 0].subgridspec(1, 3, width_ratios=[side, share, side], wspace=0)
                 self.case_axes.append(fig.add_subplot(cells[0, 1]))
             elif per_row == 1:
                 self.case_axes.append(fig.add_subplot(gs[r, 0]))
             else:
                 cells = gs[r, 0].subgridspec(1, per_row, wspace=L.wspace(per_row, NET_GAP))
-                self.case_axes += [fig.add_subplot(cells[0, c]) for c in range(min(per_row, D.G - r * per_row))]
+                n = min(per_row, len(shown) - r * per_row)
+                self.case_axes += [fig.add_subplot(cells[0, c]) for c in range(n)]
+        self.shown = shown
         self.axes = {}
         for r, row in enumerate(lower):
             widths = [w for _, w in row]
@@ -146,9 +152,11 @@ class Picture:
             for ax in self.case_axes + list(self.axes.values()):
                 ax.clear()
         styles = line_styles(S, F)
-        parts = [draw_case(ax, S, F, c, styles) for c, ax in enumerate(self.case_axes)]
+        if list(S.shown) != self.shown:
+            raise ValueError("slopewalk: the groups shown changed; build the picture again.")
+        parts = [draw_case(ax, S, F, c, styles) for c, ax in zip(self.shown, self.case_axes)]
         keep = focus(S, F)  # the backward pass fades what its stage does not use
-        for c, (ax, (edges, _)) in enumerate(zip(self.case_axes, parts)):
+        for c, ax, (edges, _) in zip(self.shown, self.case_axes, parts):
             overlay(ax, S, F, c, edges)
             fade(ax, keep, S.theme)
         draw_input_plane(self.axes["plane"], S, F)
@@ -164,10 +172,10 @@ class Picture:
             self.layout()
         shared = shared_labels(F)  # the weights are the same in every panel: the first panel carries their labels
         first = "none"
-        for c, (ax, (edges, obstacles)) in enumerate(zip(self.case_axes, parts)):
-            if c == 0 or not shared:
+        for i, (c, ax, (edges, obstacles)) in enumerate(zip(self.shown, self.case_axes, parts)):
+            if i == 0 or not shared:
                 mode = draw_edge_labels(ax, S, F, edges, obstacles, label_spec(S, F, c))
-                first = mode if c == 0 else first
+                first = mode if i == 0 else first
             elif first != "none":
                 draw_shared_note(ax, S)
         S.model.set_weights(F.w)

@@ -604,11 +604,15 @@ LABEL_SHIFTS = (0.0, 0.8, -0.8, 1.6, -1.6, 2.4, -2.4, 3.2, -3.2, 4.0, -4.0, 4.8,
 LABEL_TOLERANCE = 0.02  # a label may overlap other labels or the boxes by at most this fraction of its area
 BOTTOM_PER_ROW = 3  # panels per row below the networks
 BOTTOM_HEIGHT = 4.2  # height in inches of one row of those panels
+TABLE_SHARE = 0.8  # the share of the table panel's height that its rows may take; the title and margins take the rest
+UNIT_SPACING = 1.37  # inches between the units of a layer that a taller row keeps (0.9 in on the drawn panel)
 LAYOUTS = ("standard", "wide")
 WIDTH = {"standard": 15.0, "wide": 27.0}  # default figure width in inches
 WIDE_PER_ROW, WIDE_BOTTOM_PER_ROW = 4, 6  # the most network panels and lower panels per row of the wide layout
 NET_GAP, PANEL_GAP = 0.5, 0.8  # inches between network panels, and between the panels below them
-OUTPUT_GAP = 0.4  # extra room before several output units (more would make the panel too wide for two in a row)
+OUTPUT_GAP = 0.3  # extra room before several output units (more would make the panel too wide for two in a row)
+TABLE_INCH_PER_POINT = 0.26  # the width a block of the table needs per point of font, with the short headers
+ZOOM = 1.5  # a single network panel (one group shown): this much larger than one of two side by side
 TEXT_SCALE = {"standard": 1.0, "wide": 1.1}  # text in the network panels: the wide picture is shown smaller
 # the wide layout gives each lower panel a base width in inches that suits it (for a row 4.2 inches tall), and the
 # width left over in its row goes to the panels that can use it, in these proportions
@@ -644,6 +648,7 @@ class Layout:
         if width is not None and not (isinstance(width, (int, float)) and 6 <= width <= 60):
             raise ValueError(f"slopewalk: width is the figure width in inches, between 6 and 60, not {width!r}.")
         self.n_inputs, self.hidden, self.task, self.style, self.outputs = n_inputs, hidden, task, style, outputs
+        self.zoom = 1.0  # ZOOM when one network panel is shown (see focus)
         self.width = float(width) if width is not None else WIDTH[style]
         self.text_scale = f = TEXT_SCALE[style]
         extra = 1.2 * (f - 1)  # larger text: the loss box moves right, clear of the box before it
@@ -657,7 +662,8 @@ class Layout:
             gap = 1.1 if outputs == 1 else 1.6  # several targets: room for their arrows into the loss box
             self.x_a, self.x_sigmoid, self.x_p, self.x_loss = x, None, None, x + gap + extra
         else:
-            self.x_a, self.x_sigmoid, self.x_p, self.x_loss = x, x + 0.75, x + 1.5, x + 2.4 + extra
+            loss_gap = 2.4 if outputs == 1 else 2.5  # several classes: p boxes with a ± line next to the loss box
+            self.x_a, self.x_sigmoid, self.x_p, self.x_loss = x, x + 0.75, x + 1.5, x + loss_gap + extra
         self.x_input_value = -0.24 * f  # the right edge of an input's value box, left of its circle
         self.y_inputs = np.linspace(1.95, 0.45, n_inputs) if n_inputs > 1 else np.array([1.2])
         self.xlim = (-0.95, self.x_loss + 0.6)
@@ -692,12 +698,43 @@ class Layout:
     def rows(self, n_panels):
         return -(-n_panels // self.per_row(n_panels))
 
+    def focus(self, alone):
+        """One network panel shown (alone True): it is drawn ZOOM times larger, text included."""
+        self.zoom = ZOOM if alone else 1.0
+
+    def panel_share(self):
+        """The share of the row's width that a single shown panel takes: ZOOM times one of two side by side, at most
+        the row (a deep network takes the row anyway)."""
+        return min(1.0, self.zoom / 2) if self.narrow() else 1.0
+
     def row_height(self, with_sd=False, backprop=False):
-        """Height of a panel row in inches: taller when a layer has more than 3 units (up to four times the usual,
-        for 12 units; the outputs count as a layer), by a fifth when the boxes carry a standard deviation line (groups
-        of points), and by 40% when the backward pass adds its boxes under the units."""
-        units = min(4.0, max(1.0, max(list(self.hidden) + [self.outputs]) / 3))
-        return 2.9 * units * (1.2 if with_sd else 1.0) * (1.4 if backprop else 1.0) * self.text_scale
+        """Height of a panel row in inches: 2.9 for up to 3 units in a layer, then growing so that the units of the
+        widest layer stay about 0.9 in apart (the outputs count as a layer), up to four times the usual for 12 units;
+        a fifth more when the boxes carry a standard deviation line (groups of points), and 40% more when the backward
+        pass adds its boxes under the units."""
+        m = max(list(self.hidden) + [self.outputs])
+        units = min(4.0, max(1.0, UNIT_SPACING * (m - 1) / 2.9))
+        return 2.9 * units * (1.2 if with_sd else 1.0) * (1.4 if backprop else 1.0) * self.text_scale * self.zoom
+
+    def table_blocks(self, n_weights):
+        """(blocks, width of a block in inches) of the slope table: one block up to TABLE_ROWS weights, else two."""
+        blocks = 2 if n_weights > TABLE_ROWS else 1
+        panel = WIDE_BASE["table"] if self.style == "wide" else self.width / BOTTOM_PER_ROW
+        if self.style == "wide" and blocks == 2:
+            panel = 7.5
+        return blocks, (panel - PANEL_GAP) * (1 - 0.03 * (blocks - 1)) / blocks
+
+    def first_row_height(self, n_weights, font, leading):
+        """Height in inches of the first row below the networks, which holds the slope table: BOTTOM_HEIGHT, or more
+        when the table's rows would not fit at the font its width allows (up to `font` points, a row `leading` times
+        that), up to twice BOTTOM_HEIGHT; above that the table's font shrinks."""
+        blocks, block_inches = self.table_blocks(n_weights)
+        size = max(8.0, min(font, block_inches / TABLE_INCH_PER_POINT))
+        rows = min(n_weights, max(TABLE_ROWS, -(-n_weights // 2))) + 1  # the header and the longest block
+        needed = rows * size * leading / 72 / TABLE_SHARE
+        if needed <= BOTTOM_HEIGHT * 1.05:  # a small shrink of the font is better than a taller row
+            return BOTTOM_HEIGHT
+        return min(2 * BOTTOM_HEIGHT, needed)
 
     def lower_rows(self, panels, n_weights=0):
         """The rows of the panels below the networks: lists of (panel, width), with widths in inches that add up to
@@ -1147,9 +1184,11 @@ def put_labels(ax, S, F, edges, labels, positions, spec):
 
 
 def draw_shared_note(ax, S):
-    """Network panels after the first: their lines carry no numbers, because the weights are those of panel A."""
+    """Network panels after the first: their lines carry no numbers, because the weights are those of the first
+    panel (A, or the first group shown)."""
     T = S.theme
-    ax.text(0.01, 0.02, "weights as in A", transform=ax.transAxes, fontsize=T.glyph_name_size, color=T.curve)
+    note = f"weights as in {letter(S.shown[0])}"
+    ax.text(0.01, 0.02, note, transform=ax.transAxes, fontsize=T.glyph_name_size, color=T.curve)
 
 
 def style_panel(ax, T):
@@ -1196,7 +1235,7 @@ def draw_case(ax, S, F, c, styles=None):
     h_value = dict(value, bbox=dict(T.value_box, ec=T.hidden, lw=1.2))  # the hidden layer: a green border
     edges, obstacles = [], []  # edges: (k, source, target, preferred label fraction); obstacles: boxes to keep clear
     # in the backpropagation view the names of the values are written once, in panel A; the other panels show values
-    tag = (lambda name: f"{name}\n") if c == 0 or F.stage is None else (lambda name: "")
+    tag = (lambda name: f"{name}\n") if c == S.shown[0] or F.stage is None else (lambda name: "")
     src = [(0.12, yy) for yy in L.y_inputs]
     src_x, k = 0.0, 0
     for l, layer in enumerate(M.layers):
@@ -1790,6 +1829,17 @@ def draw_history(ax, S, F):
 # ---------------------------------------------------------------- the slope table
 
 
+def height_inches(ax):
+    """The height of a panel in inches, from the height ratios of the figure's grid: the same for every frame."""
+    spec = ax.get_subplotspec()
+    if spec is None:
+        return BOTTOM_HEIGHT
+    top = spec.get_topmost_subplotspec()
+    grid = top.get_gridspec()
+    ratios = list(grid.get_height_ratios() or [1] * grid.nrows)
+    return sum(ratios[top.rowspan.start : top.rowspan.stop]) / sum(ratios) * ax.figure.get_figheight()
+
+
 def width_share(ax):
     """The panel's share of the width of its row, from the width ratios of its grid: the same for every frame,
     before and after the layout."""
@@ -1851,7 +1901,7 @@ def draw_slope_table(ax, S, F):
     per_block = max(TABLE_ROWS, -(-len(rows) // 2))  # at most two blocks, taller ones for many weights
     blocks = [rows[i : i + per_block] for i in range(0, len(rows), per_block)]
     n_blocks = len(blocks)
-    space = BOTTOM_HEIGHT * 72 * 0.8  # points of the panel's height for the rows; the title and margins take the rest
+    space = height_inches(ax) * 72 * TABLE_SHARE  # points of the panel's height for the rows
     rows_needed = max(len(b) for b in blocks) + 1  # the header and the longest block
     gap = 0.03
     width = (1 - gap * (n_blocks - 1)) / n_blocks
@@ -2566,7 +2616,7 @@ def label_spec(S, F, c):
     if st.kind in ("weights", "average"):
         ks = M.layer_indices(st.layer) if st.kind == "weights" else range(M.n_weights)
         for k in ks:
-            long = f"∂ℓ/∂{M.names[k]} = {g[k]:+.3f}" if c == 0 else f"{g[k]:+.3f}"  # names in panel A only
+            long = f"∂ℓ/∂{M.names[k]} = {g[k]:+.3f}" if c == S.shown[0] else f"{g[k]:+.3f}"  # names once
             spec[k] = (long, f"{g[k]:+.3f}", T.backprop_colour, f"{g[k]:+.2f}")
     elif st.kind == "to_h":
         for k in M.layer_indices(st.layer + 1):
@@ -2626,7 +2676,7 @@ def overlay(ax, S, F, c, edges):
     bp = F.bp
     sel = D.gsel[c]
     reached = S.backprop_stages[1 : stage_index(S) + 1]
-    tag = (lambda name: f"{name}\n") if c == 0 else (lambda name: "")  # the names once, in panel A
+    tag = (lambda name: f"{name}\n") if c == S.shown[0] else (lambda name: "")  # the names once, first panel
     for s in reached:
         if s.kind == "output":  # under each score: one box, or one per class
             with tagging(ax, ("δa",)):
@@ -2924,30 +2974,36 @@ class Picture:
         self.S = S
         D, L = S.data, S.layout
         self.panels = bottom_panels(S)
-        per_row, rows = L.per_row(D.G), L.rows(D.G)
+        shown = list(S.shown)  # the groups drawn as network panels
+        per_row, rows = L.per_row(len(shown)), L.rows(len(shown))
         with_sd = any(sel.sum() > 1 for sel in D.gsel)  # groups of points: the boxes show mean and standard deviation
         backprop = "backprop" in S.views  # taller rows: room for the backward boxes under the units
         lower = L.lower_rows(self.panels, S.model.n_weights)
         n_bottom = len(lower)
-        size = (L.width, L.row_height(with_sd, backprop) * rows + BOTTOM_HEIGHT * n_bottom)
+        first = L.first_row_height(S.model.n_weights, S.theme.table_size, S.theme.table_leading)
+        bottoms = [first] + [BOTTOM_HEIGHT] * (n_bottom - 1)  # the first lower row holds the table
+        size = (L.width, L.row_height(with_sd, backprop) * rows + sum(bottoms))
         if pyplot:
             fig = plt.figure(figsize=size, facecolor=S.theme.paper)
         else:
             fig = Figure(figsize=size, dpi=dpi, facecolor=S.theme.paper)
             FigureCanvasAgg(fig)
-        heights = [L.row_height(with_sd, backprop)] * rows + [BOTTOM_HEIGHT] * n_bottom
+        heights = [L.row_height(with_sd, backprop)] * rows + bottoms
         gs = fig.add_gridspec(rows + n_bottom, 1, height_ratios=heights)  # every row has its own grid and spacing
         self.case_axes = []
-        alone = D.G == 1 and (L.style == "wide" or L.narrow())  # one panel: as wide as one of two, in the middle
+        share = L.panel_share()  # one panel alone: larger than one of two side by side, in the middle of its row
         for r in range(rows):
-            if alone:
-                cells = gs[r, 0].subgridspec(1, 3, width_ratios=[1, 2, 1], wspace=0)
+            if len(shown) == 1 and share < 1.0:
+                side = (1 - share) / 2
+                cells = gs[r, 0].subgridspec(1, 3, width_ratios=[side, share, side], wspace=0)
                 self.case_axes.append(fig.add_subplot(cells[0, 1]))
             elif per_row == 1:
                 self.case_axes.append(fig.add_subplot(gs[r, 0]))
             else:
                 cells = gs[r, 0].subgridspec(1, per_row, wspace=L.wspace(per_row, NET_GAP))
-                self.case_axes += [fig.add_subplot(cells[0, c]) for c in range(min(per_row, D.G - r * per_row))]
+                n = min(per_row, len(shown) - r * per_row)
+                self.case_axes += [fig.add_subplot(cells[0, c]) for c in range(n)]
+        self.shown = shown
         self.axes = {}
         for r, row in enumerate(lower):
             widths = [w for _, w in row]
@@ -2969,9 +3025,11 @@ class Picture:
             for ax in self.case_axes + list(self.axes.values()):
                 ax.clear()
         styles = line_styles(S, F)
-        parts = [draw_case(ax, S, F, c, styles) for c, ax in enumerate(self.case_axes)]
+        if list(S.shown) != self.shown:
+            raise ValueError("slopewalk: the groups shown changed; build the picture again.")
+        parts = [draw_case(ax, S, F, c, styles) for c, ax in zip(self.shown, self.case_axes)]
         keep = focus(S, F)  # the backward pass fades what its stage does not use
-        for c, (ax, (edges, _)) in enumerate(zip(self.case_axes, parts)):
+        for c, ax, (edges, _) in zip(self.shown, self.case_axes, parts):
             overlay(ax, S, F, c, edges)
             fade(ax, keep, S.theme)
         draw_input_plane(self.axes["plane"], S, F)
@@ -2987,10 +3045,10 @@ class Picture:
             self.layout()
         shared = shared_labels(F)  # the weights are the same in every panel: the first panel carries their labels
         first = "none"
-        for c, (ax, (edges, obstacles)) in enumerate(zip(self.case_axes, parts)):
-            if c == 0 or not shared:
+        for i, (c, ax, (edges, obstacles)) in enumerate(zip(self.shown, self.case_axes, parts)):
+            if i == 0 or not shared:
                 mode = draw_edge_labels(ax, S, F, edges, obstacles, label_spec(S, F, c))
-                first = mode if c == 0 else first
+                first = mode if i == 0 else first
             elif first != "none":
                 draw_shared_note(ax, S)
         S.model.set_weights(F.w)
@@ -3334,9 +3392,23 @@ class Controller:
         def label(text, left="0"):
             return widgets.HTML(span(text, "small", "quiet"), layout=widgets.Layout(margin=f"0 12px 0 {left}"))
 
+        row = [label("layout of the picture"), self.layout_pick, label("colours", "32px"), self.theme_pick]
+        self.show_boxes = {}
+        if S.focus:  # the call asked for one group: the others can be added, any one can be taken away
+            row.append(label("show", "32px"))
+            for c in range(S.data.G):
+                box = widgets.Checkbox(
+                    value=c in S.shown,
+                    description=chr(65 + c) if c < 26 else str(c),
+                    indent=False,
+                    layout=widgets.Layout(width="52px"),
+                )
+                tip(box, f"draw the network for group {chr(65 + c) if c < 26 else c}")
+                box.observe(self.on_show, names="value")
+                self.show_boxes[c] = box
+                row.append(box)
         self.layout_row = widgets.HBox(
-            [label("layout of the picture"), self.layout_pick, label("colours", "32px"), self.theme_pick],
-            layout=widgets.Layout(align_items="center", flex_flow="row wrap", margin="14px 0 0 0"),
+            row, layout=widgets.Layout(align_items="center", flex_flow="row wrap", margin="14px 0 0 0")
         )
 
         self.message = widgets.HTML()
@@ -3662,6 +3734,26 @@ class Controller:
         self.redraw()
         where = "all networks in one row" if change["new"] == "wide" else "two networks per row, larger text"
         self.say(f"Layout {change['new']}: {where}.")
+
+    def on_show(self, change):
+        """A group's checkbox: its network panel comes or goes (a new figure); the last one cannot be taken away."""
+        if self.busy:
+            return
+        chosen = [c for c, box in self.show_boxes.items() if box.value]
+        if not chosen:
+            self.busy = True
+            try:
+                change["owner"].value = True
+            finally:
+                self.busy = False
+            self.say("One group stays shown.")
+            return
+        S = self.session
+        S.set_shown(chosen)
+        self.picture = None
+        self.redraw()
+        letters = ", ".join(chr(65 + c) if c < 26 else str(c) for c in chosen)
+        self.say(f"Networks shown for {letters}" + (", drawn larger." if len(chosen) == 1 else "."))
 
     def on_theme(self, change):
         """Switches the colours of the picture and the controls: a new figure."""
@@ -4043,6 +4135,7 @@ class Session:
         width=None,
         backprop_step=0,
         backprop_case=0,
+        focus=None,
     ):
         self.model = Model(net)
         M = self.model
@@ -4050,6 +4143,7 @@ class Session:
         self.task = self.model.task = self.data.task
         self.layout = Layout(M.n_inputs, M.hidden, self.task, style=layout, width=width, outputs=M.n_outputs)
         self.base_theme, self.theme_name = THEMES["light"], "light"
+        self.shown = list(range(self.data.G))
         self.set_theme(theme)
         self.title = title
         self.eta = check_eta(eta)
@@ -4079,6 +4173,8 @@ class Session:
         self.backprop_case = self.group_index(backprop_case)
         if self.backprop_step > 0:
             self.views = as_views(self.views + ("backprop",))
+        self.focus = focus is not None  # the call asked for one group: the widgets offer the others as checkboxes
+        self.set_shown([self.group_index(focus)] if self.focus else range(self.data.G))
         self.w0 = self.model.get_weights()
         start = self.model.forward(self.data.X, self.data.y)
         self.loss0 = [self.data.stats(start.loss, c)[0] for c in range(self.data.G)]
@@ -4113,7 +4209,8 @@ class Session:
         """Switches the layout of the picture: "standard" or "wide" (the widgets also move the controls)."""
         M = self.model
         self.layout = Layout(M.n_inputs, M.hidden, self.task, style=style, width=width, outputs=M.n_outputs)
-        self.theme = self.base_theme.scaled(self.layout.text_scale)
+        self.layout.focus(len(self.shown) == 1)
+        self.scale_theme()
 
     def set_theme(self, theme):
         """The colours of the picture and the controls: "light", "dark", "auto" (the editor's theme where the kernel
@@ -4122,7 +4219,21 @@ class Session:
             theme = auto_theme()
         self.base_theme = as_theme(theme)
         self.theme_name = theme if isinstance(theme, str) else ("light" if theme is None else "custom")
-        self.theme = self.base_theme.scaled(self.layout.text_scale)
+        self.scale_theme()
+
+    def set_shown(self, groups):
+        """The groups drawn as network panels, in the order of the groups: all of them, or any non-empty subset by
+        letter or index. One group alone is drawn larger. R, the table and the panels below stay over every point."""
+        chosen = sorted({self.group_index(g) for g in groups})
+        if not chosen:
+            raise ValueError("slopewalk: at least one group must be shown.")
+        self.shown = chosen
+        self.layout.focus(len(chosen) == 1)
+        self.scale_theme()
+
+    def scale_theme(self):
+        """The theme at the text size of the layout: larger in the wide layout, and for one panel shown alone."""
+        self.theme = self.base_theme.scaled(self.layout.text_scale * self.layout.zoom)
 
     def weight_index(self, v):
         """The index of a weight given by its name ("w10") or its index."""
@@ -4368,6 +4479,7 @@ def explore(
     backprop_step=0,
     backprop_case=0,
     theme="auto",
+    focus=None,
 ):
     """Gradient descent by hand on `net`, with inputs X (n x d) and labels y.
 
@@ -4392,6 +4504,8 @@ def explore(
     theme: the colours of the picture and its controls: "light", "dark", or "auto" (the default), which follows the
     editor's theme where the kernel can read it (VS Code, and JupyterLab or Notebook 7, on the same machine) and is
     light elsewhere, Colab included; SLOPEWALK_THEME=dark (or light) in the environment chooses for every notebook.
+    focus: one group ("A" or 0) drawn alone and larger, for a close look at one case; checkboxes under the controls
+    add the other groups. R, the table and the panels below the networks stay over every point.
 
     Draws one copy of the network per group (every value a mean ± standard deviation over the group), with each
     weight on its line, the units as z, activation and h, then the output and the loss with its change from the
@@ -4424,6 +4538,7 @@ def explore(
         width=width,
         backprop_step=backprop_step,
         backprop_case=backprop_case,
+        focus=focus,
     )
     session.set_theme(theme)
     if os.environ.get("NB_STATIC") == "1":
@@ -4460,6 +4575,7 @@ OPTIONS = (  # the arguments of explore, one line each
     ("backprop_step", "the stage of the backward pass drawn (a step above 0 turns the view on)"),
     ("backprop_case", "the group whose case the Worked example follows ('A' or 0 is the first)"),
     ("theme", "'auto' (the editor's theme where the kernel can read it), 'light' or 'dark'"),
+    ("focus", "one group ('A' or 0) drawn alone and larger; checkboxes under the controls add the others"),
 )
 SESSION = (
     "step",

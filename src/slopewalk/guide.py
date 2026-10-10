@@ -29,6 +29,7 @@ OPTIONS = (  # the arguments of explore, one line each
     ("backprop_step", "the stage of the backward pass drawn (a step above 0 turns the view on)"),
     ("backprop_case", "the group whose case the Worked example follows ('A' or 0 is the first)"),
     ("theme", "'auto' (the editor's theme where the kernel can read it), 'light' or 'dark'"),
+    ("focus", "one group ('A' or 0) drawn alone and larger; checkboxes under the controls add the others"),
 )
 SESSION = (
     "step",

@@ -88,10 +88,11 @@ def test_rows_grow_with_units_and_groups(static):
     h4 = explore(make("relu4"), X, y, groups).fig.get_size_inches()[1]
     hsd = explore(make("tanh3"), *xor_centres(noise=0.3)).fig.get_size_inches()[1]
     assert h3 == pytest.approx(2 * 2.9 + 4.2) and h4 > h3 and hsd > h3
+    assert h4 == pytest.approx(2 * 2.9 * 1.37 * 3 / 2.9 + 4.2)  # 4 units: the units stay about 0.9 in apart
     net = nn.Sequential(nn.Linear(2, 12), nn.Tanh(), nn.Linear(12, 1))
     torch.manual_seed(0)
     height = explore(net, X, y, groups).fig.get_size_inches()[1]
-    assert height == pytest.approx(2 * 4 * 2.9 + 4.2)  # 12 units: rows four times the usual height
+    assert height == pytest.approx(2 * 4 * 2.9 + 26 * 8 * 1.45 / 72 / 0.8)  # 12 units: rows four times the usual
 
 
 def five_centres(noise=0.0):
@@ -336,23 +337,21 @@ def test_wide_text_is_larger(static):
 
 
 @pytest.mark.parametrize("style", ["wide", "standard"])
-def test_one_group_is_not_stretched(style, static):
-    """With a single group the network panel is as wide as one of two side by side, in the middle of its row."""
+def test_one_panel_is_a_zoom_not_a_stretch(style, static):
+    """A single network panel (one group, or one group shown with focus) keeps the shape of one of two side by side
+    and is 1.5 times larger, text included, in the middle of its row."""
+    from slopewalk.layout import ZOOM
+
     torch.manual_seed(0)
     X = torch.rand(30, 3) * 4 - 2
     net = nn.Sequential(nn.Linear(3, 4), nn.Tanh(), nn.Linear(4, 1))
-    s = explore(net, X, X[:, 0] * X[:, 1], task="regression", layout=style)
-    (box,) = [ax.get_position() for ax in panels(s.fig)]
-    assert box.width < 0.55 and abs((box.x0 + box.x1) / 2 - 0.5) < 0.03
-
-
-def test_a_full_row_takes_width_from_the_r_curve():
-    """When the panels of a wide row need more than the figure's width, R over the steps gives up width first, so
-    that a two-block table keeps its base width."""
-    from slopewalk.layout import HISTORY_MIN
-
-    wide = Layout(2, [3], style="wide")
-    (row,) = wide.lower_rows(["plane", "history", "table", "backprop"], n_weights=21)
-    widths = dict(row)
-    assert widths["table"] == pytest.approx(7.5) and widths["history"] >= HISTORY_MIN
-    assert sum(widths.values()) == pytest.approx(27)
+    one = explore(net, X, X[:, 0] * X[:, 1], task="regression", layout=style)
+    two = explore(net, X, X[:, 0] * X[:, 1], [0] * 15 + [1] * 15, task="regression", layout=style)
+    (box,) = [ax.get_position() for ax in panels(one.fig)]
+    pair = [ax.get_position() for ax in panels(two.fig)][0]
+    W1, H1 = one.fig.get_size_inches()
+    W2, H2 = two.fig.get_size_inches()
+    assert box.width * W1 == pytest.approx(pair.width * W2 * ZOOM, rel=0.08)
+    assert box.height * H1 == pytest.approx(pair.height * H2 * ZOOM, rel=0.08)
+    assert abs((box.x0 + box.x1) / 2 - 0.5) < 0.03
+    assert one.theme.edge_label_size == pytest.approx(two.theme.edge_label_size * ZOOM, abs=0.01)

@@ -9,11 +9,15 @@ LABEL_SHIFTS = (0.0, 0.8, -0.8, 1.6, -1.6, 2.4, -2.4, 3.2, -3.2, 4.0, -4.0, 4.8,
 LABEL_TOLERANCE = 0.02  # a label may overlap other labels or the boxes by at most this fraction of its area
 BOTTOM_PER_ROW = 3  # panels per row below the networks
 BOTTOM_HEIGHT = 4.2  # height in inches of one row of those panels
+TABLE_SHARE = 0.8  # the share of the table panel's height that its rows may take; the title and margins take the rest
+UNIT_SPACING = 1.37  # inches between the units of a layer that a taller row keeps (0.9 in on the drawn panel)
 LAYOUTS = ("standard", "wide")
 WIDTH = {"standard": 15.0, "wide": 27.0}  # default figure width in inches
 WIDE_PER_ROW, WIDE_BOTTOM_PER_ROW = 4, 6  # the most network panels and lower panels per row of the wide layout
 NET_GAP, PANEL_GAP = 0.5, 0.8  # inches between network panels, and between the panels below them
-OUTPUT_GAP = 0.4  # extra room before several output units (more would make the panel too wide for two in a row)
+OUTPUT_GAP = 0.3  # extra room before several output units (more would make the panel too wide for two in a row)
+TABLE_INCH_PER_POINT = 0.26  # the width a block of the table needs per point of font, with the short headers
+ZOOM = 1.5  # a single network panel (one group shown): this much larger than one of two side by side
 TEXT_SCALE = {"standard": 1.0, "wide": 1.1}  # text in the network panels: the wide picture is shown smaller
 # the wide layout gives each lower panel a base width in inches that suits it (for a row 4.2 inches tall), and the
 # width left over in its row goes to the panels that can use it, in these proportions
@@ -49,6 +53,7 @@ class Layout:
         if width is not None and not (isinstance(width, (int, float)) and 6 <= width <= 60):
             raise ValueError(f"slopewalk: width is the figure width in inches, between 6 and 60, not {width!r}.")
         self.n_inputs, self.hidden, self.task, self.style, self.outputs = n_inputs, hidden, task, style, outputs
+        self.zoom = 1.0  # ZOOM when one network panel is shown (see focus)
         self.width = float(width) if width is not None else WIDTH[style]
         self.text_scale = f = TEXT_SCALE[style]
         extra = 1.2 * (f - 1)  # larger text: the loss box moves right, clear of the box before it
@@ -62,7 +67,8 @@ class Layout:
             gap = 1.1 if outputs == 1 else 1.6  # several targets: room for their arrows into the loss box
             self.x_a, self.x_sigmoid, self.x_p, self.x_loss = x, None, None, x + gap + extra
         else:
-            self.x_a, self.x_sigmoid, self.x_p, self.x_loss = x, x + 0.75, x + 1.5, x + 2.4 + extra
+            loss_gap = 2.4 if outputs == 1 else 2.5  # several classes: p boxes with a ± line next to the loss box
+            self.x_a, self.x_sigmoid, self.x_p, self.x_loss = x, x + 0.75, x + 1.5, x + loss_gap + extra
         self.x_input_value = -0.24 * f  # the right edge of an input's value box, left of its circle
         self.y_inputs = np.linspace(1.95, 0.45, n_inputs) if n_inputs > 1 else np.array([1.2])
         self.xlim = (-0.95, self.x_loss + 0.6)
@@ -97,12 +103,43 @@ class Layout:
     def rows(self, n_panels):
         return -(-n_panels // self.per_row(n_panels))
 
+    def focus(self, alone):
+        """One network panel shown (alone True): it is drawn ZOOM times larger, text included."""
+        self.zoom = ZOOM if alone else 1.0
+
+    def panel_share(self):
+        """The share of the row's width that a single shown panel takes: ZOOM times one of two side by side, at most
+        the row (a deep network takes the row anyway)."""
+        return min(1.0, self.zoom / 2) if self.narrow() else 1.0
+
     def row_height(self, with_sd=False, backprop=False):
-        """Height of a panel row in inches: taller when a layer has more than 3 units (up to four times the usual,
-        for 12 units; the outputs count as a layer), by a fifth when the boxes carry a standard deviation line (groups
-        of points), and by 40% when the backward pass adds its boxes under the units."""
-        units = min(4.0, max(1.0, max(list(self.hidden) + [self.outputs]) / 3))
-        return 2.9 * units * (1.2 if with_sd else 1.0) * (1.4 if backprop else 1.0) * self.text_scale
+        """Height of a panel row in inches: 2.9 for up to 3 units in a layer, then growing so that the units of the
+        widest layer stay about 0.9 in apart (the outputs count as a layer), up to four times the usual for 12 units;
+        a fifth more when the boxes carry a standard deviation line (groups of points), and 40% more when the backward
+        pass adds its boxes under the units."""
+        m = max(list(self.hidden) + [self.outputs])
+        units = min(4.0, max(1.0, UNIT_SPACING * (m - 1) / 2.9))
+        return 2.9 * units * (1.2 if with_sd else 1.0) * (1.4 if backprop else 1.0) * self.text_scale * self.zoom
+
+    def table_blocks(self, n_weights):
+        """(blocks, width of a block in inches) of the slope table: one block up to TABLE_ROWS weights, else two."""
+        blocks = 2 if n_weights > TABLE_ROWS else 1
+        panel = WIDE_BASE["table"] if self.style == "wide" else self.width / BOTTOM_PER_ROW
+        if self.style == "wide" and blocks == 2:
+            panel = 7.5
+        return blocks, (panel - PANEL_GAP) * (1 - 0.03 * (blocks - 1)) / blocks
+
+    def first_row_height(self, n_weights, font, leading):
+        """Height in inches of the first row below the networks, which holds the slope table: BOTTOM_HEIGHT, or more
+        when the table's rows would not fit at the font its width allows (up to `font` points, a row `leading` times
+        that), up to twice BOTTOM_HEIGHT; above that the table's font shrinks."""
+        blocks, block_inches = self.table_blocks(n_weights)
+        size = max(8.0, min(font, block_inches / TABLE_INCH_PER_POINT))
+        rows = min(n_weights, max(TABLE_ROWS, -(-n_weights // 2))) + 1  # the header and the longest block
+        needed = rows * size * leading / 72 / TABLE_SHARE
+        if needed <= BOTTOM_HEIGHT * 1.05:  # a small shrink of the font is better than a taller row
+            return BOTTOM_HEIGHT
+        return min(2 * BOTTOM_HEIGHT, needed)
 
     def lower_rows(self, panels, n_weights=0):
         """The rows of the panels below the networks: lists of (panel, width), with widths in inches that add up to

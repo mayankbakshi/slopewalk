@@ -207,7 +207,7 @@ def label_spec(S, F, c):
     if st.kind in ("weights", "average"):
         ks = M.layer_indices(st.layer) if st.kind == "weights" else range(M.n_weights)
         for k in ks:
-            long = f"∂ℓ/∂{M.names[k]} = {g[k]:+.3f}" if c == 0 else f"{g[k]:+.3f}"  # names in panel A only
+            long = f"∂ℓ/∂{M.names[k]} = {g[k]:+.3f}" if c == S.shown[0] else f"{g[k]:+.3f}"  # names once
             spec[k] = (long, f"{g[k]:+.3f}", T.backprop_colour, f"{g[k]:+.2f}")
     elif st.kind == "to_h":
         for k in M.layer_indices(st.layer + 1):
@@ -267,7 +267,7 @@ def overlay(ax, S, F, c, edges):
     bp = F.bp
     sel = D.gsel[c]
     reached = S.backprop_stages[1 : stage_index(S) + 1]
-    tag = (lambda name: f"{name}\n") if c == 0 else (lambda name: "")  # the names once, in panel A
+    tag = (lambda name: f"{name}\n") if c == S.shown[0] else (lambda name: "")  # the names once, first panel
     for s in reached:
         if s.kind == "output":  # under each score: one box, or one per class
             with tagging(ax, ("δa",)):

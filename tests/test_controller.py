@@ -477,3 +477,32 @@ def test_empty_message_leaves_no_gap_and_the_stage_is_named(live):
     assert list(row.children)[:3] == [C.bp_prev, C.bp_where, C.bp_next]
     plain = explore(make("tanh3"), *xor_centres()).controller
     assert plain.message.layout.display == "none"  # nothing to say before the first action
+
+
+def test_focus_shows_one_group_and_the_checkboxes_add_the_others(live):
+    """focus="B" draws group B alone and larger; the names go in that panel; checkboxes in the layout row add and
+    remove groups; the last one stays."""
+    from slopewalk.layout import ZOOM
+
+    X, y, groups = xor_centres()
+    s = explore(make("tanh3"), X, y, groups, focus="B", views="backprop", backprop_step=2)
+    C = s.controller
+    assert s.shown == [1] and s.layout.zoom == ZOOM and len(s.fig.axes[:4]) >= 1
+    nets = [ax for ax in s.fig.axes if ax.get_title()[:1].isupper() and ": " in ax.get_title()]
+    assert [ax.get_title()[0] for ax in nets] == ["B"]
+    assert any(t.get_text().startswith("h1\n") for t in nets[0].texts)  # the names go in the first shown panel
+    assert [c for c, box in C.show_boxes.items() if box.value] == [1] and len(C.show_boxes) == 4
+    C.show_boxes[3].value = True
+    nets = [ax for ax in s.fig.axes if ax.get_title()[:1].isupper() and ": " in ax.get_title()]
+    assert s.shown == [1, 3] and [ax.get_title()[0] for ax in nets] == ["B", "D"] and s.layout.zoom == 1.0
+    assert "Networks shown for B, D" in C.message.value
+    s.backprop_step = 0
+    nets = [ax for ax in s.draw().axes if ax.get_title()[:1].isupper() and ": " in ax.get_title()]
+    assert any(t.get_text() == "weights as in B" for t in nets[1].texts)  # the first shown panel carries the numbers
+    C.show_boxes[1].value = False
+    C.show_boxes[3].value = False  # the last one stays
+    assert s.shown == [3] and C.show_boxes[3].value and "One group stays shown" in C.message.value
+    plain = explore(make("tanh3"), X, y, groups).controller
+    assert plain.show_boxes == {} and plain.session.shown == [0, 1, 2, 3]
+    with pytest.raises(ValueError, match="is not a group"):
+        explore(make("tanh3"), X, y, groups, focus="Z")
