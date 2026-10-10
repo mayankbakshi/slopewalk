@@ -18,7 +18,7 @@ import torch  # noqa: E402
 import torch.nn as nn  # noqa: E402
 import torch.nn.functional as F  # noqa: E402
 
-from slopewalk import clusters, explore, sine_points  # noqa: E402
+from slopewalk import clusters, explore  # noqa: E402
 
 CENTERS = [(-1, 1), (1, 1), (-1, -1), (1, -1)]  # A, B, C, D: top left, top right, bottom left, bottom right
 LABELS = [1, 0, 0, 1]
@@ -103,8 +103,12 @@ CASES = {
 
 
 def sine_regression():
+    """16 points on a sine curve, built with torch; explore groups them in four along x."""
+    g = torch.Generator().manual_seed(0)
+    x = torch.linspace(-2, 2, 16)
+    y = torch.sin(1.5 * x) + 0.1 * torch.randn(16, generator=g)
     torch.manual_seed(0)
-    return (nn.Sequential(nn.Linear(1, 3), nn.Tanh(), nn.Linear(3, 1)), *sine_points())
+    return nn.Sequential(nn.Linear(1, 3), nn.Tanh(), nn.Linear(3, 1)), x[:, None], y, None
 
 
 def three_inputs():

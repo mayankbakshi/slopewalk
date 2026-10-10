@@ -23,9 +23,10 @@ explore(net, X, y, groups)
 
 1. `explore(net, X, y, groups=None, eta=1.0, title=None)`: `X` holds the inputs (n x d), `y` the classes (0 or 1; 0 to K-1 for a network with K outputs, see below). One panel per group of points; without `groups`, one panel per point (up to 8 points) or per class.
 2. `clusters(centers, labels, noise=0.0, n_per=50, seed=0)`: the centres themselves (`noise = 0`), or `n_per` points around each centre with standard deviation `noise`. Returns `X, y, groups`.
-3. `xor_centres(noise=0.0, n_per=50, seed=0)`, `two_points()` and `sine_points(n=16, noise=0.1, seed=0)` (for regression): the built-in examples, as `X, y, groups`.
+3. `xor_centres(noise=0.0, n_per=50, seed=0)` and `two_points()`: the built-in examples, as `X, y, groups`. For regression, make the points with torch or numpy, for example `x = torch.linspace(-2, 2, 16)[:, None]` and `y = torch.sin(1.5 * x[:, 0])`.
 4. `weight_table(net)`: name, layer, unit, input and value of every weight, in the order of the names.
-5. The sliders change the weights of `net` itself. After the cell, `net` holds the last weights; to start again, rebuild or reload the network.
+5. `slopewalk.help()`: the functions with their arguments, the options of `explore` and the methods of the session it returns; `slopewalk.help("explore")` prints one of them in full.
+6. The sliders change the weights of `net` itself. After the cell, `net` holds the last weights; to start again, rebuild or reload the network.
 
 Options of `explore`, all keyword-only; without them the picture is as above:
 

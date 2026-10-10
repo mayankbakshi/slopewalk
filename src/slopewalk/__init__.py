@@ -8,7 +8,8 @@ X, y, groups = clusters([(-1, 1), (1, 1), (-1, -1), (1, -1)], [1, 0, 0, 1])
 explore(net, X, y, groups)
 """
 
-from .data import clusters, sine_points, two_points, xor_centres
+from .data import clusters, two_points, xor_centres
+from .guide import help as help  # slopewalk.help(): the functions and their arguments; not in __all__
 from .model import weight_table
 from .session import Session, explore
 
@@ -18,7 +19,6 @@ __all__ = [
     "clusters",
     "xor_centres",
     "two_points",
-    "sine_points",
     "weight_table",
     "Session",
     "__version__",

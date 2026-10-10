@@ -5,10 +5,10 @@ import numpy as np
 import pytest
 import torch
 import torch.nn as nn
-from helpers import make
+from helpers import make, sine_data
 from render_examples import CASES
 
-from slopewalk import explore, sine_points, xor_centres
+from slopewalk import explore, xor_centres
 from slopewalk.draw import THEME
 from slopewalk.layout import TEXT_SCALE, Layout, overlap_area
 
@@ -112,7 +112,7 @@ MORE = {
     "xor_all_views": lambda: (make("tanh3"), *xor_centres(), dict(views=("cases", "slice", "line", "hidden"))),
     "sine_regression": lambda: (
         nn.Sequential(nn.Linear(1, 3), nn.Tanh(), nn.Linear(3, 1)),
-        *sine_points(),
+        *sine_data(),
         dict(task="regression"),
     ),
     "three_classes": lambda: (make("three_classes"), *five_centres(), {}),
@@ -262,7 +262,7 @@ BOXES = {
     "relu4": lambda: (make("relu4", seed=1), *xor_centres(), {}),
     "two_hidden": lambda: (make("two_hidden"), *xor_centres(), {}),
     "twelve_units": lambda: (make("wide"), *xor_centres(), {}),
-    "regression": lambda: (nn.Sequential(nn.Linear(1, 3), nn.Tanh(), nn.Linear(3, 1)), *sine_points(), {}),
+    "regression": lambda: (nn.Sequential(nn.Linear(1, 3), nn.Tanh(), nn.Linear(3, 1)), *sine_data(), {}),
     "backprop_3": lambda: (make("tanh3"), *xor_centres(), {"views": "backprop", "backprop_step": 3}),
     "backprop_clusters_5": lambda: (make("tanh3"), *xor_centres(noise=0.35), {"views": "backprop", "backprop_step": 5}),
     "three_classes": lambda: (make("three_classes"), *five_centres(), {}),

@@ -112,15 +112,14 @@ explore(net, X, y, groups, eta=0.5, case_slopes="w10", views=("hidden",))
 md(r"""
 ## 9. Regression
 
-`task="regression"`: the network predicts a number, and R is the mean squared error. 16 points on a sine curve, in four groups of neighbouring points.
+`task="regression"`: the network predicts a number, and R is the mean squared error. 16 points on a sine curve with some noise, made with torch; with one input and more than 8 points, explore puts them in four groups of neighbouring points.
 """)
 code(r"""
-from slopewalk import sine_points
-
 torch.manual_seed(0)
+x = torch.linspace(-2, 2, 16)[:, None]                  # 16 points, one input
+y = torch.sin(1.5 * x[:, 0]) + 0.1 * torch.randn(16)    # a noisy sine curve
 net = nn.Sequential(nn.Linear(1, 3), nn.Tanh(), nn.Linear(3, 1))
-X, y, groups = sine_points()
-explore(net, X, y, groups, eta=0.2, task="regression", views=("line",))
+explore(net, x, y, eta=0.2, task="regression", views=("line",))
 """)
 md(r"""
 ## 10. A recorded run

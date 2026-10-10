@@ -6,6 +6,8 @@ import re
 import subprocess
 import sys
 
+import pytest
+
 import slopewalk
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -40,7 +42,7 @@ def test_version_matches_pyproject_and_citation():
 
 
 def test_public_names_and_signatures():
-    expected = {"explore", "clusters", "xor_centres", "two_points", "sine_points", "weight_table", "Session"}
+    expected = {"explore", "clusters", "xor_centres", "two_points", "weight_table", "Session"}
     assert set(slopewalk.__all__) >= expected
     for name in slopewalk.__all__:
         assert hasattr(slopewalk, name)
@@ -53,4 +55,28 @@ def test_public_names_and_signatures():
     )
     assert str(inspect.signature(slopewalk.clusters)) == "(centers, labels, noise=0.0, n_per=50, seed=0)"
     assert str(inspect.signature(slopewalk.xor_centres)) == "(noise=0.0, n_per=50, seed=0)"
-    assert str(inspect.signature(slopewalk.sine_points)) == "(n=16, noise=0.1, seed=0)"
+
+
+def test_help_lists_the_functions_and_their_arguments(capsys):
+    """slopewalk.help() prints every public function with its signature, the arguments of explore and the session's
+    methods; help("name") prints one in full. It is not exported by "from slopewalk import *"."""
+    import inspect
+
+    import slopewalk
+
+    slopewalk.help()
+    out = capsys.readouterr().out
+    for f in (slopewalk.clusters, slopewalk.xor_centres, slopewalk.two_points, slopewalk.weight_table):
+        assert f"{f.__name__}{inspect.signature(f)}" in out
+    assert "explore(net, X, y, groups=None, eta=1.0, title=None, *, task=None" in out
+    params = [p for p in inspect.signature(slopewalk.explore).parameters if p not in ("net", "X", "y")]
+    assert all(p in out for p in params)  # every argument of explore is described
+    assert "step(k=1, eta=None, w=None)" in out and "record(path, steps=40" in out and "(self" not in out
+    assert all(len(line) <= 104 for line in out.splitlines())
+    slopewalk.help("Session.step")
+    assert capsys.readouterr().out.startswith("Session.step(k=1, eta=None, w=None)\n\n    k gradient steps")
+    slopewalk.help(slopewalk.clusters)
+    assert "noise" in capsys.readouterr().out
+    with pytest.raises(ValueError, match="'fit' is not one of explore, clusters"):
+        slopewalk.help("fit")
+    assert "help" not in slopewalk.__all__

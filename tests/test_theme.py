@@ -160,9 +160,9 @@ def every_text_is_legible(fig, T):
 def test_dark_pictures_have_no_dark_text(monkeypatch):
     import matplotlib.pyplot as plt
     import torch.nn as nn
-    from helpers import make
+    from helpers import make, sine_data
 
-    from slopewalk import clusters, explore, sine_points, xor_centres
+    from slopewalk import clusters, explore, xor_centres
     from slopewalk.draw import DARK_THEME, THEME
 
     monkeypatch.setenv("NB_STATIC", "1")
@@ -174,7 +174,7 @@ def test_dark_pictures_have_no_dark_text(monkeypatch):
         ),
         lambda t: explore(make("tanh3"), *xor_centres(noise=0.35), views="backprop", backprop_step=5, theme=t),
         lambda t: explore(
-            nn.Sequential(nn.Linear(1, 3), nn.Tanh(), nn.Linear(3, 1)), *sine_points(), task="regression", theme=t
+            nn.Sequential(nn.Linear(1, 3), nn.Tanh(), nn.Linear(3, 1)), *sine_data(), task="regression", theme=t
         ),
         lambda t: explore(
             make("three_classes"),

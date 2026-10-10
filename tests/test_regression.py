@@ -8,9 +8,9 @@ import pytest
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from helpers import NETS, make, naming_order, regression_points
+from helpers import NETS, make, naming_order, regression_points, sine_data
 
-from slopewalk import explore, sine_points
+from slopewalk import explore
 from slopewalk.model import Model
 
 
@@ -61,12 +61,12 @@ def test_risk_and_slopes(name):
     assert out.p is None and out.loss.tolist() == pytest.approx(((out.a - y.numpy()) ** 2).tolist(), abs=1e-6)
 
 
-def test_sine_points():
-    X, y, groups = sine_points()
-    X2, y2, g2 = sine_points()
-    assert torch.equal(X, X2) and torch.equal(y, y2) and torch.equal(groups, g2)
-    assert X.shape == (16, 1) and y.shape == (16,) and groups.tolist() == [0] * 4 + [1] * 4 + [2] * 4 + [3] * 4
-    assert X[0, 0].item() == -2.0 and X[-1, 0].item() == 2.0
+def test_one_input_makes_four_groups_along_x(static):
+    """Regression with one input and more than 8 points: four groups of neighbouring points along x1, in order."""
+    X, y, _ = sine_data()
+    s = explore(sine_net(), X.flip(0), y.flip(0), task="regression")  # the order of the points does not matter
+    order = s.data.X[:, 0].argsort()
+    assert s.data.groups[order].tolist() == [0] * 4 + [1] * 4 + [2] * 4 + [3] * 4
 
 
 def sine_net():
@@ -75,7 +75,7 @@ def sine_net():
 
 
 def test_regression_picture(static):
-    X, y, groups = sine_points()
+    X, y, groups = sine_data()
     s = explore(sine_net(), X, y, groups, eta=0.2, task="regression")
     fig = s.fig
     P = panels(fig)
@@ -93,7 +93,7 @@ def test_regression_picture(static):
 
 
 def test_regression_steps_lower_R_and_match_torch(static):
-    X, y, groups = sine_points()
+    X, y, groups = sine_data()
     net = sine_net()
     ref = copy.deepcopy(net)
     s = explore(net, X, y, groups, eta=0.2, task="regression")

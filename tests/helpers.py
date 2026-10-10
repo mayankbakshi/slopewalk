@@ -63,6 +63,14 @@ def naming_order(net):
     return out
 
 
+def sine_data(n=16, noise=0.1, seed=0):
+    """A regression example with one input, built with torch: n points on y = sin(1.5 x) for x from -2 to 2, plus
+    noise. Returns X (n x 1), y (n) and groups None (explore then makes four groups of neighbouring points)."""
+    g = torch.Generator().manual_seed(seed)
+    x = torch.linspace(-2, 2, n)
+    return x[:, None], torch.sin(1.5 * x) + noise * torch.randn(n, generator=g), None
+
+
 def regression_points(net, n=9, seed=2):
     """n random points and real-valued targets."""
     g = torch.Generator().manual_seed(seed)

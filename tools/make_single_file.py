@@ -16,8 +16,34 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PKG = ROOT / "src" / "slopewalk"
 OUT = ROOT / "dist" / "slopewalk_single.py"
-ORDER = ["model", "data", "layout", "draw", "views", "backprop", "picture", "static", "widgets", "host", "session"]
-STDLIB = {"os", "sys", "re", "io", "math", "copy", "collections", "functools", "itertools", "warnings"}
+ORDER = [
+    "model",
+    "data",
+    "layout",
+    "draw",
+    "views",
+    "backprop",
+    "picture",
+    "static",
+    "widgets",
+    "host",
+    "session",
+    "guide",
+]
+STDLIB = {
+    "os",
+    "sys",
+    "re",
+    "io",
+    "math",
+    "copy",
+    "collections",
+    "functools",
+    "itertools",
+    "warnings",
+    "inspect",
+    "textwrap",
+}
 HEADER = '''"""slopewalk {version}: gradient descent by hand on small PyTorch networks, in one file.
 
 Built by tools/make_single_file.py from the package at https://github.com/mayankbakshi/slopewalk; edit the package,

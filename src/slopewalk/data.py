@@ -36,16 +36,6 @@ def two_points():
     return clusters([(-1, 1), (1, 1)], [1, 0])
 
 
-def sine_points(n=16, noise=0.1, seed=0):
-    """A regression example with one input: n points on y = sin(1.5 x) for x from -2 to 2, plus Gaussian noise with
-    standard deviation noise. Returns X (n x 1), y (n) and groups (n): four groups of neighbouring points along x.
-    Use it with task="regression"."""
-    g = torch.Generator().manual_seed(seed)
-    x = torch.linspace(-2, 2, n)
-    y = torch.sin(1.5 * x) + noise * torch.randn(n, generator=g)
-    return x[:, None], y, torch.arange(n) * REGRESSION_GROUPS // n
-
-
 class Data:
     """The points of one explore call: X (n x d), y (n), groups (n), and which points belong to each group.
     n_classes: 2 for binary, K for multiclass (the labels 0 to K-1), None for regression."""
