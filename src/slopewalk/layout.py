@@ -13,6 +13,7 @@ LAYOUTS = ("standard", "wide")
 WIDTH = {"standard": 15.0, "wide": 27.0}  # default figure width in inches
 WIDE_PER_ROW, WIDE_BOTTOM_PER_ROW = 4, 6  # the most network panels and lower panels per row of the wide layout
 NET_GAP, PANEL_GAP = 0.5, 0.8  # inches between network panels, and between the panels below them
+OUTPUT_GAP = 0.4  # extra room before several output units (more would make the panel too wide for two in a row)
 TEXT_SCALE = {"standard": 1.0, "wide": 1.1}  # text in the network panels: the wide picture is shown smaller
 # the wide layout gives each lower panel a base width in inches that suits it (for a row 4.2 inches tall), and the
 # width left over in its row goes to the panels that can use it, in these proportions
@@ -27,6 +28,7 @@ WIDE_BASE = {
     "momentum": 5.0,
     "backprop": 10.5,
 }
+HISTORY_MIN = 3.6  # the narrowest R over the steps gets in a full row of the wide layout
 WIDE_STRETCH = {"history": 3.0, "table": 0.5, "line": 1.0, "cases": 1.0, "momentum": 1.0, "backprop": 1.0}
 
 
@@ -54,6 +56,8 @@ class Layout:
         for _ in hidden:
             self.blocks.append((x, x + 0.75, x + 1.5))  # x of the z box, of the glyph and of the h box
             x += 2.75
+        if outputs > 1:  # the lines fan out to several output units: more room for their labels
+            x += OUTPUT_GAP
         if task == "regression":
             gap = 1.1 if outputs == 1 else 1.6  # several targets: room for their arrows into the loss box
             self.x_a, self.x_sigmoid, self.x_p, self.x_loss = x, None, None, x + gap + extra
@@ -131,6 +135,10 @@ class Layout:
         if "table" in names and n_weights > TABLE_ROWS:
             base[names.index("table")] = 7.5  # two blocks of rows side by side
         spare = self.width - sum(base)
+        if spare < 0 and "history" in names:  # a full row: R over the steps gives up width first, the table keeps it
+            i = names.index("history")
+            base[i] -= min(-spare, max(0.0, base[i] - HISTORY_MIN))
+            spare = self.width - sum(base)
         if spare <= 0:
             return [(n, b * self.width / sum(base)) for n, b in zip(names, base)]
         stretch = [WIDE_STRETCH.get(n, 0.0) for n in names]

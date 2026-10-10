@@ -186,7 +186,7 @@ def focus(S, F):
     if st.kind == "delta":
         l = st.layer
         return {("z", l), ("act", l), ("h", l), ("dh", l), ("δ", l)}
-    return set()
+    return {("bias", l) for l in range(last + 1)}  # average: the slopes on every line, and the bias nodes they start at
 
 
 def shared_labels(F):

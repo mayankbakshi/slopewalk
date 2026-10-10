@@ -200,7 +200,9 @@ def test_plane_shows_the_class_regions(static):
 
     torch.manual_seed(0)
     s = explore(make("three_classes"), *five_centres())
-    plane = [ax for ax in s.fig.axes if ax.get_title() == "the most likely class and the boundaries"][0]
+    plane = [
+        ax for ax in s.fig.axes if ax.get_title() == "the most likely class over the input plane,\nand the boundaries"
+    ][0]
     assert len(plane.images) == 1
     from slopewalk.draw import net_on, plane_grid
 
@@ -209,7 +211,11 @@ def test_plane_shows_the_class_regions(static):
     assert [t.get_text() for t in plane.get_legend().get_texts()] == expected and len(winners) < 3
     lines_before = len(plane.collections)
     s.step(20, eta=1.0)
-    plane = [ax for ax in s.draw().axes if ax.get_title() == "the most likely class and the boundaries"][0]
+    plane = [
+        ax
+        for ax in s.draw().axes
+        if ax.get_title() == "the most likely class over the input plane,\nand the boundaries"
+    ][0]
     assert len(plane.collections) > lines_before  # the starting boundaries, dashed
 
 

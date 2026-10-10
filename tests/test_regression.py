@@ -86,7 +86,7 @@ def test_regression_picture(static):
     assert sigmoid_glyphs == []  # no sigmoid and no p box
     assert any(t.startswith("ŷ\n") for t in texts(fig)) and not any(t.startswith("p\n") for t in texts(fig))
     assert any(t.startswith("y ") and "\nloss " in t and "change\nfrom start\n+0.000" in t for t in texts(fig))
-    plane = [ax for ax in fig.axes if ax.get_title() == "prediction and the points"]
+    plane = [ax for ax in fig.axes if ax.get_title() == "ŷ against x1, and the points"]
     assert len(plane) == 1
     history = [ax for ax in fig.axes if ax.get_title().startswith("R = ")][0]
     assert history.get_ylim()[0] >= 0.0  # squared errors are never below 0
@@ -113,11 +113,11 @@ def test_two_inputs_and_three_inputs(static):
     net = nn.Sequential(nn.Linear(2, 3), nn.Tanh(), nn.Linear(3, 1))
     X, y = regression_points(net, n=6)
     fig = explore(net, X, y, task="regression").fig
-    assert any(ax.get_title().startswith("prediction over the input plane") for ax in fig.axes)
+    assert any(ax.get_title().startswith("ŷ over the input plane") for ax in fig.axes)
     net3 = make("three_inputs")
     X3, y3 = regression_points(net3, n=5)
     fig3 = explore(net3, X3, y3, task="regression").fig  # more inputs than a plane shows: prediction against target
-    assert any(ax.get_title().startswith("each case's prediction against its target") for ax in fig3.axes)
+    assert any(ax.get_title().startswith("ŷ against the target y") for ax in fig3.axes)
 
 
 def test_binary_one_input_shows_p_against_x(static):
@@ -223,7 +223,7 @@ def test_several_targets_picture(static):
     assert "ŷ1" in starts and "ŷ2" in starts
     loss = [t.get_text() for t in P[0].texts if "\nloss " in t.get_text()][0]
     assert loss.startswith("y1 ") and "\ny2 " in loss and "change\nfrom start\n+0.000" in loss
-    curves = [ax for ax in s.fig.axes if ax.get_title() == "each target's prediction and its points"]
+    curves = [ax for ax in s.fig.axes if ax.get_title() == "ŷ of each target against x1,\nand the points"]
     assert len(curves) == 1 and [ln.get_label() for ln in curves[0].lines] == ["ŷ1", "ŷ2"]
     assert [s.model.unit_title(1, j) for j in range(2)] == ["output unit 1", "output unit 2"]
     R0 = s.risk()
@@ -233,14 +233,14 @@ def test_several_targets_picture(static):
 
 @pytest.mark.parametrize("inputs, outputs", [(3, 1), (2, 2), (3, 2)])
 def test_more_inputs_or_targets_show_prediction_against_target(inputs, outputs, static):
-    """Three or more inputs, or two inputs with several targets: each case's prediction against its target, with
+    """Three or more inputs, or two inputs with several targets: ŷ against the target y, with
     the diagonal."""
     torch.manual_seed(0)
     X = torch.rand(30, inputs) * 4 - 2
     Y = torch.randn(30, outputs) if outputs > 1 else X[:, 0] * X[:, 1]
     net = nn.Sequential(nn.Linear(inputs, 3), nn.Tanh(), nn.Linear(3, outputs))
     s = explore(net, X, Y, task="regression", views=("hidden", "cases", "slice", "line", "momentum"))
-    ax = [a for a in s.fig.axes if a.get_title().startswith("each case's prediction against its target")]
+    ax = [a for a in s.fig.axes if a.get_title().startswith("ŷ against the target y")]
     assert len(ax) == 1
     marks = [c for c in ax[0].collections if len(c.get_offsets()) == 30]
     assert len(marks) == outputs
@@ -260,3 +260,27 @@ def test_several_targets_backward_pass(static):
     assert any(t.startswith("w7: δa1 × h1 = ") for t in lines)  # w1 to w6: the first layer
     deltas = [t.get_text().split("\n")[0] for t in panels(s.fig)[0].texts if t.get_text().startswith("δa")]
     assert deltas == ["δa1", "δa2"]
+
+
+def test_targets_are_readable(static):
+    """Each target's line and marker share one legend entry; the second target's markers are hollow; the hint says
+    that targets count from 1; one group gets no letter in the prediction-against-target panel, several get a cross
+    and a letter beside it."""
+    from matplotlib.colors import to_rgba
+
+    torch.manual_seed(0)
+    x, Y = wave()
+    s = explore(TARGETS["one_input_two_targets"](), x, Y, task="regression")
+    ax = [a for a in s.fig.axes if a.get_title() == "ŷ of each target against x1,\nand the points"][0]
+    assert [t.get_text() for t in ax.get_legend().get_texts()] == ["ŷ1 and y1", "ŷ2 and y2"]
+    first, second = [c for c in ax.collections if len(c.get_offsets()) == 16]
+    assert tuple(second.get_facecolor()[0]) == to_rgba(s.theme.paper) and first.get_sizes()[0] >= 36
+    X = torch.rand(30, 3) * 4 - 2
+    one = explore(nn.Sequential(nn.Linear(3, 2), nn.Tanh(), nn.Linear(2, 1)), X, X[:, 0], task="regression")
+    parity = [a for a in one.fig.axes if a.get_title().startswith("ŷ against the target y")][0]
+    assert not parity.texts  # one group: no letter
+    two = explore(
+        nn.Sequential(nn.Linear(3, 2), nn.Tanh(), nn.Linear(2, 1)), X, X[:, 0], [0] * 15 + [1] * 15, task="regression"
+    )
+    parity = [a for a in two.fig.axes if a.get_title().startswith("ŷ against the target y")][0]
+    assert [t.get_text() for t in parity.texts] == ["A", "B"]

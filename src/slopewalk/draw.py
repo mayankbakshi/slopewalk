@@ -14,6 +14,7 @@ from matplotlib.colors import LinearSegmentedColormap, to_rgb, to_rgba
 from matplotlib.font_manager import FontProperties
 from matplotlib.lines import Line2D
 from matplotlib.patches import BoxStyle, Rectangle
+from matplotlib.text import Text
 
 from .layout import BOTTOM_HEIGHT, BW, LABEL_TOLERANCE, PANEL_GAP, TABLE_ROWS, place_labels
 from .model import SIGMOID
@@ -63,7 +64,9 @@ class Theme:
     landscape_low = "#59636E"  # R over two weights: low R in this colour, high R in paper
     spine = "#8C959F"  # the frames of the panels below the networks
     control_button, control_selected = "#EEF1F4", "#C4CBD3"  # the controls: buttons, and the chosen toggle button
-    faded_alpha, faded_line_alpha = 0.3, 0.12  # what a stage of the backward pass does not use: boxes, and lines
+    # what a stage of the backward pass does not use: boxes and curves recede to 30%, their numbers to 50% so that they
+    # stay readable (3.2:1 on light paper, 4.9:1 on dark), lines to 12% (context only: the table keeps every weight)
+    faded_alpha, faded_text_alpha, faded_line_alpha = 0.3, 0.5, 0.12
 
     def plane_colormap(self):
         """p for class 1 over the input plane: class 0 colour, paper at p = 0.5, class 1 colour."""
@@ -253,17 +256,19 @@ def tagging(ax, key):
 
 def fade(ax, keep, T):
     """Fades what a network panel shows but the current stage of the backward pass does not use: every tagged text,
-    box and curve whose tag is not in keep (None: nothing fades)."""
+    box and curve whose tag is not in keep (None: nothing fades). Numbers keep more of their strength than boxes."""
     if keep is None:
         return
     for a in [*ax.texts, *ax.patches, *ax.lines]:
         key = getattr(a, "slopewalk_key", None)
         if key is None or key in keep:
             continue
-        a.set_alpha(T.faded_alpha)
+        a.set_alpha(T.faded_text_alpha if isinstance(a, Text) else T.faded_alpha)
         patch = a.get_bbox_patch() if hasattr(a, "get_bbox_patch") else None
         if patch is not None:
             patch.set_alpha(T.faded_alpha)
+        if getattr(a, "arrow_patch", None) is not None:  # the arrows between boxes
+            a.arrow_patch.set_alpha(T.faded_alpha)
 
 
 def weight_colour(T, k, w):
@@ -294,30 +299,49 @@ def label_variants(S, F, edges, spec):
 
 
 def draw_edge_labels(ax, S, F, edges, obstacles, spec=None):
-    """The labels on the lines: names and values for small networks, values only for larger ones, none when
-    even the values cannot be placed without overlaps (the values stay on the sliders and in the table).
+    """The labels on the lines: names and values for small networks, values only for larger ones. When the labels
+    of every line cannot be placed without overlaps, each layer gets its labels if they fit, from the first layer on
+    (the values of the others stay on the sliders and in the table).
     spec: {k: (long text, short text, colour[, shorter text])} replaces the labels (only those lines get one), as in
     the backward pass. Returns the mode used: "names", "values" or "none"."""
     T = S.theme
-    w = F.w
     renderer = get_renderer(ax.figure)
     obstacles = obstacles + box_obstacles(ax, renderer, T.edge_label_size)
     if spec is not None:
         edges = [e for e in edges if e[0] in spec]
         if not edges:
             return "none"
+    fit = fit_labels(ax, S, F, edges, obstacles, spec, renderer)
+    if fit is not None:
+        put_labels(ax, S, F, edges, fit[1], fit[2], spec)
+        return fit[0]
+    mode = "none"
+    for layer in range(len(S.model.layers)):  # layer by layer, each clear of the labels placed before it
+        part = [e for e in edges if S.model.where[e[0]][0] == layer]
+        fit = fit_labels(ax, S, F, part, obstacles, spec, renderer) if part else None
+        if fit is not None:
+            put_labels(ax, S, F, part, fit[1], fit[2], spec)
+            obstacles = obstacles + list(fit[3])
+            mode = "values"
+    return mode
+
+
+def fit_labels(ax, S, F, edges, obstacles, spec, renderer):
+    """The first label set of label_variants that fits on the lines edges: (mode, texts, positions, boxes) or None."""
+    T = S.theme
     segments = [(p0, p1) for _, p0, p1, _ in edges]
     defaults = [t0 for _, _, _, t0 in edges]
-    chosen = None
     for variant, texts in label_variants(S, F, edges, spec):
         sizes = [text_size(ax, renderer, s, T.edge_label_size) for s in texts]
-        places, _, worst_labels, worst_boxes = place_labels(segments, sizes, obstacles, defaults, pad=0.03)
+        places, boxes, worst_labels, worst_boxes = place_labels(segments, sizes, obstacles, defaults, pad=0.03)
         if max(worst_labels, worst_boxes) <= LABEL_TOLERANCE:
-            chosen = variant, texts, places
-            break
-    if chosen is None:
-        return "none"
-    mode, labels, positions = chosen
+            return variant, texts, places, boxes
+    return None
+
+
+def put_labels(ax, S, F, edges, labels, positions, spec):
+    """Draws the labels of the lines edges at their positions."""
+    T, w = S.theme, F.w
     for (k, _, _, _), label, (cx, cy) in zip(edges, labels, positions):
         frozen = k not in F.moving
         hot = k in F.by_hand and not frozen and spec is None
@@ -336,7 +360,6 @@ def draw_edge_labels(ax, S, F, edges, obstacles, spec=None):
             fontweight="bold" if hot else "normal",
             bbox=dict(boxstyle="round,pad=0.08", fc=T.label_backing, ec="none", alpha=0.9),
         )
-    return mode
 
 
 def draw_shared_note(ax, S):
@@ -558,20 +581,10 @@ def draw_classes(ax, S, F, c, tag, obstacles, arrow, parts):
     box = dict(fontsize=T.node_size, ha="center", va="center", zorder=5, bbox=T.value_box, color=T.ink)
     half = 0.31  # the softmax box: as wide as a glyph, as tall as the scores
     lo, hi = tys[-1] - 0.25, tys[0] + 0.25
-    with tagging(ax, ("out_act",)):
+    with tagging(ax, ("out_act",)):  # named below the box, like the curves of the activations
         ax.add_patch(Rectangle((L.x_sigmoid - half, lo), 2 * half, hi - lo, fc=T.glyph_fill, ec=T.glyph_edge, lw=0.8))
-        ax.text(
-            L.x_sigmoid,
-            (lo + hi) / 2,
-            "softmax",
-            rotation=90,
-            fontsize=T.glyph_name_size,
-            ha="center",
-            va="center",
-            color=T.curve,
-            zorder=3,
-        )
-    obstacles.append((L.x_sigmoid - half, lo, L.x_sigmoid + half, hi))
+        ax.text(L.x_sigmoid, lo - 0.04, "softmax", fontsize=T.glyph_name_size, ha="center", va="top", color=T.curve)
+    obstacles.append((L.x_sigmoid - half, lo - 0.16, L.x_sigmoid + half, hi))
     for k, ty in enumerate(tys):
         with tagging(ax, ("a",)):
             ax.text(L.x_a, ty, tag(f"a{k}") + num(am[k], as_[k]), **box)
@@ -741,7 +754,7 @@ def draw_input_plane(ax, S, F):
             ax.scatter(X[:, 0], y, s=18, color=T.point_neutral, zorder=3)
             gy = [float(D.stats(y, c)[0]) for c in range(D.G)]
             ax.set_ylabel("y")
-            ax.set_title("prediction and the points", fontsize=T.panel_title_size)
+            ax.set_title("ŷ against x1, and the points", fontsize=T.panel_title_size)
         draw_group_marks(ax, S, [float(v[0]) for v in gx], gy, size=110)
         ax.set_xlabel("x1")
         if moved:
@@ -771,7 +784,7 @@ def draw_input_plane(ax, S, F):
             ax.text(
                 gx[c][0] + 0.15, gx[c][1] + 0.15, letter(c), fontsize=T.letter_size, path_effects=halo(T), color=T.ink
             )
-        ax.set_title("p for class 1 and the boundary", fontsize=T.panel_title_size)
+        ax.set_title("p for class 1 over the input plane,\nand the boundary p = 0.5", fontsize=T.panel_title_size)
     else:
         lo, hi = float(min(a.min(), y.min())), float(max(a.max(), y.max()))
         levels = np.linspace(lo, hi, 12) if hi > lo else 12
@@ -792,7 +805,7 @@ def draw_input_plane(ax, S, F):
             ax.text(
                 gx[c][0] + 0.15, gx[c][1] + 0.15, letter(c), fontsize=T.letter_size, path_effects=halo(T), color=T.ink
             )
-        ax.set_title("prediction over the input plane; points coloured by y", fontsize=T.panel_title_size)
+        ax.set_title("ŷ over the input plane;\npoints coloured by y", fontsize=T.panel_title_size)
     ax.set_aspect("equal")
     S.model.set_weights(w)
 
@@ -843,74 +856,103 @@ def draw_class_plane(ax, S, F, gx):
     ax.set_xlim(lo, hi)
     ax.set_ylim(lo, hi)
     ax.set_aspect("equal")
-    ax.set_title("the most likely class and the boundaries", fontsize=T.panel_title_size)
+    ax.set_title("the most likely class over the input plane,\nand the boundaries", fontsize=T.panel_title_size)
 
 
 LINE_STYLES, MARKERS = ("-", "--", ":", "-."), ("o", "s", "^", "D")  # one per target: regression stays neutral
 
 
+def target_marks(T, k):
+    """The marker of target k: its own shape, filled for targets 1 and 3, hollow for 2 and 4, so that the points of
+    two targets differ by more than a small shape."""
+    hollow = k % 2 == 1
+    return dict(
+        marker=MARKERS[k],
+        facecolor=T.paper if hollow else T.point_neutral,
+        edgecolor=T.point_neutral if hollow else T.marker_edge,
+        linewidths=1.2 if hollow else 0.4,
+    )
+
+
+def target_handle(T, k, line=True, label=None):
+    """A legend entry for target k: its line style and its marker together."""
+    m = target_marks(T, k)
+    return Line2D(
+        [],
+        [],
+        linestyle=LINE_STYLES[k] if line else "none",
+        color=T.neutral_colour,
+        lw=2,
+        marker=m["marker"],
+        markersize=7,
+        markerfacecolor=m["facecolor"],
+        markeredgecolor=m["edgecolor"],
+        label=label or f"ŷ{k + 1} and y{k + 1}",
+    )
+
+
 def draw_target_curves(ax, S, F):
     """Regression, one input, several targets: the prediction of each target against x1, one line style each, with
-    the points of that target, one marker shape each; once the weights moved, the starting curves, thin."""
+    the points of that target, one marker each; the legend pairs each line with its marker. Once the weights moved,
+    the starting curves, thin."""
     D, T = S.data, S.theme
     u = line_grid(S)
     A = net_on(S, u[:, None], F.w)
     X, Y = D.X.numpy(), D.y.numpy()
+    handles = []
     if F.changed:
         A0 = start_values(S, "line", u[:, None])
         for k in range(A.shape[1]):
-            ax.plot(u, A0[:, k], LINE_STYLES[k], color=T.start_colour, lw=1.0, label="start" if k == 0 else None)
+            ax.plot(u, A0[:, k], LINE_STYLES[k], color=T.start_colour, lw=1.0)
+        handles.append(Line2D([], [], color=T.start_colour, lw=1.0, label="start"))
     for k in range(A.shape[1]):
         ax.plot(u, A[:, k], LINE_STYLES[k], color=T.neutral_colour, lw=2, label=f"ŷ{k + 1}")
-        ax.scatter(
-            X[:, 0], Y[:, k], marker=MARKERS[k], s=22, color=T.point_neutral, edgecolor=T.marker_edge, lw=0.3, zorder=3
-        )
+        ax.scatter(X[:, 0], Y[:, k], s=40, zorder=3, **target_marks(T, k))
+        handles.append(target_handle(T, k))
     ax.set_xlabel("x1")
     ax.set_ylabel("ŷ and y")
-    ax.legend(fontsize=T.legend_size, loc="best")
-    ax.set_title("each target's prediction and its points", fontsize=T.panel_title_size)
+    ax.legend(handles=handles, fontsize=T.legend_size, loc="best")
+    ax.set_title("ŷ of each target against x1,\nand the points", fontsize=T.panel_title_size)
 
 
 def draw_parity(ax, S, F):
     """Regression with several targets over two inputs, or with more inputs than a plane shows: each case's
-    prediction against its target, one marker shape per target, and the diagonal where they are equal."""
+    prediction against its target, one marker per target, and the diagonal where they are equal. With several groups,
+    a cross at each group's mean (first target) with its letter beside it."""
     D, T = S.data, S.theme
     Y = D.y.numpy().reshape(D.n, -1)
     A = np.asarray(F.out.a, dtype=float).reshape(D.n, -1)
+    K = Y.shape[1]
     lo, hi = float(min(Y.min(), A.min())), float(max(Y.max(), A.max()))
     pad = 0.08 * (hi - lo) if hi > lo else 1.0
     lo, hi = lo - pad, hi + pad
-    ax.plot([lo, hi], [lo, hi], color=T.reference_line, lw=1.0, zorder=1, label="ŷ = y")
-    for k in range(Y.shape[1]):
-        ax.scatter(
-            Y[:, k],
-            A[:, k],
-            marker=MARKERS[k],
-            s=26 if D.n <= 40 else 12,
-            color=T.point_neutral,
-            edgecolor=T.marker_edge,
-            lw=0.3,
-            zorder=3,
-            label=f"target {k + 1}" if Y.shape[1] > 1 else "cases",
-        )
-    for c in range(D.G):  # the group letters at the group's mean, first target
-        sel = D.gsel[c]
-        ax.text(
-            float(Y[sel, 0].mean()),
-            float(A[sel, 0].mean()),
-            f"  {letter(c)}",
-            fontsize=T.letter_size,
-            path_effects=halo(T),
-            color=T.ink,
-            zorder=4,
-        )
+    ax.plot([lo, hi], [lo, hi], color=T.muted, lw=1.4, zorder=1)
+    handles = [Line2D([], [], color=T.muted, lw=1.4, label="ŷ = y")]
+    for k in range(K):
+        ax.scatter(Y[:, k], A[:, k], s=36 if D.n <= 40 else 16, zorder=3, **target_marks(T, k))
+        handles.append(target_handle(T, k, line=False, label=f"target {k + 1}" if K > 1 else "cases"))
+    if D.G > 1:
+        for c in range(D.G):
+            sel = D.gsel[c]
+            my, ma = float(Y[sel, 0].mean()), float(A[sel, 0].mean())
+            ax.plot([my], [ma], "+", color=T.ink, ms=10, mew=1.6, zorder=4)
+            ax.annotate(
+                letter(c),
+                xy=(my, ma),
+                xytext=(5, 5),
+                textcoords="offset points",
+                fontsize=T.letter_size,
+                path_effects=halo(T),
+                color=T.ink,
+                zorder=5,
+            )
     ax.set_xlim(lo, hi)
     ax.set_ylim(lo, hi)
     ax.set_aspect("equal")
     ax.set_xlabel("target y")
     ax.set_ylabel("prediction ŷ")
-    ax.legend(fontsize=T.legend_size, loc="upper left")
-    ax.set_title("each case's prediction against its target;\non the diagonal ŷ = y", fontsize=T.panel_title_size)
+    ax.legend(handles=handles, fontsize=T.legend_size, loc="upper left")
+    ax.set_title("ŷ against the target y;\non the diagonal ŷ = y", fontsize=T.panel_title_size)
 
 
 # ---------------------------------------------------------------- R over the steps
@@ -976,10 +1018,9 @@ def width_share(ax):
 
 
 TABLE_SHARES = (0.17, 0.18, 0.39, 0.26)  # the columns' shares of a block of the table
-TABLE_HEADERS = (  # the longest that fit
+TABLE_HEADERS = (  # the longest that fit; "weight" always
     ("weight", "value", "change of R for +0.1", "slope dR/dw"),
     ("weight", "value", "ΔR for +0.1", "dR/dw"),
-    ("w", "value", "ΔR", "dR/dw"),
 )
 
 

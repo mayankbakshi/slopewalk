@@ -401,7 +401,7 @@ def test_controller_sliders_buttons_and_steps(controller):
     net, X, y, _ = two_point()
     sliders, buttons, s = controller(net, X, y)
     assert set(sliders) == {"w1", "w2", "w3", "eta"}
-    assert {"gradient step", "10 steps", "reset"} <= set(buttons)  # the backward pass adds its own step buttons
+    assert {"gradient step", "steps", "reset"} <= set(buttons)  # "steps" sits beside a box with 10; backprop adds more
     assert [sliders[k].value for k in ["w1", "w2", "w3"]] == [0.5, 0.5, 0.0]
     assert (sliders["w1"].min, sliders["w1"].max, sliders["w1"].step) == (-4, 4, 0.001)
     assert sliders["eta"].value == 1.0
@@ -427,7 +427,7 @@ def test_controller_ten_steps_lower_R(controller):
     sliders, buttons, s = controller(net, Xc, yc, gc)
     assert set(sliders) == set(NAMES13) | {"eta"}
     sliders["eta"].value = 0.5
-    buttons["10 steps"].click()
+    buttons["steps"].click()  # ten steps: the box beside it holds 10
     w = flat(net)
     # the same ten steps straight in torch
     ref = reference_net(40)

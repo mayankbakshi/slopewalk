@@ -115,8 +115,12 @@ class Picture:
         heights = [L.row_height(with_sd, backprop)] * rows + [BOTTOM_HEIGHT] * n_bottom
         gs = fig.add_gridspec(rows + n_bottom, 1, height_ratios=heights)  # every row has its own grid and spacing
         self.case_axes = []
+        alone = D.G == 1 and (L.style == "wide" or L.narrow())  # one panel: as wide as one of two, in the middle
         for r in range(rows):
-            if per_row == 1:
+            if alone:
+                cells = gs[r, 0].subgridspec(1, 3, width_ratios=[1, 2, 1], wspace=0)
+                self.case_axes.append(fig.add_subplot(cells[0, 1]))
+            elif per_row == 1:
                 self.case_axes.append(fig.add_subplot(gs[r, 0]))
             else:
                 cells = gs[r, 0].subgridspec(1, per_row, wspace=L.wspace(per_row, NET_GAP))

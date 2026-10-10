@@ -9,7 +9,16 @@ Every function takes (ax, S, F) like the panels in draw.py.
 
 import numpy as np
 
-from .draw import LINE_STYLES, MARKERS, class_boundaries, class_shading, halo, letter, softmax
+from .draw import (
+    LINE_STYLES,
+    class_boundaries,
+    class_shading,
+    halo,
+    letter,
+    softmax,
+    target_handle,
+    target_marks,
+)
 
 VIEWS = ("backprop", "cases", "slice", "line", "hidden", "momentum")
 
@@ -266,16 +275,16 @@ def draw_hidden_targets(ax, S, F, H, small, label):
     V, b = output_layer(S, F.w)
     Y = D.y.numpy()
     dots = dict(s=small, color=T.point_neutral, edgecolor=T.marker_edge)
-    what = "each target's prediction against h" if m == 1 else "the points of the cases"
+    what = "ŷ of each target against h" if m == 1 else "the points of the cases"
     if m == 1:
         lo, hi = window(H[:, 0], minimum=0.6)
         u = np.linspace(lo, hi, 101)
         for k in range(len(b)):
-            ax.plot(u, V[k, 0] * u + b[k], LINE_STYLES[k], color=T.neutral_colour, lw=1.5, label=f"ŷ{k + 1}")
-            ax.scatter(H[:, 0], Y[:, k], marker=MARKERS[k], lw=0.3, zorder=3, **dots)
+            ax.plot(u, V[k, 0] * u + b[k], LINE_STYLES[k], color=T.neutral_colour, lw=1.5)
+            ax.scatter(H[:, 0], Y[:, k], s=max(small, 30), zorder=3, **target_marks(T, k))
         ax.set_xlabel(f"{label}1")
         ax.set_ylabel("ŷ and y")
-        ax.legend(fontsize=T.legend_size, loc="best")
+        ax.legend(handles=[target_handle(T, k) for k in range(len(b))], fontsize=T.legend_size, loc="best")
     elif m == 3 and hasattr(ax, "set_zlim"):
         ax.scatter(H[:, 0], H[:, 1], H[:, 2], linewidths=0.3, depthshade=False, **dots)
         for q in range(3):

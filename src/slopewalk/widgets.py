@@ -280,10 +280,13 @@ class Controller:
         self.buttons = {name: widgets.Button(description=name) for name in BUTTONS}
         self.buttons["gradient step"].button_style = "primary"
         tip(self.buttons["gradient step"], "every weight moves against its slope: w <- w - eta x dR/dw")
-        self.count = tip(
-            widgets.BoundedIntText(value=10, min=1, max=MAX_STEPS, layout=widgets.Layout(width=UI["count"])),
+        self.count = tip(  # the box and its button read as one control: "10 | steps"
+            widgets.BoundedIntText(
+                value=10, min=1, max=MAX_STEPS, layout=widgets.Layout(width=UI["count"], margin="2px 0 2px 2px")
+            ),
             f"how many gradient steps the button to the right takes, 1 to {MAX_STEPS}",
         )
+        self.buttons["10 steps"].layout.margin = "2px 2px 2px 0"
         self.count.observe(self.on_count, names="value")
         self.on_count()
         tip(self.buttons["back one step"], "undo the last gradient step, and any slider move made after it")
@@ -324,7 +327,10 @@ class Controller:
             [self.eta, self.button_row],
             layout=widgets.Layout(align_items="center", flex_flow="row wrap", margin="0 0 12px 0"),
         )
-        core = widgets.VBox([widgets.HTML(text_html(HINTS["core"])), steps_row, self.panel, self.frozen_note])
+        hint = HINTS["core"]
+        if S.task == "regression" and S.model.n_outputs > 1:
+            hint += " The targets count from 1, like the inputs x1, x2."
+        core = widgets.VBox([widgets.HTML(text_html(hint)), steps_row, self.panel, self.frozen_note])
         # tabs only for what the call asked for; the backward pass stays on while its tab exists
         self.kinds, panels = ["core"], {"core": core}
         if "backprop" in S.views:
@@ -432,11 +438,18 @@ class Controller:
         self.bp_prev.on_click(lambda _: self.to_stage(-1))
         self.bp_next.on_click(lambda _: self.to_stage(+1))
         self.bp_case.observe(self.on_backprop, names="value")
+        self.bp_where = widgets.HTML(layout=widgets.Layout(margin=f"0 {UI['gap']}"))  # "stage 2 of 6"
+        self.show_stage()
         row = widgets.HBox(
-            [self.bp_prev, self.bp_next, self.bp_case],
+            [self.bp_prev, self.bp_where, self.bp_next, self.bp_case],
             layout=widgets.Layout(align_items="center", flex_flow="row wrap"),
         )
         return widgets.VBox([widgets.HTML(text_html(HINTS["backprop"])), row])
+
+    def show_stage(self):
+        """The stage between the stage buttons, quiet, so that the controls also say where the student is."""
+        S = self.session
+        self.bp_where.value = span(f"stage {S.backprop_step} of {len(S.backprop_stages) - 1}", "text", "quiet")
 
     def views_tab(self, widgets):
         """A checkbox per view with a line on what it shows, and the settings of the views."""
@@ -524,7 +537,9 @@ class Controller:
     # ---------------------------------------------------------------- state
 
     def say(self, text):
-        self.message.value = message_html(text)
+        """The message under the status; hidden while empty, so that it leaves no gap."""
+        self.message.value = message_html(text) if text else ""
+        self.message.layout.display = "" if text else "none"
 
     def stage_words(self):
         """The message for the current stage of the backward pass: where to look in the picture."""
@@ -584,11 +599,12 @@ class Controller:
             self.say(f"{name} changed from {old:.2f} to {new:.2f}: {change_words(before, self.last_R)}.")
 
     def on_count(self, *_):
-        """The steps button says how many steps it takes."""
+        """The steps button, joined to the box with the number: "steps" (or "step" for 1), so that the two read as
+        "10 steps" once."""
         n = int(self.count.value)
         button = self.buttons["10 steps"]
-        button.description = "1 step" if n == 1 else f"{n} steps"
-        tip(button, f"{n} gradient step{'' if n == 1 else 's'} in a row; set the number in the box to the left")
+        button.description = "step" if n == 1 else "steps"
+        tip(button, f"{n} gradient step{'' if n == 1 else 's'} in a row; the number is in the box to the left")
 
     def on_eta(self, change):
         self.session.eta = float(change["new"])
@@ -607,6 +623,7 @@ class Controller:
     def on_backprop(self, *_):
         S = self.session
         S.backprop_case = ord(self.bp_case.value) - 65 if len(self.bp_case.value) == 1 else int(self.bp_case.value)
+        self.show_stage()
         if not self.busy:
             self.redraw()
             self.say(self.stage_words())

@@ -333,3 +333,26 @@ def test_wide_text_is_larger(static):
     labels = [t for t in panels(wide.fig)[0].texts if t.get_fontsize() == wide.theme.edge_label_size]
     assert len(labels) == 13  # the values still fit on the lines
     assert wide.layout.x_loss > standard.layout.x_loss
+
+
+@pytest.mark.parametrize("style", ["wide", "standard"])
+def test_one_group_is_not_stretched(style, static):
+    """With a single group the network panel is as wide as one of two side by side, in the middle of its row."""
+    torch.manual_seed(0)
+    X = torch.rand(30, 3) * 4 - 2
+    net = nn.Sequential(nn.Linear(3, 4), nn.Tanh(), nn.Linear(4, 1))
+    s = explore(net, X, X[:, 0] * X[:, 1], task="regression", layout=style)
+    (box,) = [ax.get_position() for ax in panels(s.fig)]
+    assert box.width < 0.55 and abs((box.x0 + box.x1) / 2 - 0.5) < 0.03
+
+
+def test_a_full_row_takes_width_from_the_r_curve():
+    """When the panels of a wide row need more than the figure's width, R over the steps gives up width first, so
+    that a two-block table keeps its base width."""
+    from slopewalk.layout import HISTORY_MIN
+
+    wide = Layout(2, [3], style="wide")
+    (row,) = wide.lower_rows(["plane", "history", "table", "backprop"], n_weights=21)
+    widths = dict(row)
+    assert widths["table"] == pytest.approx(7.5) and widths["history"] >= HISTORY_MIN
+    assert sum(widths.values()) == pytest.approx(27)

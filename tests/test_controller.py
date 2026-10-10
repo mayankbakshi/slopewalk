@@ -56,7 +56,7 @@ def test_widgets_are_built(live):
     assert (
         C.button_row.layout.flex_flow == "row nowrap"
         and C.count.value == 10
-        and b["10 steps"].description == "10 steps"
+        and b["10 steps"].description == "steps"  # joined to the box: "10 | steps"
     )
     assert C.layout_pick in C.layout_row.children
     assert re.sub("<[^>]+>", "", C.message.value) == ""  # nothing to report before the first action
@@ -445,18 +445,35 @@ def test_controls_follow_the_colours_switch(live):
 
 
 def test_a_chosen_number_of_steps(live):
-    """The box beside the steps button sets how many steps it takes; the button says the number."""
+    """The box joined to the steps button sets how many steps it takes; the button says "steps" ("step" for 1), so
+    that box and button read as one control."""
     s = explore(make("tanh3"), *xor_centres(), eta=0.5)
     C = s.controller
     button = C.buttons["10 steps"]
     C.count.value = 25
-    assert button.description == "25 steps" and "25 gradient steps" in button.tooltip
+    assert button.description == "steps" and "25 gradient steps" in button.tooltip
+    assert C.count.layout.margin.split()[1] == "0" and button.layout.margin.split()[3] == "0"  # no gap between them
     R0 = s.history[-1]
     button.click()
     assert len(s.history) == 26 and s.history[-1] < R0
     assert C.action[1].startswith("25 steps, predicted") and "25 gradient steps with eta 0.5" in C.message.value
     C.count.value = 1
-    assert button.description == "1 step"
+    assert button.description == "step"
     button.click()
     assert len(s.history) == 27 and C.action[1].startswith("one step")
     assert (C.count.min, C.count.max) == (1, 1000)
+
+
+def test_empty_message_leaves_no_gap_and_the_stage_is_named(live):
+    s = explore(make("tanh3"), *xor_centres(), views="backprop")
+    C = s.controller
+    assert "Press next stage" in C.message.value and C.message.layout.display == ""
+    C.say("")
+    assert C.message.layout.display == "none" and C.message.value == ""
+    assert "stage 0 of 6" in C.bp_where.value
+    C.bp_next.click()
+    assert "stage 1 of 6" in C.bp_where.value
+    row = C.tabs.children[C.kinds.index("backprop")].children[1]
+    assert list(row.children)[:3] == [C.bp_prev, C.bp_where, C.bp_next]
+    plain = explore(make("tanh3"), *xor_centres()).controller
+    assert plain.message.layout.display == "none"  # nothing to say before the first action

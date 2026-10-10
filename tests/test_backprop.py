@@ -280,10 +280,12 @@ def test_each_stage_fades_what_it_does_not_use(static):
 
     T = s.theme
     assert alpha("z1") == {None} and alpha("h1") == {None} and alpha("δ1") == {None} and alpha("∂ℓ/∂h1") == {None}
-    assert alpha("a\n") == {T.faded_alpha} and alpha("δa") == {T.faded_alpha}
+    assert alpha("a\n") == {T.faded_text_alpha} and alpha("δa") == {T.faded_text_alpha}
+    boxes = [t.get_bbox_patch().get_alpha() for t in ax.texts if t.get_text().startswith("a\n")]
+    assert boxes == [T.faded_alpha]  # the box fades more than its number
     s.backprop_step = 2
     ax = network_panels(s.draw())[0]
-    assert alpha("h1") == {None} and alpha("δa") == {None} and alpha("z1") == {T.faded_alpha}
+    assert alpha("h1") == {None} and alpha("δa") == {None} and alpha("z1") == {T.faded_text_alpha}
     lines = [ln for ln in ax.lines if ln.get_zorder() == 1]
     first = s.model.layer_indices(0)
     assert all(lines[k].get_alpha() == T.faded_line_alpha and lines[k].get_linewidth() == T.line_width for k in first)
