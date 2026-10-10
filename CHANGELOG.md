@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The Backpropagation tab has no stage slider: `previous stage` and `next stage` move through the stages, and the Worked example's title names the stage.
 - `slopewalk.help()` prints the functions with their arguments, the arguments of `explore` and the methods of the session; `slopewalk.help("explore")` or `slopewalk.help("Session.step")` prints one in full.
 - `sine_points` is gone: the examples build their points with torch (`x = torch.linspace(-2, 2, 16)[:, None]`, `y = torch.sin(1.5 * x[:, 0])`). With one input and more than 8 points, explore still makes four groups along x1.
 - The backward pass shows only what each stage uses: the boxes and lines its formula does not use fade (lines thin and faint, boxes at 30%), including backward values from earlier stages. At "through tanh", for example, z, the curves, h, ∂ℓ/∂h and the new δ stay; a and δa fade.

@@ -411,23 +411,13 @@ class Controller:
         return widgets.HBox([pick, holder])
 
     def backprop_tab(self, widgets):
-        """Previous and next stage, the stage, and the case of the Worked example below the networks."""
+        """Previous and next stage, and the case of the Worked example below the networks. The picture says which
+        stage it shows (the Worked example's title), so there is no stage slider."""
         S = self.session
-        n = len(S.backprop_stages)
         self.bp_prev = tip(widgets.Button(description="previous stage"), "the stage before")
         self.bp_next = tip(
             widgets.Button(description="next stage", button_style="primary"), "the next stage, one layer back"
         )
-        self.bp_step = widgets.IntSlider(
-            value=S.backprop_step,
-            min=0,
-            max=n - 1,
-            description="stage",
-            continuous_update=False,
-            style={"description_width": UI["label"]},
-            layout=widgets.Layout(width=UI["long"]),
-        )
-        tip(self.bp_step, "0 is the forward pass; the last stage is the average over the cases")
         letters = [chr(65 + c) if c < 26 else str(c) for c in range(S.data.G)]
         self.bp_case = widgets.Dropdown(
             options=letters,
@@ -437,12 +427,11 @@ class Controller:
             layout=widgets.Layout(width=UI["short"]),
         )
         tip(self.bp_case, "the case whose numbers the Worked example writes out (in a group: the one nearest its mean)")
-        self.bp_prev.on_click(lambda _: setattr(self.bp_step, "value", max(0, self.bp_step.value - 1)))
-        self.bp_next.on_click(lambda _: setattr(self.bp_step, "value", min(n - 1, self.bp_step.value + 1)))
-        self.bp_step.observe(self.on_backprop, names="value")
+        self.bp_prev.on_click(lambda _: self.to_stage(-1))
+        self.bp_next.on_click(lambda _: self.to_stage(+1))
         self.bp_case.observe(self.on_backprop, names="value")
         row = widgets.HBox(
-            [self.bp_prev, self.bp_next, self.bp_step, self.bp_case],
+            [self.bp_prev, self.bp_next, self.bp_case],
             layout=widgets.Layout(align_items="center", flex_flow="row wrap"),
         )
         return widgets.VBox([widgets.HTML(text_html(HINTS["backprop"])), row])
@@ -606,9 +595,14 @@ class Controller:
             r = self.session.readouts(eta)
             self.say(f"eta is now {eta:g}: the next step should change R by about {r['next_change']:+.4f}.")
 
+    def to_stage(self, change):
+        """One stage on (+1) or back (-1), within the first and the last stage."""
+        S = self.session
+        S.backprop_step = max(0, min(len(S.backprop_stages) - 1, S.backprop_step + change))
+        self.on_backprop()
+
     def on_backprop(self, *_):
         S = self.session
-        S.backprop_step = int(self.bp_step.value)
         S.backprop_case = ord(self.bp_case.value) - 65 if len(self.bp_case.value) == 1 else int(self.bp_case.value)
         if not self.busy:
             self.redraw()

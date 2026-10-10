@@ -226,10 +226,14 @@ def test_widget_controls(monkeypatch):
     png = C.image.value
     C.tabs.selected_index = 0  # the other tab: the backward pass stays in the picture, which does not change
     assert "backprop" in s.views and s.backprop_step == 1 and C.image.value == png
-    C.bp_step.value = 0
-    assert C.bp_prev.disabled and not C.bp_next.disabled  # the stage buttons stop at the ends
-    C.bp_step.value = 6
-    assert C.bp_next.disabled and not C.bp_prev.disabled
+    C.bp_prev.click()
+    assert s.backprop_step == 0 and C.bp_prev.disabled and not C.bp_next.disabled  # the buttons stop at the ends
+    for _ in range(6):
+        C.bp_next.click()
+    assert s.backprop_step == 6 and C.bp_next.disabled and not C.bp_prev.disabled
+    C.to_stage(+1)  # nothing beyond the last stage
+    assert s.backprop_step == 6
+    assert not hasattr(C, "bp_step")  # no stage slider: the picture names the stage
     starts_on = explore(reference_net(40), *XOR, backprop_step=3).controller
     assert starts_on.tabs.selected_index == 1
     plt.close("all")

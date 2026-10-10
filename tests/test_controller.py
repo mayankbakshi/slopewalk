@@ -353,7 +353,7 @@ def test_text_takes_the_colour_of_the_root(live):
 def test_sliders_apply_on_release(live):
     s = explore(make("tanh3"), *xor_centres(), views=("backprop", "momentum"))
     C = s.controller
-    assert not any(w.continuous_update for w in [*C.sliders, C.eta, C.bp_step, C.beta, C.ahead])
+    assert not any(w.continuous_update for w in [*C.sliders, C.eta, C.beta, C.ahead])
 
 
 def test_a_slider_marks_its_weight(live):
