@@ -2768,11 +2768,12 @@ def worked_group(S):
 
 def quiet_panel(S, F, c):
     """True when network panel c shows no backward numbers at this stage: with numbers="few", every panel but the
-    Worked example's group, except at the average stage, which is about every case."""
+    Worked example's group, except at the average stage, which is about every case. When that group is not shown
+    (focus), every panel shown keeps its own numbers."""
     st = F.stage
     if S.numbers == "all" or st is None or st.kind in ("forward", "average"):
         return False
-    return c != worked_group(S)
+    return c != worked_group(S) and worked_group(S) in S.shown
 
 
 def names_panel(S, stage):

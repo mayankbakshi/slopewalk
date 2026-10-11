@@ -242,6 +242,13 @@ def test_the_numbers_follow_the_worked_example(static):
     assert sum(t.get_text().startswith("δ") for t in worked.texts) == 3  # δ1 to δ3, nothing from earlier stages
     with pytest.raises(ValueError, match="numbers must be 'few' or 'all'"):
         Session(reference_net(40), *XOR, numbers="some")
+    # the Worked example's group hidden by focus: the panels shown keep their own numbers (the current stage only)
+    alone = explore(reference_net(40), *XOR, focus="A", views="backprop", backprop_step=2, backprop_case="D")
+    (ax,) = network_panels(alone.fig)
+    assert len(backward_boxes(ax, alone.theme)) == 1 and any(t.get_text().startswith("δa\n") for t in ax.texts)
+    assert sum(t.get_fontsize() == alone.theme.edge_label_size for t in ax.texts) == 4
+    assert sum(ln.get_alpha() == 1.0 for ln in ax.lines if ln.get_zorder() == 1) == 4
+    assert any(heading(a).startswith("Worked example: case D") for a in alone.fig.axes)
     plt.close("all")
 
 
