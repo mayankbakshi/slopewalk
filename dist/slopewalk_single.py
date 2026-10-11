@@ -708,6 +708,7 @@ def prepare(X, y, groups=None, n_inputs=None, dtype=torch.float32, task=None, n_
 
 BW = 0.27  # half-width of a value box; lines end this far from the centre of the box
 TABLE_ROWS = 15  # rows per column of the slope table
+LABELS_UP_TO = 15  # networks with more weights carry no values on their lines (numbers="few"); the table has them
 LABEL_FRACTIONS = np.linspace(0.14, 0.86, 13)  # where along a line a label may sit
 LABEL_SHIFTS = (0.0, 0.8, -0.8, 1.6, -1.6, 2.4, -2.4, 3.2, -3.2, 4.0, -4.0, 4.8, -4.8)  # sideways shifts
 LABEL_TOLERANCE = 0.02  # a label may overlap other labels or the boxes by at most this fraction of its area
@@ -802,6 +803,12 @@ class Layout:
     def show_names(n_weights):
         """Names and values on the lines for small networks, values only above 9 weights."""
         return n_weights <= 9
+
+    @staticmethod
+    def show_values(n_weights):
+        """Values on the lines up to LABELS_UP_TO weights; above that the lines carry no numbers (the table has them)
+        unless numbers="all"."""
+        return n_weights <= LABELS_UP_TO
 
     def narrow(self):
         """A network narrow enough for two panels side by side in the standard figure (at most one hidden layer)."""
@@ -1249,6 +1256,8 @@ def label_variants(S, F, edges, spec):
         if any(len(spec[k]) > 3 for k in ks):
             out.append(("values", [spec[k][3] if len(spec[k]) > 3 else spec[k][1] for k in ks]))
         return out
+    if S.numbers == "few" and not S.layout.show_values(len(w)):
+        return []  # more than LABELS_UP_TO weights: the lines carry no numbers; the table has them
     named = "{} = {:.2f}"
     if S.layout.show_names(len(w)):
         return [("names", [named.format(M.names[k], w[k]) for k in ks]), ("values", [f"{w[k]:.2f}" for k in ks])]
@@ -1323,11 +1332,11 @@ def put_labels(ax, S, F, edges, labels, positions, spec):
         )
 
 
-def draw_shared_note(ax, S):
-    """Network panels after the first: their lines carry no numbers, because the weights are those of the first
-    panel (A, or the first group shown)."""
+def draw_shared_note(ax, S, c=None):
+    """Network panels whose lines carry no numbers, because the weights are those of panel c (the first group shown
+    when c is None)."""
     T = S.theme
-    note = f"weights as in {letter(S.shown[0])}"
+    note = f"weights as in {letter(S.shown[0] if c is None else c)}"
     ax.text(0.01, 0.02, note, transform=ax.transAxes, fontsize=T.glyph_name_size, color=T.curve)
 
 
@@ -1374,8 +1383,8 @@ def draw_case(ax, S, F, c, styles=None):
     value = dict(fontsize=T.value_size, ha="center", va="center", zorder=5, bbox=T.value_box, color=T.ink)
     h_value = dict(value, bbox=dict(T.value_box, ec=T.hidden, lw=1.2))  # the hidden layer: a green border
     edges, obstacles = [], []  # edges: (k, source, target, preferred label fraction); obstacles: boxes to keep clear
-    # in the backpropagation view the names of the values are written once, in panel A; the other panels show values
-    tag = (lambda name: f"{name}\n") if c == S.shown[0] or F.stage is None else (lambda name: "")
+    # in the backpropagation view the names of the values are written once (F.names_panel); the others show values
+    tag = (lambda name: f"{name}\n") if F.stage is None or c == F.names_panel else (lambda name: "")
     src = [(0.12, yy) for yy in L.y_inputs]
     src_x, k = 0.0, 0
     for l, layer in enumerate(M.layers):
@@ -2752,14 +2761,40 @@ def stage_index(S):
     return max(0, min(S.backprop_step, len(S.backprop_stages) - 1))
 
 
-def line_styles(S, F):
-    """Colour, opacity and width of each weight's line at the current stage, or None for the usual drawing. The
-    lines the stage does not use are thin and faint, in the weight's own colour."""
+def worked_group(S):
+    """The group whose case the Worked example follows."""
+    return max(0, min(S.backprop_case, S.data.G - 1))
+
+
+def quiet_panel(S, F, c):
+    """True when network panel c shows no backward numbers at this stage: with numbers="few", every panel but the
+    Worked example's group, except at the average stage, which is about every case."""
+    st = F.stage
+    if S.numbers == "all" or st is None or st.kind in ("forward", "average"):
+        return False
+    return c != worked_group(S)
+
+
+def names_panel(S, stage):
+    """The network panel that carries the names of the values and of the slopes: the first panel shown, or, with
+    numbers="few" in the backward pass, the Worked example's group, where the backward numbers are."""
+    backward = stage is not None and stage.kind not in ("forward", "average")
+    if S.numbers == "few" and backward and worked_group(S) in S.shown:
+        return worked_group(S)
+    return S.shown[0]
+
+
+def line_styles(S, F, c):
+    """Colour, opacity and width of each weight's line in panel c at the current stage, or None for the usual
+    drawing. The lines the stage does not use are thin and faint, in the weight's own colour; in a panel without
+    backward numbers (quiet_panel), every line is."""
     st = F.stage
     if st is None or st.kind == "forward":
         return None
     M, T = S.model, S.theme
     styles = {k: (None, T.faded_line_alpha, T.line_width) for k in range(M.n_weights)}
+    if quiet_panel(S, F, c):
+        return styles
     if st.kind == "weights":
         for k in M.layer_indices(st.layer):
             styles[k] = (T.backprop_colour, 1.0, None)
@@ -2814,13 +2849,15 @@ def label_spec(S, F, c):
     st = F.stage
     if st is None or st.kind == "forward":
         return None
+    if quiet_panel(S, F, c):
+        return {}
     M, T, D = S.model, S.theme, S.data
     g = F.bp.grads[D.gsel[c]].mean(0)
     spec = {}
     if st.kind in ("weights", "average"):
         ks = M.layer_indices(st.layer) if st.kind == "weights" else range(M.n_weights)
         for k in ks:
-            long = f"∂ℓ/∂{M.names[k]} = {g[k]:+.3f}" if c == S.shown[0] else f"{g[k]:+.3f}"  # names once
+            long = f"∂ℓ/∂{M.names[k]} = {g[k]:+.3f}" if c == F.names_panel else f"{g[k]:+.3f}"  # names once
             spec[k] = (long, f"{g[k]:+.3f}", T.backprop_colour, f"{g[k]:+.2f}")
     elif st.kind == "to_h":
         for k in M.layer_indices(st.layer + 1):
@@ -2874,25 +2911,29 @@ def overlay(ax, S, F, c, edges):
     h boxes, delta under the z boxes; at the "through the activation" stage, the tangents on the glyphs; at the
     "back to h" stage, arrows back along the lines used."""
     st = F.stage
-    if st is None or st.kind == "forward":
+    if st is None or st.kind == "forward" or quiet_panel(S, F, c):
         return
     M, D, L, T = S.model, S.data, S.layout, S.theme
     bp = F.bp
     sel = D.gsel[c]
     reached = S.backprop_stages[1 : stage_index(S) + 1]
-    tag = (lambda name: f"{name}\n") if c == S.shown[0] else (lambda name: "")  # the names once, first panel
+    keep = focus(S, F) if S.numbers == "few" else None  # few: only the boxes the current stage works with
+    tag = (lambda name: f"{name}\n") if c == F.names_panel else (lambda name: "")  # the names once
     for s in reached:
+        key = ("δa",) if s.kind == "output" else ("dh", s.layer) if s.kind == "to_h" else ("δ", s.layer)
+        if s.kind == "weights" or s.kind == "average" or (keep is not None and key not in keep):
+            continue
         if s.kind == "output":  # under each score: one box, or one per class
-            with tagging(ax, ("δa",)):
+            with tagging(ax, key):
                 for k, ty in enumerate(L.unit_ys(M.n_outputs)):
                     m, sd = D.stats(bp.delta[-1][:, k], c)
                     box(ax, L.x_a, ty, tag("δ" + output_name(M, k)) + num(m, sd), T)
-        elif s.kind in ("to_h", "delta"):
+        else:
             l = s.layer
             XZ, XG, XH = L.blocks[l]
             tys = L.unit_ys(M.layers[l].out_features)
             values = bp.dh[l] if s.kind == "to_h" else bp.delta[l]
-            with tagging(ax, ("dh", l) if s.kind == "to_h" else ("δ", l)):
+            with tagging(ax, key):
                 for j, ty in enumerate(tys):
                     m, sd = D.stats(values[:, j], c)
                     nm = M.unit_name(l, j)
@@ -3064,11 +3105,13 @@ def draw_derivation(ax, S, F):
     bold. Its heading, "Worked example" in the colour of the backward pass, sits above the title of the stage."""
     T = S.theme
     ax.axis("off")
-    c = max(0, min(S.backprop_case, S.data.G - 1))
+    c = worked_group(S)
     i = traced_case(S, c)
     step = stage_index(S)
     stage = S.backprop_stages[step]
-    lines = [(s, t) for s, t in derivation_lines(S, F, i) if s <= step]
+    all_lines = derivation_lines(S, F, i)
+    few = S.numbers == "few"  # the current stage's lines only; "all": every stage reached so far
+    lines = [(s, t) for s, t in all_lines if (s == step if few else s <= step)]
     per_column, columns = 12, 2  # the steps run down the first column, then the second
     most = per_column * columns
     shown = lines[-most:]
@@ -3095,8 +3138,8 @@ def draw_derivation(ax, S, F):
     ax.annotate(case, xy=(1, 0), xycoords=head, ha="left", va="bottom", fontsize=T.panel_title_size, color=T.ink)
     dy = 0.96 / per_column
     if len(lines) > most:
-        shown = [(None, "... (earlier steps above)")] + shown[1:]
-    fontsize = fitting_size(ax, T, [t for _, t in derivation_lines(S, F, i)], columns)
+        shown = [(None, "... (earlier lines above)" if few else "... (earlier steps above)")] + shown[1:]
+    fontsize = fitting_size(ax, T, [t for _, t in all_lines], columns)
     for n, (s, text) in enumerate(shown):
         current = s == step
         col, row = divmod(n, per_column)
@@ -3116,7 +3159,7 @@ def draw_derivation(ax, S, F):
 Frame = namedtuple(
     "Frame",
     "w out R g deltas changed moving history predictions eta next_change cases lookahead bp stage by_hand "
-    "direction history_test R_test",
+    "direction history_test R_test names_panel",
 )
 LIVE_DPI = 100  # resolution of the picture shown by the widgets
 
@@ -3166,6 +3209,7 @@ def make_frame(S, w=None):
         direction,
         list(S.history_test),
         R_test,
+        names_panel(S, stage),
     )
 
 
@@ -3235,10 +3279,9 @@ class Picture:
         if self.laid_out:
             for ax in self.case_axes + list(self.axes.values()):
                 ax.clear()
-        styles = line_styles(S, F)
         if list(S.shown) != self.shown:
             raise ValueError("slopewalk: the groups shown changed; build the picture again.")
-        parts = [draw_case(ax, S, F, c, styles) for c, ax in zip(self.shown, self.case_axes)]
+        parts = [draw_case(ax, S, F, c, line_styles(S, F, c)) for c, ax in zip(self.shown, self.case_axes)]
         keep = focus(S, F)  # the backward pass fades what its stage does not use
         for c, ax, (edges, _) in zip(self.shown, self.case_axes, parts):
             overlay(ax, S, F, c, edges)
@@ -3254,14 +3297,15 @@ class Picture:
             style_panel(ax, S.theme)
         if not self.laid_out:
             self.layout()
-        shared = shared_labels(F)  # the weights are the same in every panel: the first panel carries their labels
-        first = "none"
-        for i, (c, ax, (edges, obstacles)) in enumerate(zip(self.shown, self.case_axes, parts)):
-            if i == 0 or not shared:
-                mode = draw_edge_labels(ax, S, F, edges, obstacles, label_spec(S, F, c))
-                first = mode if i == 0 else first
-            elif first != "none":
-                draw_shared_note(ax, S)
+        shared = shared_labels(F)  # the weights are the same in every panel: one panel carries their labels
+        modes = {}
+        for c, ax, (edges, obstacles) in zip(self.shown, self.case_axes, parts):
+            if c == F.names_panel or not shared:
+                modes[c] = draw_edge_labels(ax, S, F, edges, obstacles, label_spec(S, F, c))
+        if shared and modes.get(F.names_panel, "none") != "none":
+            for c, ax in zip(self.shown, self.case_axes):
+                if c != F.names_panel:
+                    draw_shared_note(ax, S, F.names_panel)
         S.model.set_weights(F.w)
         self.frame = F
         return self.fig
@@ -3366,7 +3410,9 @@ HINTS = {
     "core": "Press gradient step to move every weight against its slope, or set a number in the box to take that many "
     "steps. Drag a slider to change one weight.",
     "backprop": "Step from the output back to the first layer. The Worked example below the networks writes out the "
-    "numbers for one case.",
+    "current stage for one case, and that case's panel shows its numbers.",
+    "backprop all": "Step from the output back to the first layer. The Worked example below the networks writes out "
+    "the numbers for one case.",
     "views": "Tick a box to add a view under the network.",
 }
 BUTTONS = ("gradient step", "10 steps", "back one step", "reset")  # "10 steps" is the key; its label follows the box
@@ -3759,7 +3805,8 @@ class Controller:
             [self.bp_prev, self.bp_where, self.bp_next, self.bp_case],
             layout=widgets.Layout(align_items="center", flex_flow="row wrap"),
         )
-        return widgets.VBox([widgets.HTML(text_html(HINTS["backprop"])), row])
+        hint = HINTS["backprop" if self.session.numbers == "few" else "backprop all"]
+        return widgets.VBox([widgets.HTML(text_html(hint)), row])
 
     def show_stage(self):
         """The stage between the stage buttons, quiet, so that the controls also say where the student is."""
@@ -3861,7 +3908,11 @@ class Controller:
         S = self.session
         kind = S.backprop_stages[S.backprop_step].kind
         several = " several" if S.task == "regression" and S.model.n_outputs > 1 else ""
-        return LOOK.get(f"{kind} {S.task}{several}", LOOK.get(f"{kind} {S.task}", LOOK[kind]))
+        text = LOOK.get(f"{kind} {S.task}{several}", LOOK.get(f"{kind} {S.task}", LOOK[kind]))
+        if S.numbers == "few" and kind in ("output", "weights", "to_h", "delta"):  # one panel carries the numbers
+            text = f"In panel {letter(worked_group(S))}: " + text[0].lower() + text[1:]
+            text = text.replace("of each case", "of the case")
+        return text
 
     def action_buttons(self):
         return [*self.buttons.values()] + ([self.bp_prev, self.bp_next] if "backprop" in self.kinds else [])
@@ -4372,6 +4423,12 @@ def check_beta(beta):
     return float(beta)
 
 
+def check_numbers(numbers):
+    if numbers not in ("few", "all"):
+        raise ValueError(f"slopewalk: numbers must be 'few' or 'all', not {numbers!r}.")
+    return numbers
+
+
 def auto_layout():
     """The layout of explore(layout="auto"): wide for the widgets in Jupyter or VS Code; standard in Colab (its
     notebooks have a fixed width), for still pictures (NB_STATIC=1) and without ipywidgets."""
@@ -4437,6 +4494,7 @@ class Session:
         optimizer=None,
         weight_decay=None,
         beta2=0.999,
+        numbers="few",
     ):
         self.model = Model(net)
         M = self.model
@@ -4451,6 +4509,7 @@ class Session:
             )
         self.optimizer_asked = optimizer is not None or weight_decay is not None  # the widgets then show the row
         self.optimizer = Optimizer(optimizer or "gd", weight_decay or 0.0, check_beta(beta), beta2)
+        self.numbers = check_numbers(numbers)
         self.layout = Layout(M.n_inputs, M.hidden, self.task, style=layout, width=width, outputs=M.n_outputs)
         self.base_theme, self.theme_name = THEMES["light"], "light"
         self.shown = list(range(self.data.G))
@@ -4828,6 +4887,7 @@ def explore(
     optimizer=None,
     weight_decay=None,
     beta2=0.999,
+    numbers="few",
 ):
     """Gradient descent by hand on `net`, with inputs X (n x d) and labels y.
 
@@ -4861,6 +4921,11 @@ def explore(
     weight_decay: lambda, added to each slope as lambda * w before the step (as torch.optim's weight_decay). R stays
     the mean loss on the data, so the table and the backward pass show its slopes; the first-order prediction is the
     slopes times the step. Passing optimizer or weight_decay shows a row of controls for them.
+    numbers: "few" (the default): in the backward pass, the numbers of the current stage appear in the panel of the
+    Worked example's case (the other panels are faded, and the last stage, the average over the cases, shows every
+    panel's slopes), the Worked example lists the current stage only, and networks with more than 15 weights carry no
+    values on their lines (the table has them). "all": every stage reached so far in every panel, and values on the
+    lines wherever they fit.
 
     Draws one copy of the network per group (every value a mean ± standard deviation over the group), with each
     weight on its line, the units as z, activation and h, then the output and the loss with its change from the
@@ -4899,6 +4964,7 @@ def explore(
         optimizer=optimizer,
         weight_decay=weight_decay,
         beta2=beta2,
+        numbers=numbers,
     )
     session.set_theme(theme)
     if os.environ.get("NB_STATIC") == "1":
@@ -4940,6 +5006,11 @@ OPTIONS = (  # the arguments of explore, one line each
     ("optimizer", "the rule of a step: 'gd' (the default), 'momentum' or 'adam'; passing it shows its controls"),
     ("weight_decay", "lambda: lambda * w is added to each slope before the step; R stays the loss on the data"),
     ("beta2", "Adam's share of the last squared slopes (beta is its share of the last slopes)"),
+    (
+        "numbers",
+        "'few' (the default): the backward pass shows the current stage in the Worked example's panel, and above 15 "
+        "weights the lines carry no values; 'all': every stage reached, every panel, values on every line that fits",
+    ),
 )
 SESSION = (
     "step",

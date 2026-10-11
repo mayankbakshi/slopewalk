@@ -139,14 +139,40 @@ def stage_index(S):
     return max(0, min(S.backprop_step, len(S.backprop_stages) - 1))
 
 
-def line_styles(S, F):
-    """Colour, opacity and width of each weight's line at the current stage, or None for the usual drawing. The
-    lines the stage does not use are thin and faint, in the weight's own colour."""
+def worked_group(S):
+    """The group whose case the Worked example follows."""
+    return max(0, min(S.backprop_case, S.data.G - 1))
+
+
+def quiet_panel(S, F, c):
+    """True when network panel c shows no backward numbers at this stage: with numbers="few", every panel but the
+    Worked example's group, except at the average stage, which is about every case."""
+    st = F.stage
+    if S.numbers == "all" or st is None or st.kind in ("forward", "average"):
+        return False
+    return c != worked_group(S)
+
+
+def names_panel(S, stage):
+    """The network panel that carries the names of the values and of the slopes: the first panel shown, or, with
+    numbers="few" in the backward pass, the Worked example's group, where the backward numbers are."""
+    backward = stage is not None and stage.kind not in ("forward", "average")
+    if S.numbers == "few" and backward and worked_group(S) in S.shown:
+        return worked_group(S)
+    return S.shown[0]
+
+
+def line_styles(S, F, c):
+    """Colour, opacity and width of each weight's line in panel c at the current stage, or None for the usual
+    drawing. The lines the stage does not use are thin and faint, in the weight's own colour; in a panel without
+    backward numbers (quiet_panel), every line is."""
     st = F.stage
     if st is None or st.kind == "forward":
         return None
     M, T = S.model, S.theme
     styles = {k: (None, T.faded_line_alpha, T.line_width) for k in range(M.n_weights)}
+    if quiet_panel(S, F, c):
+        return styles
     if st.kind == "weights":
         for k in M.layer_indices(st.layer):
             styles[k] = (T.backprop_colour, 1.0, None)
@@ -201,13 +227,15 @@ def label_spec(S, F, c):
     st = F.stage
     if st is None or st.kind == "forward":
         return None
+    if quiet_panel(S, F, c):
+        return {}
     M, T, D = S.model, S.theme, S.data
     g = F.bp.grads[D.gsel[c]].mean(0)
     spec = {}
     if st.kind in ("weights", "average"):
         ks = M.layer_indices(st.layer) if st.kind == "weights" else range(M.n_weights)
         for k in ks:
-            long = f"∂ℓ/∂{M.names[k]} = {g[k]:+.3f}" if c == S.shown[0] else f"{g[k]:+.3f}"  # names once
+            long = f"∂ℓ/∂{M.names[k]} = {g[k]:+.3f}" if c == F.names_panel else f"{g[k]:+.3f}"  # names once
             spec[k] = (long, f"{g[k]:+.3f}", T.backprop_colour, f"{g[k]:+.2f}")
     elif st.kind == "to_h":
         for k in M.layer_indices(st.layer + 1):
@@ -261,25 +289,29 @@ def overlay(ax, S, F, c, edges):
     h boxes, delta under the z boxes; at the "through the activation" stage, the tangents on the glyphs; at the
     "back to h" stage, arrows back along the lines used."""
     st = F.stage
-    if st is None or st.kind == "forward":
+    if st is None or st.kind == "forward" or quiet_panel(S, F, c):
         return
     M, D, L, T = S.model, S.data, S.layout, S.theme
     bp = F.bp
     sel = D.gsel[c]
     reached = S.backprop_stages[1 : stage_index(S) + 1]
-    tag = (lambda name: f"{name}\n") if c == S.shown[0] else (lambda name: "")  # the names once, first panel
+    keep = focus(S, F) if S.numbers == "few" else None  # few: only the boxes the current stage works with
+    tag = (lambda name: f"{name}\n") if c == F.names_panel else (lambda name: "")  # the names once
     for s in reached:
+        key = ("δa",) if s.kind == "output" else ("dh", s.layer) if s.kind == "to_h" else ("δ", s.layer)
+        if s.kind == "weights" or s.kind == "average" or (keep is not None and key not in keep):
+            continue
         if s.kind == "output":  # under each score: one box, or one per class
-            with tagging(ax, ("δa",)):
+            with tagging(ax, key):
                 for k, ty in enumerate(L.unit_ys(M.n_outputs)):
                     m, sd = D.stats(bp.delta[-1][:, k], c)
                     box(ax, L.x_a, ty, tag("δ" + output_name(M, k)) + num(m, sd), T)
-        elif s.kind in ("to_h", "delta"):
+        else:
             l = s.layer
             XZ, XG, XH = L.blocks[l]
             tys = L.unit_ys(M.layers[l].out_features)
             values = bp.dh[l] if s.kind == "to_h" else bp.delta[l]
-            with tagging(ax, ("dh", l) if s.kind == "to_h" else ("δ", l)):
+            with tagging(ax, key):
                 for j, ty in enumerate(tys):
                     m, sd = D.stats(values[:, j], c)
                     nm = M.unit_name(l, j)
@@ -451,11 +483,13 @@ def draw_derivation(ax, S, F):
     bold. Its heading, "Worked example" in the colour of the backward pass, sits above the title of the stage."""
     T = S.theme
     ax.axis("off")
-    c = max(0, min(S.backprop_case, S.data.G - 1))
+    c = worked_group(S)
     i = traced_case(S, c)
     step = stage_index(S)
     stage = S.backprop_stages[step]
-    lines = [(s, t) for s, t in derivation_lines(S, F, i) if s <= step]
+    all_lines = derivation_lines(S, F, i)
+    few = S.numbers == "few"  # the current stage's lines only; "all": every stage reached so far
+    lines = [(s, t) for s, t in all_lines if (s == step if few else s <= step)]
     per_column, columns = 12, 2  # the steps run down the first column, then the second
     most = per_column * columns
     shown = lines[-most:]
@@ -482,8 +516,8 @@ def draw_derivation(ax, S, F):
     ax.annotate(case, xy=(1, 0), xycoords=head, ha="left", va="bottom", fontsize=T.panel_title_size, color=T.ink)
     dy = 0.96 / per_column
     if len(lines) > most:
-        shown = [(None, "... (earlier steps above)")] + shown[1:]
-    fontsize = fitting_size(ax, T, [t for _, t in derivation_lines(S, F, i)], columns)
+        shown = [(None, "... (earlier lines above)" if few else "... (earlier steps above)")] + shown[1:]
+    fontsize = fitting_size(ax, T, [t for _, t in all_lines], columns)
     for n, (s, text) in enumerate(shown):
         current = s == step
         col, row = divmod(n, per_column)

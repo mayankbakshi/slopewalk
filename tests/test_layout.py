@@ -71,9 +71,14 @@ def test_label_modes(static):
     values_only = explore(make("tanh3"), X, y, groups)
     labels = [t.get_text() for t in panels(values_only.fig)[0].texts if t.get_fontsize() == THEME.edge_label_size]
     assert len(labels) == 13 and not any(label.startswith("w") for label in labels)
-    wide = explore(make("wide"), X, y, groups)  # 12 units, 49 weights: the rows grow, the values still fit
+    wide = explore(make("wide"), X, y, groups, numbers="all")  # 12 units, 49 weights: the rows grow, the values fit
     counts = [sum(t.get_fontsize() == THEME.edge_label_size for t in ax.texts) for ax in panels(wide.fig)]
     assert counts == [49, 0, 0, 0]  # the weights are the same in every panel: the first panel carries the labels
+    few = explore(make("wide"), X, y, groups)  # by default, above 15 weights the lines carry no values
+    assert all(not any(t.get_fontsize() == THEME.edge_label_size for t in ax.texts) for ax in panels(few.fig))
+    assert not any(t.get_text().startswith("weights as in") for ax in panels(few.fig) for t in ax.texts)
+    counts = [sum(t.get_fontsize() == THEME.edge_label_size for t in ax.texts) for ax in panels(values_only.fig)]
+    assert counts == [13, 0, 0, 0]  # 13 weights keep their values
     torch.manual_seed(0)
     crowded = nn.Sequential(nn.Linear(2, 20), nn.Tanh(), nn.Linear(20, 1))  # 81 weights: no room for labels
     none = explore(crowded, X, y, groups)
@@ -220,7 +225,7 @@ WIDE = {
 @pytest.mark.parametrize("name", list(WIDE))
 def test_edge_labels_do_not_overlap_in_the_wide_layout(name, static):
     net, X, y, groups = WIDE[name]()
-    s = explore(net, X, y, groups, layout="wide")
+    s = explore(net, X, y, groups, layout="wide", numbers="all")  # values on the lines whatever the count
     for c, ax in enumerate(panels(s.fig)):
         labels, others, glyphs = boxes_of(s.fig, ax, s.theme.edge_label_size)
         assert len(labels) == (len(s.names) if c == 0 else 0)  # the first panel carries every weight's label
@@ -238,7 +243,7 @@ def test_edge_labels_do_not_overlap_in_the_wide_layout(name, static):
 def test_backprop_labels_do_not_overlap(step, style, static):
     from render_examples import reference_net
 
-    s = explore(reference_net(40), *xor_centres(), views="backprop", backprop_step=step, layout=style)
+    s = explore(reference_net(40), *xor_centres(), views="backprop", backprop_step=step, layout=style, numbers="all")
     expected = {2: [4] * 4, 3: [3, 0, 0, 0], 5: [9] * 4, 6: [13] * 4}[step]  # per-case slopes go in every panel
     assert [len(boxes_of(s.fig, ax, s.theme.edge_label_size)[0]) for ax in panels(s.fig)] == expected
     for ax in panels(s.fig):

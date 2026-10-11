@@ -355,7 +355,7 @@ def test_controls(monkeypatch):
     heads = [w.children[0].value for w in C.panel.children if isinstance(w, ipywidgets.VBox)]
     assert heads[-3:] == [f"<b>output unit, class {k}</b>: weights for h1, h2, h3, bias" for k in range(3)]
     C.bp_next.click()
-    assert "Under each score ak, the purple box is δak = pk - yk" in C.message.value
+    assert "In panel A: under each score ak, the purple box is δak = pk - yk of the case" in C.message.value
     C.buttons["gradient step"].click()
     assert len(s.history) == 2 and s.history[1] < s.history[0]
 

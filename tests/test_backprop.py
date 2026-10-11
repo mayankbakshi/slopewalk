@@ -113,23 +113,27 @@ def test_traced_case_is_nearest_the_group_mean():
     assert i == idx[np.argmin(d)]
 
 
-def backward_boxes(ax):
-    return [t for t in ax.texts if t.get_fontsize() == THEME.backprop_size and t.get_color() == THEME.backprop_colour]
+def backward_boxes(ax, T=THEME):
+    return [t for t in ax.texts if t.get_fontsize() == T.backprop_size and t.get_color() == T.backprop_colour]
 
 
 def network_panels(fig):
     return [ax for ax in fig.axes if re.match(r"^[A-Z]: ", ax.get_title())]
 
 
-def test_pictures_of_every_stage(static):
-    s = explore(reference_net(40), *XOR, views="backprop")
-    expected_boxes = [0, 1, 1, 4, 7, 7, 7]  # delta_a, then dl/dh1..3, then delta1..3
+@pytest.mark.parametrize("numbers", ["few", "all"])
+def test_pictures_of_every_stage(numbers, static):
+    """numbers="all": every stage reached so far, in every panel (delta_a, then dl/dh1..3, then delta1..3). "few",
+    the default: only the boxes the current stage works with, in the Worked example's panel (A here)."""
+    s = explore(reference_net(40), *XOR, views="backprop", numbers=numbers)
+    expected_boxes = [0, 1, 1, 4, 7, 7, 7] if numbers == "all" else [0, 1, 1, 4, 6, 3, 0]
     for k, n_boxes in enumerate(expected_boxes):
         s.backprop_step = k
         fig = s.draw()
         panels = network_panels(fig)
         assert len(panels) == 4
-        assert [len(backward_boxes(ax)) for ax in panels] == [n_boxes] * 4
+        others = n_boxes if numbers == "all" else 0
+        assert [len(backward_boxes(ax)) for ax in panels] == [n_boxes] + [others] * 3
         labels = [t for t in panels[0].texts if t.get_fontsize() == THEME.edge_label_size]
         kind = s.backprop_stages[k].kind
         assert (
@@ -204,6 +208,43 @@ def test_record_backprop(tmp_path):
     assert plt.get_fignums() == []
 
 
+def test_the_numbers_follow_the_worked_example(static):
+    """By default (numbers="few") the backward numbers of the current stage are in the Worked example's panel, with
+    the names of the values; the other panels are faded, their lines faint; at "back to h" they say whose weights
+    are labelled; the Worked example lists the current stage only; the average stage is drawn in every panel."""
+    s = explore(reference_net(40), *XOR, views="backprop", backprop_step=2, backprop_case="D")
+    T = s.theme
+    P = network_panels(s.fig)
+    assert [len(backward_boxes(ax)) for ax in P] == [0, 0, 0, 1]
+    assert any(t.get_text().startswith("δa\n") for t in P[3].texts)
+    assert any(t.get_text().startswith("h1\n") for t in P[3].texts)  # the names moved to panel D
+    assert not any(t.get_text().startswith(("h1\n", "δa")) for ax in P[:3] for t in ax.texts)
+    labels = [t for t in P[3].texts if t.get_fontsize() == THEME.edge_label_size]
+    assert [sum(t.get_fontsize() == THEME.edge_label_size for t in ax.texts) for ax in P] == [0, 0, 0, 4]
+    assert all(t.get_color() == T.backprop_colour for t in labels)  # the slopes of case D (values: 13 weights)
+    for ax in P[:3]:  # a quiet panel: every line thin and faint
+        lines = [ln for ln in ax.lines if ln.get_zorder() == 1]
+        assert all(ln.get_alpha() == T.faded_line_alpha and ln.get_linewidth() == T.line_width for ln in lines)
+    assert sum(ln.get_alpha() == 1.0 for ln in P[3].lines if ln.get_zorder() == 1) == 4
+    worked = [ax for ax in s.fig.axes if heading(ax).startswith("Worked example: case D")][0]
+    lines = [t.get_text() for t in worked.texts if t.get_text().startswith(("w1", "δ", "forward", "p ="))]
+    assert len(lines) == 4 and all(t.startswith("w1") for t in lines)  # the current stage only: w10 to w13
+    s.backprop_step = 3  # back to h: the weights used, labelled in panel D, the others marked
+    P = network_panels(s.draw())
+    assert [sum(t.get_fontsize() == THEME.edge_label_size for t in ax.texts) for ax in P] == [0, 0, 0, 3]
+    assert all(any(t.get_text() == "weights as in D" for t in ax.texts) for ax in P[:3])
+    s.backprop_step = 6  # the average over the cases: every panel's slopes, the names in panel A
+    P = network_panels(s.draw())
+    assert [sum(t.get_fontsize() == THEME.edge_label_size for t in ax.texts) for ax in P] == [13, 13, 13, 13]
+    assert any(t.get_text().startswith("h1\n") for t in P[0].texts)  # the names back in panel A
+    s.backprop_step = 4
+    worked = [ax for ax in s.draw().axes if heading(ax).startswith("Worked example: case D")][0]
+    assert sum(t.get_text().startswith("δ") for t in worked.texts) == 3  # δ1 to δ3, nothing from earlier stages
+    with pytest.raises(ValueError, match="numbers must be 'few' or 'all'"):
+        Session(reference_net(40), *XOR, numbers="some")
+    plt.close("all")
+
+
 def test_widget_controls(monkeypatch):
     pytest.importorskip("ipywidgets")
     import IPython.display
@@ -217,12 +258,15 @@ def test_widget_controls(monkeypatch):
     C.bp_next.click()
     C.bp_next.click()
     assert s.backprop_step == 2 and C.image.value != png
-    assert "On the purple lines" in C.message.value
+    assert C.message.value.count("In panel A: on the purple lines") == 1  # the numbers are in panel A
     assert not C.bp_prev.disabled and not C.bp_next.disabled
     C.bp_prev.click()
     assert s.backprop_step == 1
     C.bp_case.value = "D"
     assert s.backprop_case == 3 and any(heading(ax).startswith("Worked example: case D") for ax in s.fig.axes)
+    assert "In panel D: under a, the purple box is δa = p - y of the case." in C.message.value
+    boxes = [len(backward_boxes(ax, s.theme)) for ax in network_panels(s.fig)]  # the wide layout scales the text
+    assert boxes == [0, 0, 0, 1]  # the numbers moved with the case
     png = C.image.value
     C.tabs.selected_index = 0  # the other tab: the backward pass stays in the picture, which does not change
     assert "backprop" in s.views and s.backprop_step == 1 and C.image.value == png
@@ -240,37 +284,50 @@ def test_widget_controls(monkeypatch):
 
 
 def test_shared_labels_only_in_the_first_panel(static):
-    """Weights (forward, back to h) are the same in every panel: panel A only. Per-case slopes: every panel."""
-    s = explore(reference_net(40), *XOR, views="backprop")
+    """Weights (forward, back to h) are the same in every panel: panel A only. Per-case slopes: every panel with
+    numbers="all"; by default only the Worked example's panel, except at the average stage, which is about every
+    case."""
     count = lambda fig: [sum(t.get_fontsize() == THEME.edge_label_size for t in ax.texts) for ax in network_panels(fig)]  # noqa: E731
+    s = explore(reference_net(40), *XOR, views="backprop", numbers="all")
     for k, expected in ((0, [13, 0, 0, 0]), (2, [4, 4, 4, 4]), (3, [3, 0, 0, 0]), (6, [13, 13, 13, 13])):
         s.backprop_step = k
         assert count(s.draw()) == expected, k
+        plt.close("all")
+    few = explore(reference_net(40), *XOR, views="backprop")
+    for k, expected in ((0, [13, 0, 0, 0]), (2, [4, 0, 0, 0]), (3, [3, 0, 0, 0]), (6, [13, 13, 13, 13])):
+        few.backprop_step = k
+        assert count(few.draw()) == expected, k
         plt.close("all")
 
 
 def test_names_once_in_the_backpropagation_view(static):
     """Names that repeat in every panel (z, h, a, p, δ, ∂ℓ/∂h, and the slopes' names) are written in panel A only;
     the other panels show the values."""
-    s = explore(make("logistic"), *XOR, views="backprop", backprop_step=2)  # 3 weights: slope labels with names
-    P = network_panels(s.fig)
-    first = [t.get_text() for t in P[0].texts]
-    assert any(t.startswith("a\n") for t in first) and any(t.startswith("δa\n") for t in first)
-    assert any(t.startswith("∂ℓ/∂w1 = ") for t in first)
-    for ax in P[1:]:
-        texts = [t.get_text() for t in ax.texts]
-        assert not any(t.startswith(("a\n", "p\n", "δa\n", "∂ℓ/∂")) for t in texts)
-        assert len(backward_boxes(ax)) == len(backward_boxes(P[0]))  # the same boxes, values only
+    for numbers in ("all", "few"):
+        s = explore(make("logistic"), *XOR, views="backprop", backprop_step=2, numbers=numbers)  # 3 weights: names
+        P = network_panels(s.fig)
+        first = [t.get_text() for t in P[0].texts]
+        assert any(t.startswith("a\n") for t in first) and any(t.startswith("δa\n") for t in first)
+        assert any(t.startswith("∂ℓ/∂w1 = ") for t in first)
+        for ax in P[1:]:
+            texts = [t.get_text() for t in ax.texts]
+            assert not any(t.startswith(("a\n", "p\n", "δa\n", "∂ℓ/∂")) for t in texts)
+            # "all": the same boxes, values only; "few": no backward numbers outside the Worked example's panel
+            assert len(backward_boxes(ax)) == (len(backward_boxes(P[0])) if numbers == "all" else 0)
+        plt.close("all")
     plain = explore(make("logistic"), *XOR)  # outside the backpropagation view every panel keeps its names
     assert all(any(t.get_text().startswith("a\n") for t in ax.texts) for ax in network_panels(plain.fig))
     plt.close("all")
 
 
 def test_each_stage_fades_what_it_does_not_use(static):
-    """Through tanh: z, the curves, h, dl/dh and the new deltas stay; a and delta a fade. Slopes of the output weights:
-    the h boxes and delta a stay, x and z fade, and the lines of the first layer are thin and faint. The forward pass
-    fades nothing."""
-    s = explore(reference_net(40), *XOR, views="backprop", backprop_step=4)
+    """Through tanh: z, the curves, h, dl/dh and the new deltas stay; a and delta a fade (with numbers="all"; by
+    default the delta a boxes of the earlier stage are not drawn at all). Slopes of the output weights: the h boxes
+    and delta a stay, x and z fade, and the lines of the first layer are thin and faint. The forward pass fades
+    nothing."""
+    few = explore(reference_net(40), *XOR, views="backprop", backprop_step=4)
+    assert not any(t.get_text().startswith("δa") for t in network_panels(few.fig)[0].texts)
+    s = explore(reference_net(40), *XOR, views="backprop", backprop_step=4, numbers="all")
     ax = network_panels(s.fig)[0]
 
     def alpha(start):

@@ -19,6 +19,7 @@ from .backprop import (
     focus,
     label_spec,
     line_styles,
+    names_panel,
     overlay,
     shared_labels,
     stage_index,
@@ -40,7 +41,7 @@ from .views import VIEW_DRAWERS, VIEWS, needs_3d
 Frame = namedtuple(
     "Frame",
     "w out R g deltas changed moving history predictions eta next_change cases lookahead bp stage by_hand "
-    "direction history_test R_test",
+    "direction history_test R_test names_panel",
 )
 LIVE_DPI = 100  # resolution of the picture shown by the widgets
 
@@ -90,6 +91,7 @@ def make_frame(S, w=None):
         direction,
         list(S.history_test),
         R_test,
+        names_panel(S, stage),
     )
 
 
@@ -159,10 +161,9 @@ class Picture:
         if self.laid_out:
             for ax in self.case_axes + list(self.axes.values()):
                 ax.clear()
-        styles = line_styles(S, F)
         if list(S.shown) != self.shown:
             raise ValueError("slopewalk: the groups shown changed; build the picture again.")
-        parts = [draw_case(ax, S, F, c, styles) for c, ax in zip(self.shown, self.case_axes)]
+        parts = [draw_case(ax, S, F, c, line_styles(S, F, c)) for c, ax in zip(self.shown, self.case_axes)]
         keep = focus(S, F)  # the backward pass fades what its stage does not use
         for c, ax, (edges, _) in zip(self.shown, self.case_axes, parts):
             overlay(ax, S, F, c, edges)
@@ -178,14 +179,15 @@ class Picture:
             style_panel(ax, S.theme)
         if not self.laid_out:
             self.layout()
-        shared = shared_labels(F)  # the weights are the same in every panel: the first panel carries their labels
-        first = "none"
-        for i, (c, ax, (edges, obstacles)) in enumerate(zip(self.shown, self.case_axes, parts)):
-            if i == 0 or not shared:
-                mode = draw_edge_labels(ax, S, F, edges, obstacles, label_spec(S, F, c))
-                first = mode if i == 0 else first
-            elif first != "none":
-                draw_shared_note(ax, S)
+        shared = shared_labels(F)  # the weights are the same in every panel: one panel carries their labels
+        modes = {}
+        for c, ax, (edges, obstacles) in zip(self.shown, self.case_axes, parts):
+            if c == F.names_panel or not shared:
+                modes[c] = draw_edge_labels(ax, S, F, edges, obstacles, label_spec(S, F, c))
+        if shared and modes.get(F.names_panel, "none") != "none":
+            for c, ax in zip(self.shown, self.case_axes):
+                if c != F.names_panel:
+                    draw_shared_note(ax, S, F.names_panel)
         S.model.set_weights(F.w)
         self.frame = F
         return self.fig

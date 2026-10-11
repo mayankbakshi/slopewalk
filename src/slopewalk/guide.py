@@ -34,6 +34,11 @@ OPTIONS = (  # the arguments of explore, one line each
     ("optimizer", "the rule of a step: 'gd' (the default), 'momentum' or 'adam'; passing it shows its controls"),
     ("weight_decay", "lambda: lambda * w is added to each slope before the step; R stays the loss on the data"),
     ("beta2", "Adam's share of the last squared slopes (beta is its share of the last slopes)"),
+    (
+        "numbers",
+        "'few' (the default): the backward pass shows the current stage in the Worked example's panel, and above 15 "
+        "weights the lines carry no values; 'all': every stage reached, every panel, values on every line that fits",
+    ),
 )
 SESSION = (
     "step",

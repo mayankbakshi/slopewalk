@@ -4,6 +4,7 @@ import numpy as np
 
 BW = 0.27  # half-width of a value box; lines end this far from the centre of the box
 TABLE_ROWS = 15  # rows per column of the slope table
+LABELS_UP_TO = 15  # networks with more weights carry no values on their lines (numbers="few"); the table has them
 LABEL_FRACTIONS = np.linspace(0.14, 0.86, 13)  # where along a line a label may sit
 LABEL_SHIFTS = (0.0, 0.8, -0.8, 1.6, -1.6, 2.4, -2.4, 3.2, -3.2, 4.0, -4.0, 4.8, -4.8)  # sideways shifts
 LABEL_TOLERANCE = 0.02  # a label may overlap other labels or the boxes by at most this fraction of its area
@@ -98,6 +99,12 @@ class Layout:
     def show_names(n_weights):
         """Names and values on the lines for small networks, values only above 9 weights."""
         return n_weights <= 9
+
+    @staticmethod
+    def show_values(n_weights):
+        """Values on the lines up to LABELS_UP_TO weights; above that the lines carry no numbers (the table has them)
+        unless numbers="all"."""
+        return n_weights <= LABELS_UP_TO
 
     def narrow(self):
         """A network narrow enough for two panels side by side in the standard figure (at most one hidden layer)."""

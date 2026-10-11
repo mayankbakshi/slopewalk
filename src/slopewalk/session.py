@@ -35,6 +35,12 @@ def check_beta(beta):
     return float(beta)
 
 
+def check_numbers(numbers):
+    if numbers not in ("few", "all"):
+        raise ValueError(f"slopewalk: numbers must be 'few' or 'all', not {numbers!r}.")
+    return numbers
+
+
 def auto_layout():
     """The layout of explore(layout="auto"): wide for the widgets in Jupyter or VS Code; standard in Colab (its
     notebooks have a fixed width), for still pictures (NB_STATIC=1) and without ipywidgets."""
@@ -100,6 +106,7 @@ class Session:
         optimizer=None,
         weight_decay=None,
         beta2=0.999,
+        numbers="few",
     ):
         self.model = Model(net)
         M = self.model
@@ -114,6 +121,7 @@ class Session:
             )
         self.optimizer_asked = optimizer is not None or weight_decay is not None  # the widgets then show the row
         self.optimizer = Optimizer(optimizer or "gd", weight_decay or 0.0, check_beta(beta), beta2)
+        self.numbers = check_numbers(numbers)
         self.layout = Layout(M.n_inputs, M.hidden, self.task, style=layout, width=width, outputs=M.n_outputs)
         self.base_theme, self.theme_name = THEMES["light"], "light"
         self.shown = list(range(self.data.G))
@@ -491,6 +499,7 @@ def explore(
     optimizer=None,
     weight_decay=None,
     beta2=0.999,
+    numbers="few",
 ):
     """Gradient descent by hand on `net`, with inputs X (n x d) and labels y.
 
@@ -524,6 +533,11 @@ def explore(
     weight_decay: lambda, added to each slope as lambda * w before the step (as torch.optim's weight_decay). R stays
     the mean loss on the data, so the table and the backward pass show its slopes; the first-order prediction is the
     slopes times the step. Passing optimizer or weight_decay shows a row of controls for them.
+    numbers: "few" (the default): in the backward pass, the numbers of the current stage appear in the panel of the
+    Worked example's case (the other panels are faded, and the last stage, the average over the cases, shows every
+    panel's slopes), the Worked example lists the current stage only, and networks with more than 15 weights carry no
+    values on their lines (the table has them). "all": every stage reached so far in every panel, and values on the
+    lines wherever they fit.
 
     Draws one copy of the network per group (every value a mean ± standard deviation over the group), with each
     weight on its line, the units as z, activation and h, then the output and the loss with its change from the
@@ -562,6 +576,7 @@ def explore(
         optimizer=optimizer,
         weight_decay=weight_decay,
         beta2=beta2,
+        numbers=numbers,
     )
     session.set_theme(theme)
     if os.environ.get("NB_STATIC") == "1":

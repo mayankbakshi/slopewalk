@@ -176,6 +176,8 @@ def label_variants(S, F, edges, spec):
         if any(len(spec[k]) > 3 for k in ks):
             out.append(("values", [spec[k][3] if len(spec[k]) > 3 else spec[k][1] for k in ks]))
         return out
+    if S.numbers == "few" and not S.layout.show_values(len(w)):
+        return []  # more than LABELS_UP_TO weights: the lines carry no numbers; the table has them
     named = "{} = {:.2f}"
     if S.layout.show_names(len(w)):
         return [("names", [named.format(M.names[k], w[k]) for k in ks]), ("values", [f"{w[k]:.2f}" for k in ks])]
@@ -250,11 +252,11 @@ def put_labels(ax, S, F, edges, labels, positions, spec):
         )
 
 
-def draw_shared_note(ax, S):
-    """Network panels after the first: their lines carry no numbers, because the weights are those of the first
-    panel (A, or the first group shown)."""
+def draw_shared_note(ax, S, c=None):
+    """Network panels whose lines carry no numbers, because the weights are those of panel c (the first group shown
+    when c is None)."""
     T = S.theme
-    note = f"weights as in {letter(S.shown[0])}"
+    note = f"weights as in {letter(S.shown[0] if c is None else c)}"
     ax.text(0.01, 0.02, note, transform=ax.transAxes, fontsize=T.glyph_name_size, color=T.curve)
 
 
@@ -301,8 +303,8 @@ def draw_case(ax, S, F, c, styles=None):
     value = dict(fontsize=T.value_size, ha="center", va="center", zorder=5, bbox=T.value_box, color=T.ink)
     h_value = dict(value, bbox=dict(T.value_box, ec=T.hidden, lw=1.2))  # the hidden layer: a green border
     edges, obstacles = [], []  # edges: (k, source, target, preferred label fraction); obstacles: boxes to keep clear
-    # in the backpropagation view the names of the values are written once, in panel A; the other panels show values
-    tag = (lambda name: f"{name}\n") if c == S.shown[0] or F.stage is None else (lambda name: "")
+    # in the backpropagation view the names of the values are written once (F.names_panel); the others show values
+    tag = (lambda name: f"{name}\n") if F.stage is None or c == F.names_panel else (lambda name: "")
     src = [(0.12, yy) for yy in L.y_inputs]
     src_x, k = 0.0, 0
     for l, layer in enumerate(M.layers):

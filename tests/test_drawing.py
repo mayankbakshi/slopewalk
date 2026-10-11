@@ -159,7 +159,7 @@ def test_the_weight_moved_last_keeps_its_name(static):
     assert s.last_moved is None
     texts = [t.get_text() for t in edge_texts(panels(s.draw())[0])]
     assert not any(" = " in t for t in texts)
-    many = explore(make("wide"), *xor_centres())  # 49 weights: the name must not cost the other labels
+    many = explore(make("wide"), *xor_centres(), numbers="all")  # 49 weights: the name must not cost the others
     many.last_moved = 0
     texts = [t.get_text() for t in edge_texts(panels(many.draw())[0])]
     assert len(texts) == 49

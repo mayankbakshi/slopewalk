@@ -9,6 +9,7 @@ import math
 import os
 from contextlib import contextmanager
 
+from .backprop import worked_group
 from .draw import THEMES, letter
 from .picture import LIVE_DPI, Picture
 from .views import VIEWS
@@ -72,7 +73,9 @@ HINTS = {
     "core": "Press gradient step to move every weight against its slope, or set a number in the box to take that many "
     "steps. Drag a slider to change one weight.",
     "backprop": "Step from the output back to the first layer. The Worked example below the networks writes out the "
-    "numbers for one case.",
+    "current stage for one case, and that case's panel shows its numbers.",
+    "backprop all": "Step from the output back to the first layer. The Worked example below the networks writes out "
+    "the numbers for one case.",
     "views": "Tick a box to add a view under the network.",
 }
 BUTTONS = ("gradient step", "10 steps", "back one step", "reset")  # "10 steps" is the key; its label follows the box
@@ -465,7 +468,8 @@ class Controller:
             [self.bp_prev, self.bp_where, self.bp_next, self.bp_case],
             layout=widgets.Layout(align_items="center", flex_flow="row wrap"),
         )
-        return widgets.VBox([widgets.HTML(text_html(HINTS["backprop"])), row])
+        hint = HINTS["backprop" if self.session.numbers == "few" else "backprop all"]
+        return widgets.VBox([widgets.HTML(text_html(hint)), row])
 
     def show_stage(self):
         """The stage between the stage buttons, quiet, so that the controls also say where the student is."""
@@ -567,7 +571,11 @@ class Controller:
         S = self.session
         kind = S.backprop_stages[S.backprop_step].kind
         several = " several" if S.task == "regression" and S.model.n_outputs > 1 else ""
-        return LOOK.get(f"{kind} {S.task}{several}", LOOK.get(f"{kind} {S.task}", LOOK[kind]))
+        text = LOOK.get(f"{kind} {S.task}{several}", LOOK.get(f"{kind} {S.task}", LOOK[kind]))
+        if S.numbers == "few" and kind in ("output", "weights", "to_h", "delta"):  # one panel carries the numbers
+            text = f"In panel {letter(worked_group(S))}: " + text[0].lower() + text[1:]
+            text = text.replace("of each case", "of the case")
+        return text
 
     def action_buttons(self):
         return [*self.buttons.values()] + ([self.bp_prev, self.bp_next] if "backprop" in self.kinds else [])
