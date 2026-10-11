@@ -10,7 +10,7 @@ from render_examples import CASES
 
 from slopewalk import explore, xor_centres
 from slopewalk.draw import THEME
-from slopewalk.layout import TEXT_SCALE, Layout, overlap_area
+from slopewalk.layout import ROW_HEIGHT, TEXT_SCALE, UNIT_SPACING, Layout, overlap_area
 
 EXTRA = {
     "three_inputs": lambda: (make("three_inputs"), [(0, 0, 1), (1, 1, 1), (1, 0, 0)], [0, 1, 1], None),
@@ -87,12 +87,42 @@ def test_rows_grow_with_units_and_groups(static):
     h3 = explore(make("tanh3"), X, y, groups).fig.get_size_inches()[1]
     h4 = explore(make("relu4"), X, y, groups).fig.get_size_inches()[1]
     hsd = explore(make("tanh3"), *xor_centres(noise=0.3)).fig.get_size_inches()[1]
-    assert h3 == pytest.approx(2 * 2.9 + 4.2) and h4 > h3 and hsd > h3
-    assert h4 == pytest.approx(2 * 2.9 * 1.37 * 3 / 2.9 + 4.2)  # 4 units: the units stay about 0.9 in apart
+    assert h3 == pytest.approx(2 * ROW_HEIGHT + 4.2) and h4 > h3 and hsd > h3
+    # 4 units: the units stay about 0.9 in apart; 17 weights: the table's two blocks keep 12 pt in a taller first row
+    assert h4 == pytest.approx(2 * UNIT_SPACING * 3 + 16 * 12 * 1.45 / 72 / 0.8)
     net = nn.Sequential(nn.Linear(2, 12), nn.Tanh(), nn.Linear(12, 1))
     torch.manual_seed(0)
     height = explore(net, X, y, groups).fig.get_size_inches()[1]
-    assert height == pytest.approx(2 * 4 * 2.9 + 26 * 8 * 1.45 / 72 / 0.8)  # 12 units: rows four times the usual
+    # 12 units: rows four times the usual; 49 weights: the table's two blocks keep 12 pt in a taller first row
+    assert height == pytest.approx(2 * 4 * ROW_HEIGHT + 26 * 12 * 1.45 / 72 / 0.8)
+
+
+def test_every_layer_sits_in_the_middle_of_its_panel(static):
+    """The inputs, the units of every layer and the output row are centred on one height, and the panel's range is
+    centred on it too, with the bias nodes and the names of the activation curves inside the range."""
+    X, y, groups = xor_centres()
+    for name in ("tanh3", "relu4", "three_classes", "two_hidden"):
+        torch.manual_seed(0)
+        net = make(name)
+        data = (X, y, groups) if name != "three_classes" else five_centres()
+        s = explore(net, *data)
+        L = s.layout
+        lo, hi = L.ylim
+        centre = (lo + hi) / 2
+        assert np.mean(L.y_inputs) == pytest.approx(centre)
+        for m in list(L.hidden) + [L.outputs]:
+            assert np.mean(L.unit_ys(m)) == pytest.approx(centre)
+        ax = panels(s.fig)[0]
+        s.fig.canvas.draw()
+        renderer = s.fig.canvas.get_renderer()
+        bias = [t for t in ax.texts if t.get_text() == "1"]
+        assert bias and all(lo < t.get_position()[1] < hi for t in bias)
+        top = max(t.get_window_extent(renderer).y1 for t in bias)
+        names = [t for t in ax.texts if t.get_text().lower() in ("tanh", "relu")]
+        bottom = min(t.get_window_extent(renderer).y0 for t in names)
+        y0, y1 = ax.get_window_extent(renderer).y0, ax.get_window_extent(renderer).y1
+        assert y0 <= bottom and top <= y1  # nothing hangs out of the panel
+        plt.close("all")
 
 
 def five_centres(noise=0.0):
@@ -161,9 +191,10 @@ def test_wide_layout_sizes(static):
     X, y, groups = xor_centres()
     standard = explore(make("tanh3"), X, y, groups)
     wide = explore(make("tanh3"), X, y, groups, layout="wide")
-    assert tuple(standard.fig.get_size_inches()) == pytest.approx((15, 2 * 2.9 + 4.2))
-    rows = 2.9 * TEXT_SCALE["wide"]  # the wide layout has larger text in the network panels, and taller rows
-    assert tuple(wide.fig.get_size_inches()) == pytest.approx((27, rows + 4.2))  # four panels in one row
+    assert tuple(standard.fig.get_size_inches()) == pytest.approx((15, 2 * ROW_HEIGHT + 4.2))
+    rows = ROW_HEIGHT * TEXT_SCALE["wide"]  # the wide layout has larger text in the network panels, and taller rows
+    first = 14 * THEME.table_size * TEXT_SCALE["wide"] * THEME.table_leading / 72 / 0.8  # the 13.2 pt table: 4.65 in
+    assert tuple(wide.fig.get_size_inches()) == pytest.approx((27, rows + first))  # four panels in one row
     tops = {round(ax.get_position().y0, 3) for ax in panels(wide.fig)}
     assert len(tops) == 1 and len(panels(wide.fig)) == 4
     views = explore(make("tanh3"), X, y, groups, layout="wide", views=("slice", "line", "momentum"))
@@ -255,6 +286,33 @@ def test_lower_rows():
         [("backprop", 15.0)],
         [("cases", 5.0), (None, 5.0), (None, 5.0)],
     ]
+    # more than 15 weights: the table's two blocks take 7.5 inches of their row in both layouts
+    assert standard.lower_rows(["plane", "history", "table", "backprop"], n_weights=27) == [
+        [("plane", 3.75), ("history", 3.75), ("table", 7.5)],
+        [("backprop", 15.0)],
+    ]
+    assert standard.table_blocks(27) == (2, pytest.approx((7.5 - 0.8) * 0.97 / 2))
+    rows = wide.lower_rows(["plane", "history", "table", "backprop", "slice"], n_weights=27)
+    assert [[n for n, _ in r] for r in rows] == [["plane", "history", "table"], ["backprop", "slice"]]
+    assert dict(rows[0])["table"] >= 7.5 and all(sum(w for _, w in r) == pytest.approx(27) for r in rows)
+
+
+def test_table_font_with_two_blocks(static):
+    """More than 15 weights: the table keeps a 12 pt font in both layouts (it was 8 pt in a third of the standard
+    figure), the first row below the networks grows to fit its rows, and the notes of R over the steps take two
+    lines each in the narrower panel beside it."""
+    torch.manual_seed(0)
+    for style, size in (("standard", 12.0), ("wide", 12.5)):
+        s = explore(make("three_classes"), *five_centres(), layout=style)
+        s.step(1)
+        fig = s.draw()
+        table = [ax for ax in fig.axes if ax.tables][0]
+        sizes = {round(c.get_text().get_fontsize(), 1) for c in table.tables[0].get_celld().values()}
+        assert max(sizes) == pytest.approx(size)
+        history = [ax for ax in fig.axes if ax.get_title().startswith("R = ")][0]
+        note = [t for t in history.texts if t.get_text().startswith("next step")][0]
+        assert ("\npredicted change" in note.get_text()) == (style == "standard")
+        plt.close("all")
 
 
 BOXES = {

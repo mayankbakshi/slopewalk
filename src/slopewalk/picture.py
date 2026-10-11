@@ -32,6 +32,7 @@ from .draw import (
     draw_slope_table,
     fade,
     style_panel,
+    table_font,
 )
 from .layout import BOTTOM_HEIGHT, NET_GAP, PANEL_GAP
 from .views import VIEW_DRAWERS, VIEWS, needs_3d
@@ -114,7 +115,7 @@ class Picture:
         backprop = "backprop" in S.views  # taller rows: room for the backward boxes under the units
         lower = L.lower_rows(self.panels, S.model.n_weights)
         n_bottom = len(lower)
-        first = L.first_row_height(S.model.n_weights, S.theme.table_size, S.theme.table_leading)
+        first = L.first_row_height(S.model.n_weights, table_font(S), S.theme.table_leading)
         bottoms = [first] + [BOTTOM_HEIGHT] * (n_bottom - 1)  # the first lower row holds the table
         size = (L.width, L.row_height(with_sd, backprop) * rows + sum(bottoms))
         if pyplot:

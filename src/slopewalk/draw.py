@@ -15,7 +15,7 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import BoxStyle, Rectangle
 from matplotlib.text import Text
 
-from .layout import BOTTOM_HEIGHT, BW, LABEL_TOLERANCE, PANEL_GAP, TABLE_ROWS, TABLE_SHARE, place_labels
+from .layout import BIAS_SHIFT, BOTTOM_HEIGHT, BW, LABEL_TOLERANCE, PANEL_GAP, TABLE_ROWS, TABLE_SHARE, place_labels
 from .model import SIGMOID
 from .theme import DARK_THEME as DARK_THEME
 from .theme import THEME as THEME
@@ -309,7 +309,7 @@ def draw_case(ax, S, F, c, styles=None):
         last = l == len(M.layers) - 1
         tx = (L.x_a if last else L.blocks[l][0]) - BW
         tys = L.unit_ys(layer.out_features)  # one output unit sits at 1.2, the middle
-        bias = (src_x if l == 0 else src_x + 0.45, 2.8)
+        bias = (src_x if l == 0 else src_x + BIAS_SHIFT, L.y_bias)
         with tagging(ax, ("bias", l)):
             ax.text(*bias, "1", bbox=dict(boxstyle="circle", fc=T.node_fill, ec=T.node_edge), **node)
         sources = src + [(bias[0] + 0.1, bias[1] - 0.1)]
@@ -895,6 +895,8 @@ def draw_parity(ax, S, F):
 
 # ---------------------------------------------------------------- R over the steps
 
+NOTE_ONE_LINE = 4.5  # a panel at least this wide (inches) has room for the notes on the steps on one line each
+
 
 def draw_history(ax, S, F):
     """R over the gradient steps taken, the first-order prediction of each step (hollow markers) and a note on the
@@ -927,11 +929,13 @@ def draw_history(ax, S, F):
     ax.set_title(f"R = {F.R:.4f}", fontsize=T.panel_title_size)
     if len(history) < 12:
         ax.set_xticks(range(len(history)))
-    notes = [f"next step, eta {F.eta:g}: predicted change {F.next_change:+.4f}"]
+    # in a narrow panel (beside a table with two blocks, or a full row of the wide layout) each note takes two lines
+    sep = "\n" if ax.figure.get_figwidth() * width_share(ax) < NOTE_ONE_LINE else " "
+    notes = [f"next step, eta {F.eta:g}:{sep}predicted change {F.next_change:+.4f}"]
     if F.predictions:
         last = F.predictions[-1]
         notes.append(
-            f"last step: predicted {last.predicted - last.before:+.4f}, actual {last.actual - last.before:+.4f}"
+            f"last step: predicted {last.predicted - last.before:+.4f},{sep}actual {last.actual - last.before:+.4f}"
         )
     ax.text(
         0.98,
@@ -1005,6 +1009,12 @@ def table_fit(ax, rows, block_inches, most):
     return size, list(headers), [n / sum(need) for n in need]
 
 
+def table_font(S):
+    """The largest font of the table, in points: the theme's, scaled like the text of the network panels (the wide
+    picture is shown smaller)."""
+    return S.theme.table_size * S.layout.text_scale
+
+
 def draw_slope_table(ax, S, F):
     """A table with one row per weight: its value, the change of R when it alone grows by 0.1, and the slope dR/dw.
 
@@ -1026,7 +1036,7 @@ def draw_slope_table(ax, S, F):
     width = (1 - gap * (n_blocks - 1)) / n_blocks
     block_inches = (ax.figure.get_figwidth() * width_share(ax) - PANEL_GAP) * width
     fontsize, headers, shares = table_fit(
-        ax, rows, block_inches, min(T.table_size, space / rows_needed / T.table_leading)
+        ax, rows, block_inches, min(table_font(S), space / rows_needed / T.table_leading)
     )
     fontsize = max(8.0, fontsize)
     ax.set_title("Change of R when one weight grows by 0.1,\nand the slope dR/dw", fontsize=T.panel_title_size)

@@ -10,7 +10,16 @@ LABEL_TOLERANCE = 0.02  # a label may overlap other labels or the boxes by at mo
 BOTTOM_PER_ROW = 3  # panels per row below the networks
 BOTTOM_HEIGHT = 4.2  # height in inches of one row of those panels
 TABLE_SHARE = 0.8  # the share of the table panel's height that its rows may take; the title and margins take the rest
-UNIT_SPACING = 1.37  # inches between the units of a layer that a taller row keeps (0.9 in on the drawn panel)
+TABLE_TWO_BLOCKS = 7.5  # width in inches of the table panel when its rows run in two blocks (more than TABLE_ROWS)
+# a network panel: the units of a layer run from y = 2.2 down to 0.2 (one unit sits at 1.2), the inputs from 1.95 to
+# 0.45, and the output row at 1.2, so the network is centred on 1.2; the bias nodes sit above the top unit, and the
+# panel's range is symmetric about 1.2, so that every layer sits in the middle of its panel
+Y_CENTRE = 1.2
+Y_BIAS = 2.6  # the bias nodes, clear of the top unit's box
+Y_RANGE = (-0.4, 2.8)  # the panel's y-range: room for the bias nodes above and the curve names below
+BIAS_SHIFT = 0.55  # the bias node of a later layer sits this far right of the h column that feeds the layer
+ROW_HEIGHT = 3.05  # inches of a panel row for up to 3 units in a layer: the panel's range at about 0.95 in per unit
+UNIT_SPACING = 1.44  # inches between the units of a layer that a taller row keeps (0.9 in on the drawn panel)
 LAYOUTS = ("standard", "wide")
 WIDTH = {"standard": 15.0, "wide": 27.0}  # default figure width in inches
 WIDE_PER_ROW, WIDE_BOTTOM_PER_ROW = 4, 6  # the most network panels and lower panels per row of the wide layout
@@ -70,14 +79,15 @@ class Layout:
             loss_gap = 2.4 if outputs == 1 else 2.5  # several classes: p boxes with a ± line next to the loss box
             self.x_a, self.x_sigmoid, self.x_p, self.x_loss = x, x + 0.75, x + 1.5, x + loss_gap + extra
         self.x_input_value = -0.24 * f  # the right edge of an input's value box, left of its circle
-        self.y_inputs = np.linspace(1.95, 0.45, n_inputs) if n_inputs > 1 else np.array([1.2])
+        self.y_inputs = np.linspace(1.95, 0.45, n_inputs) if n_inputs > 1 else np.array([Y_CENTRE])
+        self.y_bias = Y_BIAS
         self.xlim = (-0.95, self.x_loss + 0.6)
-        self.ylim = (-0.05, 3.0)
+        self.ylim = Y_RANGE
 
     @staticmethod
     def unit_ys(m):
         """y of the m units of one layer, top to bottom."""
-        return np.linspace(2.2, 0.2, m) if m > 1 else np.array([1.2])
+        return np.linspace(2.2, 0.2, m) if m > 1 else np.array([Y_CENTRE])
 
     @staticmethod
     def label_fraction(si, j, ns, nt):
@@ -113,20 +123,27 @@ class Layout:
         return min(1.0, self.zoom / 2) if self.narrow() else 1.0
 
     def row_height(self, with_sd=False, backprop=False):
-        """Height of a panel row in inches: 2.9 for up to 3 units in a layer, then growing so that the units of the
-        widest layer stay about 0.9 in apart (the outputs count as a layer), up to four times the usual for 12 units;
-        a fifth more when the boxes carry a standard deviation line (groups of points), and 40% more when the backward
-        pass adds its boxes under the units."""
+        """Height of a panel row in inches: ROW_HEIGHT for up to 3 units in a layer, then growing so that the units
+        of the widest layer stay about 0.9 in apart (the outputs count as a layer), up to four times the usual for 12
+        units; a fifth more when the boxes carry a standard deviation line (groups of points), and 40% more when the
+        backward pass adds its boxes under the units."""
         m = max(list(self.hidden) + [self.outputs])
-        units = min(4.0, max(1.0, UNIT_SPACING * (m - 1) / 2.9))
-        return 2.9 * units * (1.2 if with_sd else 1.0) * (1.4 if backprop else 1.0) * self.text_scale * self.zoom
+        units = min(4.0, max(1.0, UNIT_SPACING * (m - 1) / ROW_HEIGHT))
+        scale = (1.2 if with_sd else 1.0) * (1.4 if backprop else 1.0) * self.text_scale * self.zoom
+        return ROW_HEIGHT * units * scale
+
+    def table_width(self, n_weights):
+        """Width in inches of the table panel: a third of the standard figure, or the wide layout's base width; with
+        two blocks of rows (more than TABLE_ROWS weights), TABLE_TWO_BLOCKS in both layouts (at most half the figure),
+        so that the font of the table is not squeezed by the width of its blocks."""
+        if n_weights > TABLE_ROWS:
+            return min(TABLE_TWO_BLOCKS, self.width / 2)
+        return WIDE_BASE["table"] if self.style == "wide" else self.width / BOTTOM_PER_ROW
 
     def table_blocks(self, n_weights):
         """(blocks, width of a block in inches) of the slope table: one block up to TABLE_ROWS weights, else two."""
         blocks = 2 if n_weights > TABLE_ROWS else 1
-        panel = WIDE_BASE["table"] if self.style == "wide" else self.width / BOTTOM_PER_ROW
-        if self.style == "wide" and blocks == 2:
-            panel = 7.5
+        panel = self.table_width(n_weights)
         return blocks, (panel - PANEL_GAP) * (1 - 0.03 * (blocks - 1)) / blocks
 
     def first_row_height(self, n_weights, font, leading):
@@ -146,12 +163,22 @@ class Layout:
         the width of the figure.
 
         standard: three columns of equal width; the derivation of the backward pass takes a whole row, and the spare
-        columns of a short last row stay empty (panel None). wide: up to six columns in a row (the derivation counts
-        two), the rows about equally full and every row filled: each panel gets its base width, and the width left
-        over goes to the panels that can use it (mostly R over the steps).
+        columns of a short last row stay empty (panel None). A table with two blocks of rows (more than TABLE_ROWS
+        weights) takes TABLE_TWO_BLOCKS inches of its row, and the other panels of that row share the rest. wide: up
+        to six columns in a row (the derivation counts two, and so does a table with two blocks), the rows about
+        equally full and every row filled: each panel gets its base width, and the width left over goes to the panels
+        that can use it (mostly R over the steps).
         """
         wide = self.style == "wide"
-        spans = [(2 if wide else BOTTOM_PER_ROW) if p == "backprop" else 1 for p in panels]
+        two_blocks = n_weights > TABLE_ROWS
+        spans = []
+        for p in panels:
+            if p == "backprop":
+                spans.append(2 if wide else BOTTOM_PER_ROW)
+            elif p == "table" and wide and two_blocks:
+                spans.append(2)
+            else:
+                spans.append(1)
         cap = -(-sum(spans) // -(-sum(spans) // WIDE_BOTTOM_PER_ROW)) if wide else BOTTOM_PER_ROW
         rows, row, used = [], [], 0
         for name, span in zip(panels, spans):
@@ -161,16 +188,23 @@ class Layout:
             row.append((name, span))
             used += span
         rows.append(row)
-        if not wide:
-            third = self.width / BOTTOM_PER_ROW
-            return [[(n, third * k) for n, k in r] + [(None, third)] * (cap - sum(k for _, k in r)) for r in rows]
-        return [self.fill([n for n, _ in r], n_weights) for r in rows]
+        if wide:
+            return [self.fill([n for n, _ in r], n_weights) for r in rows]
+        out = []
+        for r in rows:
+            column, table = self.width / BOTTOM_PER_ROW, None
+            if two_blocks and any(n == "table" for n, _ in r):
+                table = self.table_width(n_weights)
+                column = (self.width - table) / (cap - 1)  # the other columns of the table's row share the rest
+            widths = [(n, table if n == "table" and table else column * k) for n, k in r]
+            out.append(widths + [(None, column)] * (cap - sum(k for _, k in r)))
+        return out
 
     def fill(self, names, n_weights=0):
         """Widths for one row of the wide layout: base widths, and the rest of the row shared by WIDE_STRETCH."""
         base = [WIDE_BASE[n] for n in names]
-        if "table" in names and n_weights > TABLE_ROWS:
-            base[names.index("table")] = 7.5  # two blocks of rows side by side
+        if "table" in names:
+            base[names.index("table")] = self.table_width(n_weights)  # two blocks of rows side by side: wider
         spare = self.width - sum(base)
         if spare < 0 and "history" in names:  # a full row: R over the steps gives up width first, the table keeps it
             i = names.index("history")
@@ -186,10 +220,6 @@ class Layout:
     def wspace(self, n, gap):
         """The wspace of a row of n panels with gaps of `gap` inches (wspace is a fraction of the mean panel width)."""
         return 0.0 if n < 2 else n * gap / max(self.width - 0.6 - (n - 1) * gap, 1.0)
-
-    @staticmethod
-    def table_fontsize(n_weights):
-        return 9.5 if n_weights > 15 else 11
 
 
 def overlap_area(a, b):
