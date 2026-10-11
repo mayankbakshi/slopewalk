@@ -9,7 +9,7 @@ import math
 import os
 from contextlib import contextmanager
 
-from .draw import THEMES
+from .draw import THEMES, letter
 from .picture import LIVE_DPI, Picture
 from .views import VIEWS
 
@@ -320,11 +320,11 @@ class Controller:
             for c in range(S.data.G):
                 box = widgets.Checkbox(
                     value=c in S.shown,
-                    description=chr(65 + c) if c < 26 else str(c),
+                    description=letter(c),
                     indent=False,
                     layout=widgets.Layout(width="52px"),
                 )
-                tip(box, f"draw the network for group {chr(65 + c) if c < 26 else c}")
+                tip(box, f"draw the network for group {letter(c)}")
                 box.observe(self.on_show, names="value")
                 self.show_boxes[c] = box
                 row.append(box)
@@ -447,7 +447,7 @@ class Controller:
         self.bp_next = tip(
             widgets.Button(description="next stage", button_style="primary"), "the next stage, one layer back"
         )
-        letters = [chr(65 + c) if c < 26 else str(c) for c in range(S.data.G)]
+        letters = [letter(c) for c in range(S.data.G)]
         self.bp_case = widgets.Dropdown(
             options=letters,
             value=letters[S.backprop_case],
@@ -747,7 +747,7 @@ class Controller:
         S.set_shown(chosen)
         self.picture = None
         self.redraw()
-        letters = ", ".join(chr(65 + c) if c < 26 else str(c) for c in chosen)
+        letters = ", ".join(letter(c) for c in chosen)
         self.say(f"Networks shown for {letters}" + (", drawn larger." if len(chosen) == 1 else "."))
 
     def on_theme(self, change):
@@ -871,7 +871,7 @@ class Controller:
             S.fig = self.picture.fig
             self.last_R = self.picture.frame.R
             png = self.picture.png()
-            self.readout.value = readout_html(S.readouts(self.eta.value, w), self.action)
+            self.readout.value = readout_html(S.readouts(self.eta.value, w, frame=self.picture.frame), self.action)
             if self.use_output:
                 from IPython.display import Image, clear_output, display
 

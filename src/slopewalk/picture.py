@@ -51,11 +51,8 @@ def make_frame(S, w=None):
     out = M.forward(D.X, D.y, w)
     R = M.risk(D.X, D.y, w)
     g = M.slopes(D.X, D.y, w)
-    deltas = []
-    for k in range(len(w)):
-        wk = list(w)
-        wk[k] += 0.1
-        deltas.append(M.risk(D.X, D.y, wk) - R)
+    W = np.asarray(w, dtype=float)[None, :] + 0.1 * np.eye(len(w))  # each weight alone grown by 0.1: one batched pass
+    deltas = list(M.risk_batch(D.X, D.y, W) - R)
     M.set_weights(w)
     moving = set(S.active)
     changed = {k for k in range(len(w)) if abs(w[k] - S.w0[k]) > 1e-9}  # moved from the start in any way

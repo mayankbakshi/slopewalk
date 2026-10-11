@@ -66,7 +66,7 @@ def literals(name):
 
 
 def test_no_colour_outside_the_theme():
-    for name in ("draw.py", "views.py", "backprop.py", "picture.py", "static.py"):
+    for name in ("theme.py", "draw.py", "views.py", "backprop.py", "picture.py", "static.py"):
         assert literals(name) == [], name
 
 

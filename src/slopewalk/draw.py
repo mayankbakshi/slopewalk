@@ -4,13 +4,12 @@ Every panel function takes (ax, S, F): the axes, the session and the frame of nu
 (see picture.py), so that no panel computes R or the slopes again.
 """
 
-import copy
 from contextlib import contextmanager
 
 import numpy as np
 import torch
 from matplotlib import patheffects
-from matplotlib.colors import LinearSegmentedColormap, to_rgb, to_rgba
+from matplotlib.colors import to_rgb, to_rgba
 from matplotlib.font_manager import FontProperties
 from matplotlib.lines import Line2D
 from matplotlib.patches import BoxStyle, Rectangle
@@ -18,123 +17,12 @@ from matplotlib.text import Text
 
 from .layout import BOTTOM_HEIGHT, BW, LABEL_TOLERANCE, PANEL_GAP, TABLE_ROWS, TABLE_SHARE, place_labels
 from .model import SIGMOID
-
-
-class Theme:
-    """Colours, fonts and sizes of the picture. Red is class 1 and blue class 0 (with more classes, teal is class 2 and
-    magenta class 3); green is the hidden layer; purple is the backward pass; orange marks negative weights. Text in
-    boxes is ink: a box carries its meaning in its border and fill. Ratios are WCAG contrast against paper unless said
-    otherwise.
-
-    Only the labels on the weight lines use edge_label_size, and only the weight lines use zorder 1.
-    """
-
-    paper, ink, muted = "#FFFFFF", "#1F2328", "#59636E"  # ink 15.8:1, muted 6.1:1
-    class_colour = {0: "#0969DA", 1: "#CF222E", 2: "#00796B", 3: "#B4237F"}  # 5.2, 5.4, 5.3, 6.0:1: titles, marks
-    class_tint = {0: "#E3EFFD", 1: "#FDECEC", 2: "#DFF3F0", 3: "#FBEAF3"}  # box fills; the text on them is ink
-    mixed_colour, mixed_tint = "#1F2328", "#EEF1F4"
-    neutral_colour, neutral_tint = "#3D444D", "#EEF1F4"  # regression panels
-    positive, negative, negative_text = "#1F2328", "#D1600A", "#B04800"  # lines 15.8:1 and 3.9:1, numbers 5.6:1
-    line_width, line_slope, line_max = 1.0, 1.3, 7  # a weight's line: line_width + line_slope * |w|, at most line_max
-    frozen_alpha, frozen_text, frozen_fill = 0.35, "#59636E", "#F6F8FA"  # weights that do not move (params)
-    hidden = "#1A7F37"  # the hidden layer only: the border of the h boxes, the dot and the band on the curves
-    arrow, curve, node_edge = "#8C959F", "#59636E", "#8C959F"
-    start_colour, prediction_colour = "#59636E", "#8C959F"
-    gd_colour, momentum_colour = "#59636E", "#9A6700"  # gradient descent solid, momentum dashed
-    value_box = dict(boxstyle="round,pad=0.25", fc="#F6F8FA", ec="#C4CBD3", lw=0.8)
-    edge_label_size, glyph_name_size, value_size, node_size, title_size, suptitle_size = 8.5, 8, 9.5, 10, 11.5, 13
-    note_size = 11  # notes inside panels, and the lines of the worked example (smaller only if they do not fit)
-    panel_title_size, legend_size, letter_size = 12, 9.5, 12  # the panels below the networks
-    tick_size, axis_label_size = 10.5, 11
-    plane_alpha, value_cmap = 0.4, "viridis"
-    table_size, table_leading = 12, 1.45  # the table's largest font; a row is table_leading times the font
-    table_edge, table_head, table_highlight = "#D0D7DE", "#EEF1F4", "#FFF4C2"
-    backprop_colour, backprop_tint, backprop_size = "#7A45D6", "#F4EFFC", 9  # 5.8:1, and 5.1:1 on its tint
-    # surfaces and neutral marks: every colour of the picture lives in this class, so that a theme can change them all
-    marker_edge, boundary = "#1F2328", "#1F2328"
-    note_text, derivation_text, derivation_muted, point_neutral = "#59636E", "#1F2328", "#8C959F", "#59636E"
-    glyph_fill, glyph_edge, node_fill, label_backing = "#FFFFFF", "#C4CBD3", "#FFFFFF", "#FFFFFF"
-    reference_line, zero_line, landscape_line, plane_surface, path_colour = (
-        "#C4CBD3",
-        "#D0D7DE",
-        "#8C959F",
-        "#8C959F",
-        "#1F2328",
-    )
-    landscape_low = "#59636E"  # R over two weights: low R in this colour, high R in paper
-    spine = "#8C959F"  # the frames of the panels below the networks
-    control_button, control_selected = "#EEF1F4", "#C4CBD3"  # the controls: buttons, and the chosen toggle button
-    # what a stage of the backward pass does not use: boxes and curves recede to 30%, their numbers to 50% so that they
-    # stay readable (3.2:1 on light paper, 4.9:1 on dark), lines to 12% (context only: the table keeps every weight)
-    faded_alpha, faded_text_alpha, faded_line_alpha = 0.3, 0.5, 0.12
-
-    def plane_colormap(self):
-        """p for class 1 over the input plane: class 0 colour, paper at p = 0.5, class 1 colour."""
-        return LinearSegmentedColormap.from_list(
-            "slopewalk_plane", [self.class_colour[0], self.paper, self.class_colour[1]]
-        )
-
-    def landscape_colormap(self):
-        return LinearSegmentedColormap.from_list("slopewalk_landscape", [self.landscape_low, self.paper])
-
-    network_sizes = ("edge_label_size", "glyph_name_size", "value_size", "node_size", "title_size", "backprop_size")
-
-    def scaled(self, factor):
-        """A copy whose text in the network panels is `factor` times larger; the panels below keep their sizes."""
-        out = copy.copy(self)
-        for name in self.network_sizes:
-            setattr(out, name, round(getattr(self, name) * factor, 2))
-        return out
-
-
-class DarkTheme(Theme):
-    """The same picture for a dark notebook theme, in high contrast: light ink on near-black paper, bright class
-    colours, and frames and box edges that stand out. Ratios against #0D1117."""
-
-    paper, ink, muted = "#0D1117", "#F0F3F6", "#B1BAC4"  # ink 17.0:1, muted 9.6:1
-    class_colour = {0: "#71B7FF", 1: "#FF9492", 2: "#4FD8C8", 3: "#FF8DCA"}  # 8.9, 8.9, 10.8 and 8.9:1
-    class_tint = {0: "#0F2742", 1: "#3A1519", 2: "#0E2E2B", 3: "#36162A"}
-    mixed_colour, mixed_tint = "#F0F3F6", "#21262D"
-    neutral_colour, neutral_tint = "#D1D9E0", "#21262D"
-    positive, negative, negative_text = "#E6EDF3", "#FFA657", "#FFA657"  # lines 16.0:1, negative 9.8:1
-    frozen_text, frozen_fill = "#9EA7B3", "#161B22"
-    hidden = "#56D364"
-    arrow, curve, node_edge = "#9EA7B3", "#C9D1D9", "#9EA7B3"
-    start_colour, prediction_colour = "#B1BAC4", "#9EA7B3"
-    gd_colour, momentum_colour = "#B1BAC4", "#F0B72F"
-    value_box = dict(boxstyle="round,pad=0.25", fc="#161B22", ec="#7A828E", lw=0.8)  # edges 4.9:1
-    plane_alpha = 0.5
-    table_edge, table_head, table_highlight = "#6E7681", "#21262D", "#4D3B00"
-    backprop_colour, backprop_tint = "#CB9EFF", "#261A3D"  # 8.9:1, and 7.6:1 on its tint
-    marker_edge, boundary = "#0D1117", "#F0F3F6"
-    note_text, derivation_text, derivation_muted, point_neutral = "#B1BAC4", "#F0F3F6", "#9EA7B3", "#B1BAC4"
-    glyph_fill, glyph_edge, node_fill, label_backing = "#0D1117", "#7A828E", "#0D1117", "#0D1117"
-    reference_line, zero_line, landscape_line, plane_surface, path_colour = (
-        "#6E7681",
-        "#57606A",
-        "#8B949E",
-        "#8B949E",
-        "#F0F3F6",
-    )
-    landscape_low = "#D1D9E0"
-    spine = "#7A828E"
-    control_button, control_selected = "#21262D", "#4F5864"  # ink on them 13.7:1 and 6.5:1
-
-
-THEME = Theme()
-DARK_THEME = DarkTheme()
-THEMES = {"light": THEME, "dark": DARK_THEME}
-
-
-def as_theme(theme):
-    """A Theme from "light", "dark", a Theme, or None (light)."""
-    if theme is None:
-        return THEME
-    if isinstance(theme, str):
-        if theme not in THEMES:
-            raise ValueError(f"slopewalk: theme must be 'light' or 'dark', not {theme!r}.")
-        return THEMES[theme]
-    return theme
+from .theme import DARK_THEME as DARK_THEME
+from .theme import THEME as THEME
+from .theme import THEMES as THEMES
+from .theme import DarkTheme as DarkTheme
+from .theme import Theme as Theme
+from .theme import as_theme as as_theme
 
 
 def halo(T):
@@ -677,8 +565,7 @@ def class_legend(ax, S, winners=None):
         )
         for k in range(S.data.n_classes)
     ]
-    if test_handle(S) is not None:
-        handles.append(test_handle(S))
+    handles += [h for h in [test_handle(S)] if h is not None]
     ax.legend(handles=handles, fontsize=T.legend_size, loc="best")
 
 
@@ -733,59 +620,72 @@ def draw_group_marks(ax, S, xs, ys, size=160):
 
 
 def draw_input_plane(ax, S, F):
-    """Binary, two inputs: p for class 1 over the plane, the boundary p = 0.5 and the starting boundary (dashed).
-    One input: p or the prediction against x1, with the points. Regression, two inputs: the prediction over the plane.
-    """
+    """The panel below the networks that shows the inputs: by the task and the number of inputs, p for class 1 or
+    the prediction against x1 (one input), the plane (two inputs), the most likely class (several classes), each
+    target's curve or the prediction against the target (several targets, or more inputs than a plane shows)."""
     D, T = S.data, S.theme
-    w = F.w
-    moved = bool(F.changed)
-    X, y = D.X.numpy(), D.y.numpy()
+    X = D.X.numpy()
     gx = [D.stats(X, c)[0] for c in range(D.G)]
     if D.task == "multiclass" and D.d <= 2:
         draw_class_plane(ax, S, F, gx)
-        S.model.set_weights(w)
-        return
-    if D.task == "regression" and (S.model.n_outputs > 1 or D.d > 2):
+    elif D.task == "regression" and (S.model.n_outputs > 1 or D.d > 2):
         if D.d == 1:
             draw_target_curves(ax, S, F)
         else:  # more inputs than a plane shows, or several targets over a plane
             draw_parity(ax, S, F)
-        S.model.set_weights(w)
-        return
-    if D.d == 1:
-        u = line_grid(S)
-        a = net_on(S, u[:, None], w)
-        out = 1 / (1 + np.exp(-a)) if D.task == "binary" else a
-        if moved:
-            a0 = start_values(S, "line", u[:, None])
-            out0 = 1 / (1 + np.exp(-a0)) if D.task == "binary" else a0
-            ax.plot(u, out0, "--", color=T.start_colour, lw=1.0, label="start")
-        ax.plot(u, out, color=T.neutral_colour, lw=2, label="p for class 1" if D.task == "binary" else "prediction")
-        if D.task == "binary":
-            colours = [T.class_colour[int(v)] for v in y]
-            ax.scatter(X[:, 0], y, c=colours, s=18, edgecolor=T.marker_edge, lw=0.3, zorder=3)
-            test_marks(ax, S, lambda Xt, yt: (Xt[:, 0], yt, [T.class_colour[int(v)] for v in yt]))
-            ax.axhline(0.5, color=T.reference_line, lw=0.8, zorder=0)
-            gy = [float(D.stats(y, c)[0]) for c in range(D.G)]
-            ax.set_ylim(-0.08, 1.08)
-            ax.set_ylabel("p")
-            ax.set_title("p for class 1 against x1", fontsize=T.panel_title_size)
-        else:
-            ax.scatter(X[:, 0], y, s=18, color=T.point_neutral, zorder=3)
-            test_marks(ax, S, lambda Xt, yt: (Xt[:, 0], yt, T.point_neutral))
-            gy = [float(D.stats(y, c)[0]) for c in range(D.G)]
-            ax.set_ylabel("y")
-            ax.set_title("ŷ against x1, and the points", fontsize=T.panel_title_size)
-        draw_group_marks(ax, S, [float(v[0]) for v in gx], gy, size=110)
-        ax.set_xlabel("x1")
-        if moved or S.test is not None:
-            ax.legend(fontsize=T.legend_size, loc="best")
-        S.model.set_weights(w)
-        return
-    if D.d != 2:
+    elif D.d == 1:
+        draw_curve(ax, S, F, gx)
+    elif D.d == 2:
+        draw_plane(ax, S, F, gx)
+    else:
         ax.axis("off")
         ax.text(0.5, 0.5, f"{D.d} inputs: no picture of the input plane", ha="center", va="center", color=T.muted)
-        return
+    S.model.set_weights(F.w)
+
+
+def draw_curve(ax, S, F, gx):
+    """One input: p for class 1 (binary) or the prediction (regression) against x1, with the points and the groups'
+    means; once the weights moved, the starting curve, dashed."""
+    D, T = S.data, S.theme
+    w = F.w
+    moved = bool(F.changed)
+    X, y = D.X.numpy(), D.y.numpy()
+    u = line_grid(S)
+    a = net_on(S, u[:, None], w)
+    out = 1 / (1 + np.exp(-a)) if D.task == "binary" else a
+    if moved:
+        a0 = start_values(S, "line", u[:, None])
+        out0 = 1 / (1 + np.exp(-a0)) if D.task == "binary" else a0
+        ax.plot(u, out0, "--", color=T.start_colour, lw=1.0, label="start")
+    ax.plot(u, out, color=T.neutral_colour, lw=2, label="p for class 1" if D.task == "binary" else "prediction")
+    if D.task == "binary":
+        colours = [T.class_colour[int(v)] for v in y]
+        ax.scatter(X[:, 0], y, c=colours, s=18, edgecolor=T.marker_edge, lw=0.3, zorder=3)
+        test_marks(ax, S, lambda Xt, yt: (Xt[:, 0], yt, [T.class_colour[int(v)] for v in yt]))
+        ax.axhline(0.5, color=T.reference_line, lw=0.8, zorder=0)
+        gy = [float(D.stats(y, c)[0]) for c in range(D.G)]
+        ax.set_ylim(-0.08, 1.08)
+        ax.set_ylabel("p")
+        ax.set_title("p for class 1 against x1", fontsize=T.panel_title_size)
+    else:
+        ax.scatter(X[:, 0], y, s=18, color=T.point_neutral, zorder=3)
+        test_marks(ax, S, lambda Xt, yt: (Xt[:, 0], yt, T.point_neutral))
+        gy = [float(D.stats(y, c)[0]) for c in range(D.G)]
+        ax.set_ylabel("y")
+        ax.set_title("ŷ against x1, and the points", fontsize=T.panel_title_size)
+    draw_group_marks(ax, S, [float(v[0]) for v in gx], gy, size=110)
+    ax.set_xlabel("x1")
+    if moved or S.test is not None:
+        ax.legend(fontsize=T.legend_size, loc="best")
+
+
+def draw_plane(ax, S, F, gx):
+    """Two inputs. Binary: p for class 1 over the plane, the boundary p = 0.5 and the starting boundary (dashed).
+    Regression: the prediction over the plane, with the points coloured by y."""
+    D, T = S.data, S.theme
+    w = F.w
+    moved = bool(F.changed)
+    X, y = D.X.numpy(), D.y.numpy()
     P1, P2, grid = plane_grid(S)
     a = net_on(S, grid, w).reshape(P1.shape)
     if D.task == "binary":
@@ -831,7 +731,6 @@ def draw_input_plane(ax, S, F):
             )
         ax.set_title("ŷ over the input plane;\npoints coloured by y", fontsize=T.panel_title_size)
     ax.set_aspect("equal")
-    S.model.set_weights(w)
 
 
 def draw_class_plane(ax, S, F, gx):
@@ -941,8 +840,7 @@ def draw_target_curves(ax, S, F):
         ax.scatter(X[:, 0], Y[:, k], s=40, zorder=3, **target_marks(T, k))
         test_marks(ax, S, lambda Xt, Yt, k=k: (Xt[:, 0], Yt.reshape(len(Xt), -1)[:, k], T.point_neutral), k == 0)
         handles.append(target_handle(T, k))
-    if test_handle(S) is not None:
-        handles.append(test_handle(S))
+    handles += [h for h in [test_handle(S)] if h is not None]
     ax.set_xlabel("x1")
     ax.set_ylabel("ŷ and y")
     ax.legend(handles=handles, fontsize=T.legend_size, loc="best")
@@ -988,8 +886,7 @@ def draw_parity(ax, S, F):
     ax.set_xlim(lo, hi)
     ax.set_ylim(lo, hi)
     ax.set_aspect("equal")
-    if test_handle(S) is not None:
-        handles.append(test_handle(S))
+    handles += [h for h in [test_handle(S)] if h is not None]
     ax.set_xlabel("target y")
     ax.set_ylabel("prediction ŷ")
     ax.legend(handles=handles, fontsize=T.legend_size, loc="upper left")

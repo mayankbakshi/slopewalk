@@ -21,6 +21,7 @@ ORDER = [  # modules in the order of their dependencies
     "model",
     "data",
     "layout",
+    "theme",
     "draw",
     "views",
     "backprop",

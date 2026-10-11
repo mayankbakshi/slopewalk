@@ -27,7 +27,8 @@ import torch.nn.functional as F
 from contextlib import contextmanager
 from matplotlib import patheffects
 from matplotlib.backends.backend_agg import FigureCanvasAgg
-from matplotlib.colors import LinearSegmentedColormap, to_rgb, to_rgba
+from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.colors import to_rgb, to_rgba
 from matplotlib.figure import Figure
 from matplotlib.font_manager import FontProperties
 from matplotlib.lines import Line2D
@@ -598,15 +599,8 @@ def infer_task(y, task, n_outputs=1):
     return "binary"
 
 
-def prepare(X, y, groups=None, n_inputs=None, dtype=torch.float32, task=None, n_outputs=1):
-    """The checked tensors of an explore call, as a Data object.
-
-    X: n points with n_inputs numbers each (a list of points, an array or a tensor). A flat X is one point, except for
-    a network with one input, where it is n points. y: n labels (0 or 1; 0 to K-1 for a network with K outputs) or
-    targets (task='regression': n numbers, or n x K for a network with K outputs). groups None: one group per point
-    up to 8 points; more points: one group per class (classification), or for regression four groups of neighbouring
-    points along x1 (one input) or a single group (several inputs).
-    """
+def check_points(X, n_inputs):
+    """X as an n x d array of points, or ValueError. A flat X is one point, except for a network with one input."""
     Xa = as_numbers(X, "X")
     if Xa.ndim == 0:
         raise ValueError("slopewalk: X must hold at least one point.")
@@ -627,6 +621,11 @@ def prepare(X, y, groups=None, n_inputs=None, dtype=torch.float32, task=None, n_
         raise ValueError("slopewalk: X has no points.")
     if n_inputs is not None and d != n_inputs:
         raise ValueError(f"slopewalk: the points of X have {d} inputs, but the network has {n_inputs}.")
+    return Xa
+
+
+def check_targets(y, n, task, n_outputs):
+    """y as n labels or targets, or as an n x K array of targets (task='regression', K outputs), or ValueError."""
     ya = as_numbers(y, "y")
     if ya.ndim == 2 and ya.shape[1] == 1:
         ya = ya[:, 0]
@@ -656,9 +655,13 @@ def prepare(X, y, groups=None, n_inputs=None, dtype=torch.float32, task=None, n_
                 f"slopewalk: the network has {n_outputs} outputs, so y needs {n_outputs} targets per point: an n x "
                 f"{n_outputs} array, one column per output."
             )
-    check_finite(Xa, "X")
-    check_finite(ya, "y")
-    task = infer_task(ya, task, n_outputs)
+    return ya
+
+
+def make_groups(groups, Xa, ya, task):
+    """The group of each point: as given, or by default one per point up to 8 points, else one per class, or for
+    regression four groups along x1 (one input) or one group (several inputs)."""
+    n, d = Xa.shape
     if groups is None:
         if n <= 8:
             ga = np.arange(n)
@@ -677,6 +680,25 @@ def prepare(X, y, groups=None, n_inputs=None, dtype=torch.float32, task=None, n_
         if not (np.isfinite(g).all() and (g == np.round(g)).all()):
             raise ValueError("slopewalk: groups must hold one whole number per point.")
         ga = g.astype(np.int64)
+    return ga
+
+
+def prepare(X, y, groups=None, n_inputs=None, dtype=torch.float32, task=None, n_outputs=1):
+    """The checked tensors of an explore call, as a Data object.
+
+    X: n points with n_inputs numbers each (a list of points, an array or a tensor). A flat X is one point, except for
+    a network with one input, where it is n points. y: n labels (0 or 1; 0 to K-1 for a network with K outputs) or
+    targets (task='regression': n numbers, or n x K for a network with K outputs). groups None: one group per point
+    up to 8 points; more points: one group per class (classification), or for regression four groups of neighbouring
+    points along x1 (one input) or a single group (several inputs).
+    """
+    Xa = check_points(X, n_inputs)
+    n, d = Xa.shape
+    ya = check_targets(y, n, task, n_outputs)
+    check_finite(Xa, "X")
+    check_finite(ya, "y")
+    task = infer_task(ya, task, n_outputs)
+    ga = make_groups(groups, Xa, ya, task)
     Xt = torch.as_tensor(np.ascontiguousarray(Xa), dtype=dtype)  # reversed or sliced arrays need a copy
     yt = torch.as_tensor(np.ascontiguousarray(ya), dtype=dtype)
     n_classes = n_outputs if task == "multiclass" else None
@@ -926,7 +948,7 @@ def place_labels(edges, sizes, obstacles, defaults, pad=0.0):
         worst_boxes = max(worst_boxes, float(with_boxes[best]) / area)
     return positions, boxes, worst_labels, worst_boxes
 
-# ------------------------ draw.py ------------------------
+# ------------------------ theme.py ------------------------
 
 class Theme:
     """Colours, fonts and sizes of the picture. Red is class 1 and blue class 0 (with more classes, teal is class 2 and
@@ -1044,6 +1066,7 @@ def as_theme(theme):
         return THEMES[theme]
     return theme
 
+# ------------------------ draw.py ------------------------
 
 def halo(T):
     """An outline in the background colour, so that group letters stay legible over points."""
@@ -1585,8 +1608,7 @@ def class_legend(ax, S, winners=None):
         )
         for k in range(S.data.n_classes)
     ]
-    if test_handle(S) is not None:
-        handles.append(test_handle(S))
+    handles += [h for h in [test_handle(S)] if h is not None]
     ax.legend(handles=handles, fontsize=T.legend_size, loc="best")
 
 
@@ -1641,59 +1663,72 @@ def draw_group_marks(ax, S, xs, ys, size=160):
 
 
 def draw_input_plane(ax, S, F):
-    """Binary, two inputs: p for class 1 over the plane, the boundary p = 0.5 and the starting boundary (dashed).
-    One input: p or the prediction against x1, with the points. Regression, two inputs: the prediction over the plane.
-    """
+    """The panel below the networks that shows the inputs: by the task and the number of inputs, p for class 1 or
+    the prediction against x1 (one input), the plane (two inputs), the most likely class (several classes), each
+    target's curve or the prediction against the target (several targets, or more inputs than a plane shows)."""
     D, T = S.data, S.theme
-    w = F.w
-    moved = bool(F.changed)
-    X, y = D.X.numpy(), D.y.numpy()
+    X = D.X.numpy()
     gx = [D.stats(X, c)[0] for c in range(D.G)]
     if D.task == "multiclass" and D.d <= 2:
         draw_class_plane(ax, S, F, gx)
-        S.model.set_weights(w)
-        return
-    if D.task == "regression" and (S.model.n_outputs > 1 or D.d > 2):
+    elif D.task == "regression" and (S.model.n_outputs > 1 or D.d > 2):
         if D.d == 1:
             draw_target_curves(ax, S, F)
         else:  # more inputs than a plane shows, or several targets over a plane
             draw_parity(ax, S, F)
-        S.model.set_weights(w)
-        return
-    if D.d == 1:
-        u = line_grid(S)
-        a = net_on(S, u[:, None], w)
-        out = 1 / (1 + np.exp(-a)) if D.task == "binary" else a
-        if moved:
-            a0 = start_values(S, "line", u[:, None])
-            out0 = 1 / (1 + np.exp(-a0)) if D.task == "binary" else a0
-            ax.plot(u, out0, "--", color=T.start_colour, lw=1.0, label="start")
-        ax.plot(u, out, color=T.neutral_colour, lw=2, label="p for class 1" if D.task == "binary" else "prediction")
-        if D.task == "binary":
-            colours = [T.class_colour[int(v)] for v in y]
-            ax.scatter(X[:, 0], y, c=colours, s=18, edgecolor=T.marker_edge, lw=0.3, zorder=3)
-            test_marks(ax, S, lambda Xt, yt: (Xt[:, 0], yt, [T.class_colour[int(v)] for v in yt]))
-            ax.axhline(0.5, color=T.reference_line, lw=0.8, zorder=0)
-            gy = [float(D.stats(y, c)[0]) for c in range(D.G)]
-            ax.set_ylim(-0.08, 1.08)
-            ax.set_ylabel("p")
-            ax.set_title("p for class 1 against x1", fontsize=T.panel_title_size)
-        else:
-            ax.scatter(X[:, 0], y, s=18, color=T.point_neutral, zorder=3)
-            test_marks(ax, S, lambda Xt, yt: (Xt[:, 0], yt, T.point_neutral))
-            gy = [float(D.stats(y, c)[0]) for c in range(D.G)]
-            ax.set_ylabel("y")
-            ax.set_title("ŷ against x1, and the points", fontsize=T.panel_title_size)
-        draw_group_marks(ax, S, [float(v[0]) for v in gx], gy, size=110)
-        ax.set_xlabel("x1")
-        if moved or S.test is not None:
-            ax.legend(fontsize=T.legend_size, loc="best")
-        S.model.set_weights(w)
-        return
-    if D.d != 2:
+    elif D.d == 1:
+        draw_curve(ax, S, F, gx)
+    elif D.d == 2:
+        draw_plane(ax, S, F, gx)
+    else:
         ax.axis("off")
         ax.text(0.5, 0.5, f"{D.d} inputs: no picture of the input plane", ha="center", va="center", color=T.muted)
-        return
+    S.model.set_weights(F.w)
+
+
+def draw_curve(ax, S, F, gx):
+    """One input: p for class 1 (binary) or the prediction (regression) against x1, with the points and the groups'
+    means; once the weights moved, the starting curve, dashed."""
+    D, T = S.data, S.theme
+    w = F.w
+    moved = bool(F.changed)
+    X, y = D.X.numpy(), D.y.numpy()
+    u = line_grid(S)
+    a = net_on(S, u[:, None], w)
+    out = 1 / (1 + np.exp(-a)) if D.task == "binary" else a
+    if moved:
+        a0 = start_values(S, "line", u[:, None])
+        out0 = 1 / (1 + np.exp(-a0)) if D.task == "binary" else a0
+        ax.plot(u, out0, "--", color=T.start_colour, lw=1.0, label="start")
+    ax.plot(u, out, color=T.neutral_colour, lw=2, label="p for class 1" if D.task == "binary" else "prediction")
+    if D.task == "binary":
+        colours = [T.class_colour[int(v)] for v in y]
+        ax.scatter(X[:, 0], y, c=colours, s=18, edgecolor=T.marker_edge, lw=0.3, zorder=3)
+        test_marks(ax, S, lambda Xt, yt: (Xt[:, 0], yt, [T.class_colour[int(v)] for v in yt]))
+        ax.axhline(0.5, color=T.reference_line, lw=0.8, zorder=0)
+        gy = [float(D.stats(y, c)[0]) for c in range(D.G)]
+        ax.set_ylim(-0.08, 1.08)
+        ax.set_ylabel("p")
+        ax.set_title("p for class 1 against x1", fontsize=T.panel_title_size)
+    else:
+        ax.scatter(X[:, 0], y, s=18, color=T.point_neutral, zorder=3)
+        test_marks(ax, S, lambda Xt, yt: (Xt[:, 0], yt, T.point_neutral))
+        gy = [float(D.stats(y, c)[0]) for c in range(D.G)]
+        ax.set_ylabel("y")
+        ax.set_title("ŷ against x1, and the points", fontsize=T.panel_title_size)
+    draw_group_marks(ax, S, [float(v[0]) for v in gx], gy, size=110)
+    ax.set_xlabel("x1")
+    if moved or S.test is not None:
+        ax.legend(fontsize=T.legend_size, loc="best")
+
+
+def draw_plane(ax, S, F, gx):
+    """Two inputs. Binary: p for class 1 over the plane, the boundary p = 0.5 and the starting boundary (dashed).
+    Regression: the prediction over the plane, with the points coloured by y."""
+    D, T = S.data, S.theme
+    w = F.w
+    moved = bool(F.changed)
+    X, y = D.X.numpy(), D.y.numpy()
     P1, P2, grid = plane_grid(S)
     a = net_on(S, grid, w).reshape(P1.shape)
     if D.task == "binary":
@@ -1739,7 +1774,6 @@ def draw_input_plane(ax, S, F):
             )
         ax.set_title("ŷ over the input plane;\npoints coloured by y", fontsize=T.panel_title_size)
     ax.set_aspect("equal")
-    S.model.set_weights(w)
 
 
 def draw_class_plane(ax, S, F, gx):
@@ -1849,8 +1883,7 @@ def draw_target_curves(ax, S, F):
         ax.scatter(X[:, 0], Y[:, k], s=40, zorder=3, **target_marks(T, k))
         test_marks(ax, S, lambda Xt, Yt, k=k: (Xt[:, 0], Yt.reshape(len(Xt), -1)[:, k], T.point_neutral), k == 0)
         handles.append(target_handle(T, k))
-    if test_handle(S) is not None:
-        handles.append(test_handle(S))
+    handles += [h for h in [test_handle(S)] if h is not None]
     ax.set_xlabel("x1")
     ax.set_ylabel("ŷ and y")
     ax.legend(handles=handles, fontsize=T.legend_size, loc="best")
@@ -1896,8 +1929,7 @@ def draw_parity(ax, S, F):
     ax.set_xlim(lo, hi)
     ax.set_ylim(lo, hi)
     ax.set_aspect("equal")
-    if test_handle(S) is not None:
-        handles.append(test_handle(S))
+    handles += [h for h in [test_handle(S)] if h is not None]
     ax.set_xlabel("target y")
     ax.set_ylabel("prediction ŷ")
     ax.legend(handles=handles, fontsize=T.legend_size, loc="upper left")
@@ -3056,11 +3088,8 @@ def make_frame(S, w=None):
     out = M.forward(D.X, D.y, w)
     R = M.risk(D.X, D.y, w)
     g = M.slopes(D.X, D.y, w)
-    deltas = []
-    for k in range(len(w)):
-        wk = list(w)
-        wk[k] += 0.1
-        deltas.append(M.risk(D.X, D.y, wk) - R)
+    W = np.asarray(w, dtype=float)[None, :] + 0.1 * np.eye(len(w))  # each weight alone grown by 0.1: one batched pass
+    deltas = list(M.risk_batch(D.X, D.y, W) - R)
     M.set_weights(w)
     moving = set(S.active)
     changed = {k for k in range(len(w)) if abs(w[k] - S.w0[k]) > 1e-9}  # moved from the start in any way
@@ -3545,11 +3574,11 @@ class Controller:
             for c in range(S.data.G):
                 box = widgets.Checkbox(
                     value=c in S.shown,
-                    description=chr(65 + c) if c < 26 else str(c),
+                    description=letter(c),
                     indent=False,
                     layout=widgets.Layout(width="52px"),
                 )
-                tip(box, f"draw the network for group {chr(65 + c) if c < 26 else c}")
+                tip(box, f"draw the network for group {letter(c)}")
                 box.observe(self.on_show, names="value")
                 self.show_boxes[c] = box
                 row.append(box)
@@ -3672,7 +3701,7 @@ class Controller:
         self.bp_next = tip(
             widgets.Button(description="next stage", button_style="primary"), "the next stage, one layer back"
         )
-        letters = [chr(65 + c) if c < 26 else str(c) for c in range(S.data.G)]
+        letters = [letter(c) for c in range(S.data.G)]
         self.bp_case = widgets.Dropdown(
             options=letters,
             value=letters[S.backprop_case],
@@ -3972,7 +4001,7 @@ class Controller:
         S.set_shown(chosen)
         self.picture = None
         self.redraw()
-        letters = ", ".join(chr(65 + c) if c < 26 else str(c) for c in chosen)
+        letters = ", ".join(letter(c) for c in chosen)
         self.say(f"Networks shown for {letters}" + (", drawn larger." if len(chosen) == 1 else "."))
 
     def on_theme(self, change):
@@ -4096,7 +4125,7 @@ class Controller:
             S.fig = self.picture.fig
             self.last_R = self.picture.frame.R
             png = self.picture.png()
-            self.readout.value = readout_html(S.readouts(self.eta.value, w), self.action)
+            self.readout.value = readout_html(S.readouts(self.eta.value, w, frame=self.picture.frame), self.action)
             if self.use_output:
                 from IPython.display import Image, clear_output, display
 
@@ -4609,25 +4638,29 @@ class Session:
         the slope dR/dw of that weight."""
         return self.model.case_slopes(self.data.X, self.data.y, w)
 
-    def readouts(self, eta=None, w=None):
+    def readouts(self, eta=None, w=None, frame=None):
         """The numbers of the readout strip: R, the size of the gradient of the weights that move, the accuracy
         (classification), the predicted change of R for the next step, and the last step's predicted and actual
-        change."""
+        change. frame: the numbers the picture computed for w, so that nothing is computed twice."""
         eta = self.eta if eta is None else check_eta(eta)
         w = self.weights() if w is None else list(w)
-        g = self.slopes(w)
+        if frame is not None and frame.eta == eta and list(frame.w) == [float(v) for v in w]:
+            R, g, next_change, R_test = frame.R, frame.g, frame.next_change, frame.R_test
+        else:
+            R, g = self.risk(w), self.slopes(w)
+            dw = self.next_step(eta, w, g)
+            next_change, R_test = float(sum(g[k] * dw[k] for k in dw)), self.risk_test(w)
         g2 = float(sum(g[k] ** 2 for k in self.active))
-        dw = self.next_step(eta, w, g)
         last = self.predictions[-1] if self.predictions else None
         classify = self.task != "regression"
         out = {
-            "R": self.risk(w),
+            "R": R,
             "grad_norm": math.sqrt(g2),
             "accuracy": self.model.accuracy(self.data.X, self.data.y, w) if classify else None,
             "eta": eta,
-            "next_change": float(sum(g[k] * dw[k] for k in dw)),
+            "next_change": next_change,
             "last": None if last is None else (last.predicted - last.before, last.actual - last.before),
-            "R_test": self.risk_test(w),
+            "R_test": R_test,
             "accuracy_test": self.model.accuracy(self.test.X, self.test.y, w) if classify and self.test else None,
         }
         self.model.set_weights(w)

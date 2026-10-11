@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Internal: the themes live in `theme.py` (`slopewalk.draw` still exports them); the table's change column is one batched pass instead of one pass per weight; the status reuses the picture's numbers; the checks of `prepare` and the panel below the networks are split into small functions. The redraw time is unchanged: it is matplotlib's drawing, not slopewalk's computation.
 - Test data: `explore(..., X_test=..., y_test=...)` draws the test points as crosses in the panel below the networks, adds R on the test data to the R panel (dashed) and to the status (with the test accuracy for classes), and keeps it out of the steps.
 - Optimizers: `optimizer="momentum"` or `"adam"` change the rule of a step (checked against `torch.optim`), and `weight_decay` adds λ·w to each slope before the step. R stays the mean loss on the data. The first-order prediction becomes the slopes times the step, and the view "R along the next step" runs along the step the optimizer takes. `back one step` and `reset` restore the optimizer's state. Passing either option shows a row with the optimizer, the weight decay and beta under the step buttons.
 - `focus="A"`: one group drawn alone and 1.5 times larger (text included), for a close look at one case; checkboxes in the row under the controls add or remove groups, and the last one stays. A single group in the data is drawn the same way. The first panel shown carries the names and the numbers of the weights ("weights as in B").

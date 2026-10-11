@@ -106,15 +106,8 @@ def infer_task(y, task, n_outputs=1):
     return "binary"
 
 
-def prepare(X, y, groups=None, n_inputs=None, dtype=torch.float32, task=None, n_outputs=1):
-    """The checked tensors of an explore call, as a Data object.
-
-    X: n points with n_inputs numbers each (a list of points, an array or a tensor). A flat X is one point, except for
-    a network with one input, where it is n points. y: n labels (0 or 1; 0 to K-1 for a network with K outputs) or
-    targets (task='regression': n numbers, or n x K for a network with K outputs). groups None: one group per point
-    up to 8 points; more points: one group per class (classification), or for regression four groups of neighbouring
-    points along x1 (one input) or a single group (several inputs).
-    """
+def check_points(X, n_inputs):
+    """X as an n x d array of points, or ValueError. A flat X is one point, except for a network with one input."""
     Xa = as_numbers(X, "X")
     if Xa.ndim == 0:
         raise ValueError("slopewalk: X must hold at least one point.")
@@ -135,6 +128,11 @@ def prepare(X, y, groups=None, n_inputs=None, dtype=torch.float32, task=None, n_
         raise ValueError("slopewalk: X has no points.")
     if n_inputs is not None and d != n_inputs:
         raise ValueError(f"slopewalk: the points of X have {d} inputs, but the network has {n_inputs}.")
+    return Xa
+
+
+def check_targets(y, n, task, n_outputs):
+    """y as n labels or targets, or as an n x K array of targets (task='regression', K outputs), or ValueError."""
     ya = as_numbers(y, "y")
     if ya.ndim == 2 and ya.shape[1] == 1:
         ya = ya[:, 0]
@@ -164,9 +162,13 @@ def prepare(X, y, groups=None, n_inputs=None, dtype=torch.float32, task=None, n_
                 f"slopewalk: the network has {n_outputs} outputs, so y needs {n_outputs} targets per point: an n x "
                 f"{n_outputs} array, one column per output."
             )
-    check_finite(Xa, "X")
-    check_finite(ya, "y")
-    task = infer_task(ya, task, n_outputs)
+    return ya
+
+
+def make_groups(groups, Xa, ya, task):
+    """The group of each point: as given, or by default one per point up to 8 points, else one per class, or for
+    regression four groups along x1 (one input) or one group (several inputs)."""
+    n, d = Xa.shape
     if groups is None:
         if n <= 8:
             ga = np.arange(n)
@@ -185,6 +187,25 @@ def prepare(X, y, groups=None, n_inputs=None, dtype=torch.float32, task=None, n_
         if not (np.isfinite(g).all() and (g == np.round(g)).all()):
             raise ValueError("slopewalk: groups must hold one whole number per point.")
         ga = g.astype(np.int64)
+    return ga
+
+
+def prepare(X, y, groups=None, n_inputs=None, dtype=torch.float32, task=None, n_outputs=1):
+    """The checked tensors of an explore call, as a Data object.
+
+    X: n points with n_inputs numbers each (a list of points, an array or a tensor). A flat X is one point, except for
+    a network with one input, where it is n points. y: n labels (0 or 1; 0 to K-1 for a network with K outputs) or
+    targets (task='regression': n numbers, or n x K for a network with K outputs). groups None: one group per point
+    up to 8 points; more points: one group per class (classification), or for regression four groups of neighbouring
+    points along x1 (one input) or a single group (several inputs).
+    """
+    Xa = check_points(X, n_inputs)
+    n, d = Xa.shape
+    ya = check_targets(y, n, task, n_outputs)
+    check_finite(Xa, "X")
+    check_finite(ya, "y")
+    task = infer_task(ya, task, n_outputs)
+    ga = make_groups(groups, Xa, ya, task)
     Xt = torch.as_tensor(np.ascontiguousarray(Xa), dtype=dtype)  # reversed or sliced arrays need a copy
     yt = torch.as_tensor(np.ascontiguousarray(ya), dtype=dtype)
     n_classes = n_outputs if task == "multiclass" else None

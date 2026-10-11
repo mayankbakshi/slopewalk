@@ -341,25 +341,29 @@ class Session:
         the slope dR/dw of that weight."""
         return self.model.case_slopes(self.data.X, self.data.y, w)
 
-    def readouts(self, eta=None, w=None):
+    def readouts(self, eta=None, w=None, frame=None):
         """The numbers of the readout strip: R, the size of the gradient of the weights that move, the accuracy
         (classification), the predicted change of R for the next step, and the last step's predicted and actual
-        change."""
+        change. frame: the numbers the picture computed for w, so that nothing is computed twice."""
         eta = self.eta if eta is None else check_eta(eta)
         w = self.weights() if w is None else list(w)
-        g = self.slopes(w)
+        if frame is not None and frame.eta == eta and list(frame.w) == [float(v) for v in w]:
+            R, g, next_change, R_test = frame.R, frame.g, frame.next_change, frame.R_test
+        else:
+            R, g = self.risk(w), self.slopes(w)
+            dw = self.next_step(eta, w, g)
+            next_change, R_test = float(sum(g[k] * dw[k] for k in dw)), self.risk_test(w)
         g2 = float(sum(g[k] ** 2 for k in self.active))
-        dw = self.next_step(eta, w, g)
         last = self.predictions[-1] if self.predictions else None
         classify = self.task != "regression"
         out = {
-            "R": self.risk(w),
+            "R": R,
             "grad_norm": math.sqrt(g2),
             "accuracy": self.model.accuracy(self.data.X, self.data.y, w) if classify else None,
             "eta": eta,
-            "next_change": float(sum(g[k] * dw[k] for k in dw)),
+            "next_change": next_change,
             "last": None if last is None else (last.predicted - last.before, last.actual - last.before),
-            "R_test": self.risk_test(w),
+            "R_test": R_test,
             "accuracy_test": self.model.accuracy(self.test.X, self.test.y, w) if classify and self.test else None,
         }
         self.model.set_weights(w)
