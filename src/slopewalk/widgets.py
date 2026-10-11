@@ -196,6 +196,10 @@ def readout_html(r, action=None):
     ]
     if r["accuracy"] is not None:
         cells.append(("accuracy", span(f"{r['accuracy']:.3f}", "value"), ""))
+    if r.get("R_test") is not None:
+        cells.append(("R on the test data", span(f"{r['R_test']:.4f}", "value"), ""))
+    if r.get("accuracy_test") is not None:
+        cells.append(("test accuracy", span(f"{r['accuracy_test']:.3f}", "value"), ""))
     pad = f"padding:0 32px 0 0;text-align:left;vertical-align:bottom;{UI['numbers']}"
     rows = [
         "".join(f'<td style="{pad}">{span(label, "small", "quiet")}</td>' for label, _, _ in cells),
@@ -344,7 +348,10 @@ class Controller:
         hint = HINTS["core"]
         if S.task == "regression" and S.model.n_outputs > 1:
             hint += " The targets count from 1, like the inputs x1, x2."
-        core = widgets.VBox([widgets.HTML(text_html(hint)), steps_row, self.panel, self.frozen_note])
+        rows = [widgets.HTML(text_html(hint)), steps_row]
+        if S.optimizer_asked:
+            rows.append(self.optimizer_row(widgets))
+        core = widgets.VBox(rows + [self.panel, self.frozen_note])
         # tabs only for what the call asked for; the backward pass stays on while its tab exists
         self.kinds, panels = ["core"], {"core": core}
         if "backprop" in S.views:
@@ -620,6 +627,77 @@ class Controller:
         button.description = "step" if n == 1 else "steps"
         tip(button, f"{n} gradient step{'' if n == 1 else 's'} in a row; the number is in the box to the left")
 
+    def optimizer_row(self, widgets):
+        """The rule of a step and its numbers: the optimizer, the weight decay and beta (shown when the call asked
+        for an optimizer or a weight decay)."""
+        S = self.session
+        opt = S.optimizer
+        self.opt_pick = tip(
+            widgets.Dropdown(
+                options=[("gradient descent", "gd"), ("momentum", "momentum"), ("Adam", "adam")],
+                value=opt.kind,
+                description="optimizer",
+                style={"description_width": UI["setting_label"]},
+                layout=widgets.Layout(width=UI["short"]),
+            ),
+            "the rule of a step: w <- w - eta x dR/dw; momentum keeps a share beta of the last step; Adam scales "
+            "each weight's step by its recent slopes",
+        )
+        self.decay = tip(
+            widgets.FloatSlider(
+                value=opt.weight_decay,
+                min=0.0,
+                max=max(0.1, opt.weight_decay),
+                step=0.001,
+                description="weight decay",
+                readout_format=".3f",
+                continuous_update=False,
+                style={"description_width": UI["setting_label"]},
+                layout=widgets.Layout(width=UI["long"]),
+            ),
+            "lambda: lambda x w is added to each slope before the step; R itself stays the loss on the data",
+        )
+        self.opt_beta = tip(
+            widgets.FloatSlider(
+                value=opt.beta,
+                min=0.0,
+                max=0.99,
+                step=0.01,
+                description="beta",
+                continuous_update=False,
+                style={"description_width": UI["label"]},
+                layout=widgets.Layout(width=UI["long"]),
+            ),
+            "momentum: the share of the last step each step keeps; Adam: its share of the last slopes",
+        )
+        for w in (self.opt_pick, self.decay, self.opt_beta):
+            w.observe(self.on_optimizer, names="value")
+        return widgets.HBox(
+            [self.opt_pick, self.decay, self.opt_beta],
+            layout=widgets.Layout(align_items="center", flex_flow="row wrap", margin="0 0 12px 0"),
+        )
+
+    def on_optimizer(self, *_):
+        """A new rule or new numbers for the steps; a new rule forgets the state of the old one."""
+        if self.busy:
+            return
+        S = self.session
+        S.optimizer.set(kind=self.opt_pick.value, weight_decay=float(self.decay.value), beta=float(self.opt_beta.value))
+        S.beta = float(self.opt_beta.value)
+        if hasattr(self, "beta"):  # the momentum view shares beta
+            self.busy = True
+            try:
+                self.beta.value = S.beta
+            finally:
+                self.busy = False
+        self.redraw()
+        name = {"gd": "gradient descent", "momentum": "momentum", "adam": "Adam"}[S.optimizer.kind]
+        r = S.readouts(self.eta.value)
+        self.say(
+            f"Steps by {name}, weight decay {S.optimizer.weight_decay:g}: the next step should change R by about "
+            f"{r['next_change']:+.4f}."
+        )
+
     def on_eta(self, change):
         self.session.eta = float(change["new"])
         if not self.busy:
@@ -693,6 +771,13 @@ class Controller:
         second = self.slice_pick[1].value
         S.slice_weights = [first] if second in ("none", self.slice_pick[0].value) else [first, names.index(second)]
         S.beta = float(self.beta.value)
+        S.optimizer.set(beta=S.beta)
+        if hasattr(self, "opt_beta") and self.opt_beta.value != S.beta:
+            self.busy = True
+            try:
+                self.opt_beta.value = S.beta
+            finally:
+                self.busy = False
         S.lookahead_steps = int(self.ahead.value)
         S.log_scale = bool(self.log_box.value)
         self.picture = None  # the panels changed: a new figure

@@ -198,22 +198,23 @@ def draw_slice(ax, S, F):
 
 
 def draw_line(ax, S, F):
-    """R along the direction of the next step, w - t g (g: the slopes of the weights that move), for t from 0 to
-    2.5 eta: the actual R, the tangent line R - t |g|^2 (the first-order prediction), where the step lands at
-    t = eta on both, and the lowest point on this line."""
+    """R along the direction of the next step, w + t d (d: the step per unit of eta; -g, the slopes of the weights
+    that move, for plain gradient descent), for t from 0 to 2.5 eta: the actual R, the tangent line R + t (g . d)
+    (the first-order prediction), where the step lands at t = eta on both, and the lowest point on this line."""
     D, M, T = S.data, S.model, S.theme
     g = moving_slopes(F)
-    g2 = float((g**2).sum())
-    if g2 == 0:
+    d = np.asarray(F.direction, dtype=float)
+    slope = float((g * d).sum())  # the slope of R along the step, g . d
+    if not np.any(d):
         message(ax, T, "every slope is 0:\nno step")
         return
     eta = F.eta
     ts = np.linspace(0, 2.5 * eta, 101)
     w = np.asarray(F.w, dtype=float)
-    R = M.risk_batch(D.X, D.y, w[None, :] - ts[:, None] * g[None, :])
-    R_eta = float(M.risk_batch(D.X, D.y, (w - eta * g)[None, :])[0])
-    pred = F.R - eta * g2
-    tangent = F.R - ts * g2
+    R = M.risk_batch(D.X, D.y, w[None, :] + ts[:, None] * d[None, :])
+    R_eta = float(M.risk_batch(D.X, D.y, (w + eta * d)[None, :])[0])
+    pred = F.R + eta * slope
+    tangent = F.R + ts * slope
     ax.plot(ts, R, color=T.ink, lw=1.8, label="R along the step")
     ax.plot(ts, tangent, "--", color=T.prediction_colour, lw=1.2, label="first-order prediction")
     ax.axvline(eta, color=T.reference_line, lw=0.8, zorder=0)
@@ -235,7 +236,8 @@ def draw_line(ax, S, F):
     span = (top - bottom) or 1.0
     ax.set_ylim(bottom - 0.08 * span, top + 0.08 * span)
     ax.set_xlim(0, ts[-1])
-    ax.set_xlabel("t, the step size along -grad R")
+    plain = S.optimizer.kind == "gd" and S.optimizer.weight_decay == 0
+    ax.set_xlabel("t, the step size along -grad R" if plain else f"t, the step size along the {S.optimizer.kind} step")
     ax.set_ylabel("R")
     ax.legend(fontsize=T.legend_size, loc="best")
     ax.set_title(f"R along the next step, eta {eta:g}", fontsize=T.panel_title_size)

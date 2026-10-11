@@ -38,6 +38,93 @@ from pathlib import Path
 __version__ = "0.1.0.dev0"
 
 
+# ------------------------ optim.py ------------------------
+
+OPTIMIZERS = ("gd", "momentum", "adam")
+
+
+def check_optimizer(kind):
+    if kind not in OPTIMIZERS:
+        raise ValueError(f"slopewalk: optimizer must be 'gd', 'momentum' or 'adam', not {kind!r}.")
+    return kind
+
+
+def check_decay(weight_decay):
+    if not (isinstance(weight_decay, (int, float)) and math.isfinite(weight_decay) and weight_decay >= 0):
+        raise ValueError(f"slopewalk: weight_decay must be a number from 0 up, not {weight_decay!r}.")
+    return float(weight_decay)
+
+
+def check_beta2(beta2):
+    if not (isinstance(beta2, (int, float)) and 0 <= beta2 < 1):
+        raise ValueError(
+            f"slopewalk: beta2 (Adam's share of the last squared slopes) must be in [0, 1), not {beta2!r}."
+        )
+    return float(beta2)
+
+
+class Optimizer:
+    """The step rule with its state: the velocity of momentum, or Adam's m, v and step count t."""
+
+    def __init__(self, kind="gd", weight_decay=0.0, beta=0.9, beta2=0.999, eps=1e-8):
+        self.kind = check_optimizer(kind)
+        self.weight_decay = check_decay(weight_decay)
+        self.beta, self.beta2, self.eps = beta, check_beta2(beta2), eps
+        self.reset()
+
+    def reset(self):
+        """Forgets the steps taken: the next step is a first step."""
+        self.velocity = {}  # momentum: per weight
+        self.m, self.v, self.t = {}, {}, 0  # Adam
+
+    def copy(self):
+        """A copy of the state, for back one step."""
+        out = Optimizer(self.kind, self.weight_decay, self.beta, self.beta2, self.eps)
+        out.velocity, out.m, out.v, out.t = dict(self.velocity), dict(self.m), dict(self.v), self.t
+        return out
+
+    def set(self, kind=None, weight_decay=None, beta=None, beta2=None):
+        """Changes the rule or its numbers; a new rule forgets the state."""
+        if kind is not None and kind != self.kind:
+            self.kind = check_optimizer(kind)
+            self.reset()
+        if weight_decay is not None:
+            self.weight_decay = check_decay(weight_decay)
+        if beta is not None:
+            self.beta = float(beta)
+        if beta2 is not None:
+            self.beta2 = check_beta2(beta2)
+
+    def direction(self, g, w, active, eta):
+        """The change dw of each weight that the next step would make, as {k: dw}, without taking it."""
+        return self.take(g, w, active, eta, self.copy())
+
+    def step(self, g, w, active, eta):
+        """The change dw of each weight for this step, as {k: dw}; the state moves on."""
+        return self.take(g, w, active, eta, self)
+
+    @staticmethod
+    def take(g, w, active, eta, state):
+        """The step of the rule in `state` (whose state moves on), for the weights in `active`."""
+        out = {}
+        lam, kind = state.weight_decay, state.kind
+        if kind == "adam":
+            state.t += 1
+            b1, b2 = state.beta, state.beta2
+            fix1, fix2 = 1 - b1**state.t, 1 - b2**state.t
+        for k in active:
+            gk = float(g[k]) + lam * float(w[k])
+            if kind == "gd":
+                out[k] = -eta * gk
+            elif kind == "momentum":
+                state.velocity[k] = state.beta * state.velocity.get(k, 0.0) - eta * gk
+                out[k] = state.velocity[k]
+            else:
+                state.m[k] = b1 * state.m.get(k, 0.0) + (1 - b1) * gk
+                state.v[k] = b2 * state.v.get(k, 0.0) + (1 - b2) * gk * gk
+                out[k] = -eta * (state.m[k] / fix1) / (math.sqrt(state.v[k] / fix2) + state.eps)
+        return out
+
 # ------------------------ model.py ------------------------
 
 # activation module -> (name, numpy function, half-width of the curve drawn in the glyph, numpy derivative)
@@ -1475,6 +1562,13 @@ def class_boundaries(ax, U1, U2, A, **style):
             ax.contour(U1, U2, d, levels=[0.0], **style)
 
 
+def test_handle(S):
+    """The legend entry of the test data, or None without test data."""
+    if S.test is None:
+        return None
+    return Line2D([], [], marker="x", ls="none", color=S.theme.ink, markersize=6, label="test data")
+
+
 def class_legend(ax, S, winners=None):
     """A legend of the class colours. winners: the classes that are the most likely somewhere in the picture; the
     others are marked "no region", so that a class missing from the picture is not taken for a drawing error."""
@@ -1491,6 +1585,8 @@ def class_legend(ax, S, winners=None):
         )
         for k in range(S.data.n_classes)
     ]
+    if test_handle(S) is not None:
+        handles.append(test_handle(S))
     ax.legend(handles=handles, fontsize=T.legend_size, loc="best")
 
 
@@ -1515,6 +1611,14 @@ def line_grid(S):
     lo, hi = float(x.min()), float(x.max())
     pad = 0.15 * (hi - lo) if hi > lo else 1.0
     return np.linspace(lo - pad, hi + pad, 201)
+
+
+def test_marks(ax, S, where, legend=True):
+    """The test data as crosses: where(X_test, y_test) gives (x, y, colours) of the marks; legend: name them once."""
+    if S.test is None:
+        return
+    x, y, colours = where(S.test.X.numpy(), S.test.y.numpy())
+    ax.scatter(x, y, marker="x", s=22, c=colours, linewidths=1.0, zorder=3, label="test data" if legend else None)
 
 
 def draw_group_marks(ax, S, xs, ys, size=160):
@@ -1568,6 +1672,7 @@ def draw_input_plane(ax, S, F):
         if D.task == "binary":
             colours = [T.class_colour[int(v)] for v in y]
             ax.scatter(X[:, 0], y, c=colours, s=18, edgecolor=T.marker_edge, lw=0.3, zorder=3)
+            test_marks(ax, S, lambda Xt, yt: (Xt[:, 0], yt, [T.class_colour[int(v)] for v in yt]))
             ax.axhline(0.5, color=T.reference_line, lw=0.8, zorder=0)
             gy = [float(D.stats(y, c)[0]) for c in range(D.G)]
             ax.set_ylim(-0.08, 1.08)
@@ -1575,12 +1680,13 @@ def draw_input_plane(ax, S, F):
             ax.set_title("p for class 1 against x1", fontsize=T.panel_title_size)
         else:
             ax.scatter(X[:, 0], y, s=18, color=T.point_neutral, zorder=3)
+            test_marks(ax, S, lambda Xt, yt: (Xt[:, 0], yt, T.point_neutral))
             gy = [float(D.stats(y, c)[0]) for c in range(D.G)]
             ax.set_ylabel("y")
             ax.set_title("ŷ against x1, and the points", fontsize=T.panel_title_size)
         draw_group_marks(ax, S, [float(v[0]) for v in gx], gy, size=110)
         ax.set_xlabel("x1")
-        if moved:
+        if moved or S.test is not None:
             ax.legend(fontsize=T.legend_size, loc="best")
         S.model.set_weights(w)
         return
@@ -1601,6 +1707,7 @@ def draw_input_plane(ax, S, F):
                 ax.contour(P1, P2, a0, levels=[0.0], colors=T.start_colour, linestyles="--", linewidths=1.0)
         if D.n > D.G:
             ax.scatter(X[:, 0], X[:, 1], c=[T.class_colour[int(v)] for v in y], s=4)
+        test_marks(ax, S, lambda Xt, yt: (Xt[:, 0], Xt[:, 1], [T.class_colour[int(v)] for v in yt]))
         for c in range(D.G):
             yi = group_style(S, c)[3]
             ax.scatter(*gx[c], s=160, color=T.class_colour[yi], edgecolor=T.marker_edge, zorder=3)
@@ -1608,6 +1715,8 @@ def draw_input_plane(ax, S, F):
                 gx[c][0] + 0.15, gx[c][1] + 0.15, letter(c), fontsize=T.letter_size, path_effects=halo(T), color=T.ink
             )
         ax.set_title("p for class 1 over the input plane,\nand the boundary p = 0.5", fontsize=T.panel_title_size)
+        if S.test is not None:
+            ax.legend(fontsize=T.legend_size, loc="best")
     else:
         lo, hi = float(min(a.min(), y.min())), float(max(a.max(), y.max()))
         levels = np.linspace(lo, hi, 12) if hi > lo else 12
@@ -1654,6 +1763,12 @@ def draw_class_plane(ax, S, F, gx):
             ax.plot(u, P[:, k], color=T.class_colour[k], lw=2, label=f"p{k}")
         own = F.out.p[np.arange(D.n), y.astype(np.int64)]
         ax.scatter(X[:, 0], own, c=colours, s=18, edgecolor=T.marker_edge, lw=0.3, zorder=3)
+        if S.test is not None:  # the test cases on the curve of their class as well
+            Pt = softmax(net_on(S, S.test.X.numpy(), F.w))
+            yt = S.test.y.numpy().astype(np.int64)
+            test_marks(
+                ax, S, lambda Xt, _: (Xt[:, 0], Pt[np.arange(len(yt)), yt], [T.class_colour[int(v)] for v in yt])
+            )
         draw_group_marks(ax, S, [float(v[0]) for v in gx], [float(D.stats(own, c)[0]) for c in range(D.G)], size=110)
         ax.set_ylim(-0.08, 1.08)
         ax.set_xlabel("x1")
@@ -1671,6 +1786,7 @@ def draw_class_plane(ax, S, F, gx):
         class_boundaries(ax, P1, P2, A0, colors=T.start_colour, linestyles="--", linewidths=1.0)
     if D.n > D.G:
         ax.scatter(X[:, 0], X[:, 1], c=colours, s=4)
+    test_marks(ax, S, lambda Xt, yt: (Xt[:, 0], Xt[:, 1], [T.class_colour[int(v)] for v in yt]))
     for c in range(D.G):
         yi = group_style(S, c)[3]
         ax.scatter(*gx[c], s=160, color=T.class_colour[yi], edgecolor=T.marker_edge, zorder=3)
@@ -1731,7 +1847,10 @@ def draw_target_curves(ax, S, F):
     for k in range(A.shape[1]):
         ax.plot(u, A[:, k], LINE_STYLES[k], color=T.neutral_colour, lw=2, label=f"ŷ{k + 1}")
         ax.scatter(X[:, 0], Y[:, k], s=40, zorder=3, **target_marks(T, k))
+        test_marks(ax, S, lambda Xt, Yt, k=k: (Xt[:, 0], Yt.reshape(len(Xt), -1)[:, k], T.point_neutral), k == 0)
         handles.append(target_handle(T, k))
+    if test_handle(S) is not None:
+        handles.append(test_handle(S))
     ax.set_xlabel("x1")
     ax.set_ylabel("ŷ and y")
     ax.legend(handles=handles, fontsize=T.legend_size, loc="best")
@@ -1753,6 +1872,11 @@ def draw_parity(ax, S, F):
     handles = [Line2D([], [], color=T.muted, lw=1.4, label="ŷ = y")]
     for k in range(K):
         ax.scatter(Y[:, k], A[:, k], s=36 if D.n <= 40 else 16, zorder=3, **target_marks(T, k))
+    if S.test is not None:
+        Yt = S.test.y.numpy().reshape(S.test.n, -1)
+        At = np.asarray(net_on(S, S.test.X.numpy(), F.w), dtype=float).reshape(S.test.n, -1)
+        for k in range(K):
+            test_marks(ax, S, lambda *_, k=k: (Yt[:, k], At[:, k], T.point_neutral), k == 0)
         handles.append(target_handle(T, k, line=False, label=f"target {k + 1}" if K > 1 else "cases"))
     if D.G > 1:
         for c in range(D.G):
@@ -1772,6 +1896,8 @@ def draw_parity(ax, S, F):
     ax.set_xlim(lo, hi)
     ax.set_ylim(lo, hi)
     ax.set_aspect("equal")
+    if test_handle(S) is not None:
+        handles.append(test_handle(S))
     ax.set_xlabel("target y")
     ax.set_ylabel("prediction ŷ")
     ax.legend(handles=handles, fontsize=T.legend_size, loc="upper left")
@@ -1787,16 +1913,20 @@ def draw_history(ax, S, F):
     T = S.theme
     history = F.history
     ax.plot(range(len(history)), history, "o-", color=T.ink, ms=4, label="R after the step")
+    test = [v for v in F.history_test if v is not None]
+    if test:
+        ax.plot(range(len(test)), test, "x--", color=T.muted, ms=5, lw=1.2, label="R on the test data")
     predicted = [(k + 1, p.predicted) for k, p in enumerate(F.predictions)]
     if S.log_scale:
         predicted = [(k, v) for k, v in predicted if v > 0]
     if predicted:
         ks, vs = zip(*predicted)
         ax.plot(ks, vs, "o", mfc=T.paper, mec=T.prediction_colour, ms=6, ls="none", label="first-order prediction")
+    if predicted or test:
         ax.legend(fontsize=T.legend_size, loc="lower left")
     ax.set_xlabel("gradient steps taken")
     ax.set_ylabel("R")
-    values = list(history) + [v for _, v in predicted]
+    values = list(history) + [v for _, v in predicted] + test
     if S.log_scale:
         positive = [v for v in values if v > 0] or [1.0]
         ax.set_yscale("log")
@@ -2123,22 +2253,23 @@ def draw_slice(ax, S, F):
 
 
 def draw_line(ax, S, F):
-    """R along the direction of the next step, w - t g (g: the slopes of the weights that move), for t from 0 to
-    2.5 eta: the actual R, the tangent line R - t |g|^2 (the first-order prediction), where the step lands at
-    t = eta on both, and the lowest point on this line."""
+    """R along the direction of the next step, w + t d (d: the step per unit of eta; -g, the slopes of the weights
+    that move, for plain gradient descent), for t from 0 to 2.5 eta: the actual R, the tangent line R + t (g . d)
+    (the first-order prediction), where the step lands at t = eta on both, and the lowest point on this line."""
     D, M, T = S.data, S.model, S.theme
     g = moving_slopes(F)
-    g2 = float((g**2).sum())
-    if g2 == 0:
+    d = np.asarray(F.direction, dtype=float)
+    slope = float((g * d).sum())  # the slope of R along the step, g . d
+    if not np.any(d):
         message(ax, T, "every slope is 0:\nno step")
         return
     eta = F.eta
     ts = np.linspace(0, 2.5 * eta, 101)
     w = np.asarray(F.w, dtype=float)
-    R = M.risk_batch(D.X, D.y, w[None, :] - ts[:, None] * g[None, :])
-    R_eta = float(M.risk_batch(D.X, D.y, (w - eta * g)[None, :])[0])
-    pred = F.R - eta * g2
-    tangent = F.R - ts * g2
+    R = M.risk_batch(D.X, D.y, w[None, :] + ts[:, None] * d[None, :])
+    R_eta = float(M.risk_batch(D.X, D.y, (w + eta * d)[None, :])[0])
+    pred = F.R + eta * slope
+    tangent = F.R + ts * slope
     ax.plot(ts, R, color=T.ink, lw=1.8, label="R along the step")
     ax.plot(ts, tangent, "--", color=T.prediction_colour, lw=1.2, label="first-order prediction")
     ax.axvline(eta, color=T.reference_line, lw=0.8, zorder=0)
@@ -2160,7 +2291,8 @@ def draw_line(ax, S, F):
     span = (top - bottom) or 1.0
     ax.set_ylim(bottom - 0.08 * span, top + 0.08 * span)
     ax.set_xlim(0, ts[-1])
-    ax.set_xlabel("t, the step size along -grad R")
+    plain = S.optimizer.kind == "gd" and S.optimizer.weight_decay == 0
+    ax.set_xlabel("t, the step size along -grad R" if plain else f"t, the step size along the {S.optimizer.kind} step")
     ax.set_ylabel("R")
     ax.legend(fontsize=T.legend_size, loc="best")
     ax.set_title(f"R along the next step, eta {eta:g}", fontsize=T.panel_title_size)
@@ -2910,7 +3042,9 @@ def draw_derivation(ax, S, F):
 # ------------------------ picture.py ------------------------
 
 Frame = namedtuple(
-    "Frame", "w out R g deltas changed moving history predictions eta next_change cases lookahead bp stage by_hand"
+    "Frame",
+    "w out R g deltas changed moving history predictions eta next_change cases lookahead bp stage by_hand "
+    "direction history_test R_test",
 )
 LIVE_DPI = 100  # resolution of the picture shown by the widgets
 
@@ -2932,7 +3066,12 @@ def make_frame(S, w=None):
     changed = {k for k in range(len(w)) if abs(w[k] - S.w0[k]) > 1e-9}  # moved from the start in any way
     ref = S.path[-1]  # the weights after the last step (or at the start): a difference was made by hand
     by_hand = {k for k in range(len(w)) if abs(w[k] - ref[k]) > 1e-6 * max(1.0, abs(ref[k]))}
-    next_change = -S.eta * float(sum(g[k] ** 2 for k in moving))
+    dw = S.next_step(S.eta, w, g)  # the step the optimizer would take, without taking it
+    next_change = float(sum(g[k] * dw[k] for k in dw))
+    direction = np.zeros(len(w))  # the step per unit of eta: -g for plain gradient descent
+    for k, d in dw.items():
+        direction[k] = d / S.eta
+    R_test = S.risk_test(w)
     cases = M.case_slopes(D.X, D.y) if "cases" in S.views else None
     lookahead = S.lookahead(w=w) if "momentum" in S.views else None
     bp = backward_pass(M, D.X, D.y, w) if "backprop" in S.views else None
@@ -2955,6 +3094,9 @@ def make_frame(S, w=None):
         bp,
         stage,
         by_hand,
+        direction,
+        list(S.history_test),
+        R_test,
     )
 
 
@@ -3279,6 +3421,10 @@ def readout_html(r, action=None):
     ]
     if r["accuracy"] is not None:
         cells.append(("accuracy", span(f"{r['accuracy']:.3f}", "value"), ""))
+    if r.get("R_test") is not None:
+        cells.append(("R on the test data", span(f"{r['R_test']:.4f}", "value"), ""))
+    if r.get("accuracy_test") is not None:
+        cells.append(("test accuracy", span(f"{r['accuracy_test']:.3f}", "value"), ""))
     pad = f"padding:0 32px 0 0;text-align:left;vertical-align:bottom;{UI['numbers']}"
     rows = [
         "".join(f'<td style="{pad}">{span(label, "small", "quiet")}</td>' for label, _, _ in cells),
@@ -3427,7 +3573,10 @@ class Controller:
         hint = HINTS["core"]
         if S.task == "regression" and S.model.n_outputs > 1:
             hint += " The targets count from 1, like the inputs x1, x2."
-        core = widgets.VBox([widgets.HTML(text_html(hint)), steps_row, self.panel, self.frozen_note])
+        rows = [widgets.HTML(text_html(hint)), steps_row]
+        if S.optimizer_asked:
+            rows.append(self.optimizer_row(widgets))
+        core = widgets.VBox(rows + [self.panel, self.frozen_note])
         # tabs only for what the call asked for; the backward pass stays on while its tab exists
         self.kinds, panels = ["core"], {"core": core}
         if "backprop" in S.views:
@@ -3703,6 +3852,77 @@ class Controller:
         button.description = "step" if n == 1 else "steps"
         tip(button, f"{n} gradient step{'' if n == 1 else 's'} in a row; the number is in the box to the left")
 
+    def optimizer_row(self, widgets):
+        """The rule of a step and its numbers: the optimizer, the weight decay and beta (shown when the call asked
+        for an optimizer or a weight decay)."""
+        S = self.session
+        opt = S.optimizer
+        self.opt_pick = tip(
+            widgets.Dropdown(
+                options=[("gradient descent", "gd"), ("momentum", "momentum"), ("Adam", "adam")],
+                value=opt.kind,
+                description="optimizer",
+                style={"description_width": UI["setting_label"]},
+                layout=widgets.Layout(width=UI["short"]),
+            ),
+            "the rule of a step: w <- w - eta x dR/dw; momentum keeps a share beta of the last step; Adam scales "
+            "each weight's step by its recent slopes",
+        )
+        self.decay = tip(
+            widgets.FloatSlider(
+                value=opt.weight_decay,
+                min=0.0,
+                max=max(0.1, opt.weight_decay),
+                step=0.001,
+                description="weight decay",
+                readout_format=".3f",
+                continuous_update=False,
+                style={"description_width": UI["setting_label"]},
+                layout=widgets.Layout(width=UI["long"]),
+            ),
+            "lambda: lambda x w is added to each slope before the step; R itself stays the loss on the data",
+        )
+        self.opt_beta = tip(
+            widgets.FloatSlider(
+                value=opt.beta,
+                min=0.0,
+                max=0.99,
+                step=0.01,
+                description="beta",
+                continuous_update=False,
+                style={"description_width": UI["label"]},
+                layout=widgets.Layout(width=UI["long"]),
+            ),
+            "momentum: the share of the last step each step keeps; Adam: its share of the last slopes",
+        )
+        for w in (self.opt_pick, self.decay, self.opt_beta):
+            w.observe(self.on_optimizer, names="value")
+        return widgets.HBox(
+            [self.opt_pick, self.decay, self.opt_beta],
+            layout=widgets.Layout(align_items="center", flex_flow="row wrap", margin="0 0 12px 0"),
+        )
+
+    def on_optimizer(self, *_):
+        """A new rule or new numbers for the steps; a new rule forgets the state of the old one."""
+        if self.busy:
+            return
+        S = self.session
+        S.optimizer.set(kind=self.opt_pick.value, weight_decay=float(self.decay.value), beta=float(self.opt_beta.value))
+        S.beta = float(self.opt_beta.value)
+        if hasattr(self, "beta"):  # the momentum view shares beta
+            self.busy = True
+            try:
+                self.beta.value = S.beta
+            finally:
+                self.busy = False
+        self.redraw()
+        name = {"gd": "gradient descent", "momentum": "momentum", "adam": "Adam"}[S.optimizer.kind]
+        r = S.readouts(self.eta.value)
+        self.say(
+            f"Steps by {name}, weight decay {S.optimizer.weight_decay:g}: the next step should change R by about "
+            f"{r['next_change']:+.4f}."
+        )
+
     def on_eta(self, change):
         self.session.eta = float(change["new"])
         if not self.busy:
@@ -3776,6 +3996,13 @@ class Controller:
         second = self.slice_pick[1].value
         S.slice_weights = [first] if second in ("none", self.slice_pick[0].value) else [first, names.index(second)]
         S.beta = float(self.beta.value)
+        S.optimizer.set(beta=S.beta)
+        if hasattr(self, "opt_beta") and self.opt_beta.value != S.beta:
+            self.busy = True
+            try:
+                self.opt_beta.value = S.beta
+            finally:
+                self.busy = False
         S.lookahead_steps = int(self.ahead.value)
         S.log_scale = bool(self.log_box.value)
         self.picture = None  # the panels changed: a new figure
@@ -4136,11 +4363,25 @@ class Session:
         backprop_step=0,
         backprop_case=0,
         focus=None,
+        X_test=None,
+        y_test=None,
+        optimizer=None,
+        weight_decay=None,
+        beta2=0.999,
     ):
         self.model = Model(net)
         M = self.model
         self.data = prepare(X, y, groups, n_inputs=M.n_inputs, dtype=M.dtype, task=task, n_outputs=M.n_outputs)
         self.task = self.model.task = self.data.task
+        if (X_test is None) != (y_test is None):
+            raise ValueError("slopewalk: give X_test and y_test together, or neither.")
+        self.test = None  # test data: drawn hollow, R on it in the status and the R panel, never in the steps
+        if X_test is not None:
+            self.test = prepare(
+                X_test, y_test, None, n_inputs=M.n_inputs, dtype=M.dtype, task=self.task, n_outputs=M.n_outputs
+            )
+        self.optimizer_asked = optimizer is not None or weight_decay is not None  # the widgets then show the row
+        self.optimizer = Optimizer(optimizer or "gd", weight_decay or 0.0, check_beta(beta), beta2)
         self.layout = Layout(M.n_inputs, M.hidden, self.task, style=layout, width=width, outputs=M.n_outputs)
         self.base_theme, self.theme_name = THEMES["light"], "light"
         self.shown = list(range(self.data.G))
@@ -4179,9 +4420,10 @@ class Session:
         start = self.model.forward(self.data.X, self.data.y)
         self.loss0 = [self.data.stats(start.loss, c)[0] for c in range(self.data.G)]
         self.history = [self.risk(self.w0)]
+        self.history_test = [self.risk_test(self.w0)]
         self.predictions = []
         self.path = [list(self.w0)]
-        self.undo = []  # per step taken: the weights before it, and the length of path before it
+        self.undo = []  # per step taken: the weights before it, the length of path before it, the optimizer's state
         self.last_moved = None
         self.cache = {}
         self.fig = None
@@ -4255,12 +4497,30 @@ class Session:
         """dR/dw at the weights w (default: the current ones). Sets the network to w."""
         return self.model.slopes(self.data.X, self.data.y, w)
 
-    def predict(self, eta=None, w=None):
-        """The first-order prediction of the change of R for one step from w: -eta times the sum of the squared
-        slopes of the weights that move."""
+    def risk_test(self, w=None):
+        """R on the test data at the weights w (default: the current ones), or None without test data. Sets the
+        network to w."""
+        if self.test is None:
+            if w is not None:
+                self.model.set_weights(w)
+            return None
+        return self.model.risk(self.test.X, self.test.y, w)
+
+    def next_step(self, eta=None, w=None, g=None):
+        """The change of each weight that the next step would make, as {k: dw}, from w (default: the current weights)
+        and the slopes g (computed when not given), without taking it."""
         eta = self.eta if eta is None else check_eta(eta)
+        w = self.weights() if w is None else [float(v) for v in w]
+        g = self.slopes(w) if g is None else g
+        return self.optimizer.direction(g, w, self.active, eta)
+
+    def predict(self, eta=None, w=None):
+        """The first-order prediction of the change of R for one step from w: the slopes times the step, g . dw
+        (-eta times the sum of the squared slopes of the weights that move, for plain gradient descent)."""
+        w = self.weights() if w is None else [float(v) for v in w]
         g = self.slopes(w)
-        return -eta * float(sum(g[k] ** 2 for k in self.active))
+        dw = self.next_step(eta, w, g)
+        return float(sum(g[k] * dw[k] for k in dw))
 
     def step(self, k=1, eta=None, w=None):
         """k gradient steps, w <- w - eta * dR/dw for the weights that move, from w (default: the current weights).
@@ -4273,14 +4533,16 @@ class Session:
             self.path.append(list(w))
         R = self.risk(w)
         for i in range(k):
-            self.undo.append((list(w), mark if i == 0 else len(self.path)))
+            self.undo.append((list(w), mark if i == 0 else len(self.path), self.optimizer.copy()))
             g = self.slopes(w)
-            g2 = float(sum(g[i] ** 2 for i in self.active))
-            for i in self.active:
-                w[i] -= eta * float(g[i])
+            dw = self.optimizer.step(g, w, self.active, eta)
+            predicted = R + float(sum(g[j] * dw[j] for j in dw))
+            for j, d in dw.items():
+                w[j] += d
             R_new = self.risk(w)
-            self.predictions.append(Prediction(R, R - eta * g2, R_new))
+            self.predictions.append(Prediction(R, predicted, R_new))
             self.history.append(R_new)
+            self.history_test.append(self.risk_test(w))
             self.path.append(list(w))
             R = R_new
         self.last_moved = None  # a step moves every weight
@@ -4294,9 +4556,11 @@ class Session:
         None when there is no step to undo."""
         if not self.undo:
             return None
-        w, mark = self.undo.pop()
+        w, mark, state = self.undo.pop()
+        self.optimizer = state
         del self.path[mark:]
         self.history.pop()
+        self.history_test.pop()
         self.predictions.pop()
         self.last_moved = None
         self.model.set_weights(w)
@@ -4307,9 +4571,11 @@ class Session:
         """Back to the weights at the start, with no steps taken. Returns the weights."""
         self.model.set_weights(self.w0)
         self.history = [self.risk(self.w0)]
+        self.history_test = [self.risk_test(self.w0)]
         self.predictions = []
         self.path = [list(self.w0)]
         self.undo = []
+        self.optimizer.reset()
         self.last_moved = None
         self.changed()
         return list(self.w0)
@@ -4351,14 +4617,18 @@ class Session:
         w = self.weights() if w is None else list(w)
         g = self.slopes(w)
         g2 = float(sum(g[k] ** 2 for k in self.active))
+        dw = self.next_step(eta, w, g)
         last = self.predictions[-1] if self.predictions else None
+        classify = self.task != "regression"
         out = {
             "R": self.risk(w),
             "grad_norm": math.sqrt(g2),
-            "accuracy": None if self.task == "regression" else self.model.accuracy(self.data.X, self.data.y, w),
+            "accuracy": self.model.accuracy(self.data.X, self.data.y, w) if classify else None,
             "eta": eta,
-            "next_change": -eta * g2,
+            "next_change": float(sum(g[k] * dw[k] for k in dw)),
             "last": None if last is None else (last.predicted - last.before, last.actual - last.before),
+            "R_test": self.risk_test(w),
+            "accuracy_test": self.model.accuracy(self.test.X, self.test.y, w) if classify and self.test else None,
         }
         self.model.set_weights(w)
         return out
@@ -4480,6 +4750,11 @@ def explore(
     backprop_case=0,
     theme="auto",
     focus=None,
+    X_test=None,
+    y_test=None,
+    optimizer=None,
+    weight_decay=None,
+    beta2=0.999,
 ):
     """Gradient descent by hand on `net`, with inputs X (n x d) and labels y.
 
@@ -4506,6 +4781,13 @@ def explore(
     light elsewhere, Colab included; SLOPEWALK_THEME=dark (or light) in the environment chooses for every notebook.
     focus: one group ("A" or 0) drawn alone and larger, for a close look at one case; checkboxes under the controls
     add the other groups. R, the table and the panels below the networks stay over every point.
+    X_test, y_test: test data, in the shapes of X and y. Its points are drawn as crosses, R on it joins the R panel
+    and the status, and it takes no part in the steps.
+    optimizer: the rule of a step: "gd" (the default, w <- w - eta * dR/dw), "momentum" (each step keeps the share
+    beta of the last one) or "adam" (beta and beta2 are its shares of the last slopes and squared slopes).
+    weight_decay: lambda, added to each slope as lambda * w before the step (as torch.optim's weight_decay). R stays
+    the mean loss on the data, so the table and the backward pass show its slopes; the first-order prediction is the
+    slopes times the step. Passing optimizer or weight_decay shows a row of controls for them.
 
     Draws one copy of the network per group (every value a mean ± standard deviation over the group), with each
     weight on its line, the units as z, activation and h, then the output and the loss with its change from the
@@ -4539,6 +4821,11 @@ def explore(
         backprop_step=backprop_step,
         backprop_case=backprop_case,
         focus=focus,
+        X_test=X_test,
+        y_test=y_test,
+        optimizer=optimizer,
+        weight_decay=weight_decay,
+        beta2=beta2,
     )
     session.set_theme(theme)
     if os.environ.get("NB_STATIC") == "1":
@@ -4576,6 +4863,10 @@ OPTIONS = (  # the arguments of explore, one line each
     ("backprop_case", "the group whose case the Worked example follows ('A' or 0 is the first)"),
     ("theme", "'auto' (the editor's theme where the kernel can read it), 'light' or 'dark'"),
     ("focus", "one group ('A' or 0) drawn alone and larger; checkboxes under the controls add the others"),
+    ("X_test, y_test", "test data in the shapes of X and y: drawn as crosses, R on it in the R panel and the status"),
+    ("optimizer", "the rule of a step: 'gd' (the default), 'momentum' or 'adam'; passing it shows its controls"),
+    ("weight_decay", "lambda: lambda * w is added to each slope before the step; R stays the loss on the data"),
+    ("beta2", "Adam's share of the last squared slopes (beta is its share of the last slopes)"),
 )
 SESSION = (
     "step",

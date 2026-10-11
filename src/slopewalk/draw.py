@@ -654,6 +654,13 @@ def class_boundaries(ax, U1, U2, A, **style):
             ax.contour(U1, U2, d, levels=[0.0], **style)
 
 
+def test_handle(S):
+    """The legend entry of the test data, or None without test data."""
+    if S.test is None:
+        return None
+    return Line2D([], [], marker="x", ls="none", color=S.theme.ink, markersize=6, label="test data")
+
+
 def class_legend(ax, S, winners=None):
     """A legend of the class colours. winners: the classes that are the most likely somewhere in the picture; the
     others are marked "no region", so that a class missing from the picture is not taken for a drawing error."""
@@ -670,6 +677,8 @@ def class_legend(ax, S, winners=None):
         )
         for k in range(S.data.n_classes)
     ]
+    if test_handle(S) is not None:
+        handles.append(test_handle(S))
     ax.legend(handles=handles, fontsize=T.legend_size, loc="best")
 
 
@@ -694,6 +703,14 @@ def line_grid(S):
     lo, hi = float(x.min()), float(x.max())
     pad = 0.15 * (hi - lo) if hi > lo else 1.0
     return np.linspace(lo - pad, hi + pad, 201)
+
+
+def test_marks(ax, S, where, legend=True):
+    """The test data as crosses: where(X_test, y_test) gives (x, y, colours) of the marks; legend: name them once."""
+    if S.test is None:
+        return
+    x, y, colours = where(S.test.X.numpy(), S.test.y.numpy())
+    ax.scatter(x, y, marker="x", s=22, c=colours, linewidths=1.0, zorder=3, label="test data" if legend else None)
 
 
 def draw_group_marks(ax, S, xs, ys, size=160):
@@ -747,6 +764,7 @@ def draw_input_plane(ax, S, F):
         if D.task == "binary":
             colours = [T.class_colour[int(v)] for v in y]
             ax.scatter(X[:, 0], y, c=colours, s=18, edgecolor=T.marker_edge, lw=0.3, zorder=3)
+            test_marks(ax, S, lambda Xt, yt: (Xt[:, 0], yt, [T.class_colour[int(v)] for v in yt]))
             ax.axhline(0.5, color=T.reference_line, lw=0.8, zorder=0)
             gy = [float(D.stats(y, c)[0]) for c in range(D.G)]
             ax.set_ylim(-0.08, 1.08)
@@ -754,12 +772,13 @@ def draw_input_plane(ax, S, F):
             ax.set_title("p for class 1 against x1", fontsize=T.panel_title_size)
         else:
             ax.scatter(X[:, 0], y, s=18, color=T.point_neutral, zorder=3)
+            test_marks(ax, S, lambda Xt, yt: (Xt[:, 0], yt, T.point_neutral))
             gy = [float(D.stats(y, c)[0]) for c in range(D.G)]
             ax.set_ylabel("y")
             ax.set_title("ŷ against x1, and the points", fontsize=T.panel_title_size)
         draw_group_marks(ax, S, [float(v[0]) for v in gx], gy, size=110)
         ax.set_xlabel("x1")
-        if moved:
+        if moved or S.test is not None:
             ax.legend(fontsize=T.legend_size, loc="best")
         S.model.set_weights(w)
         return
@@ -780,6 +799,7 @@ def draw_input_plane(ax, S, F):
                 ax.contour(P1, P2, a0, levels=[0.0], colors=T.start_colour, linestyles="--", linewidths=1.0)
         if D.n > D.G:
             ax.scatter(X[:, 0], X[:, 1], c=[T.class_colour[int(v)] for v in y], s=4)
+        test_marks(ax, S, lambda Xt, yt: (Xt[:, 0], Xt[:, 1], [T.class_colour[int(v)] for v in yt]))
         for c in range(D.G):
             yi = group_style(S, c)[3]
             ax.scatter(*gx[c], s=160, color=T.class_colour[yi], edgecolor=T.marker_edge, zorder=3)
@@ -787,6 +807,8 @@ def draw_input_plane(ax, S, F):
                 gx[c][0] + 0.15, gx[c][1] + 0.15, letter(c), fontsize=T.letter_size, path_effects=halo(T), color=T.ink
             )
         ax.set_title("p for class 1 over the input plane,\nand the boundary p = 0.5", fontsize=T.panel_title_size)
+        if S.test is not None:
+            ax.legend(fontsize=T.legend_size, loc="best")
     else:
         lo, hi = float(min(a.min(), y.min())), float(max(a.max(), y.max()))
         levels = np.linspace(lo, hi, 12) if hi > lo else 12
@@ -833,6 +855,12 @@ def draw_class_plane(ax, S, F, gx):
             ax.plot(u, P[:, k], color=T.class_colour[k], lw=2, label=f"p{k}")
         own = F.out.p[np.arange(D.n), y.astype(np.int64)]
         ax.scatter(X[:, 0], own, c=colours, s=18, edgecolor=T.marker_edge, lw=0.3, zorder=3)
+        if S.test is not None:  # the test cases on the curve of their class as well
+            Pt = softmax(net_on(S, S.test.X.numpy(), F.w))
+            yt = S.test.y.numpy().astype(np.int64)
+            test_marks(
+                ax, S, lambda Xt, _: (Xt[:, 0], Pt[np.arange(len(yt)), yt], [T.class_colour[int(v)] for v in yt])
+            )
         draw_group_marks(ax, S, [float(v[0]) for v in gx], [float(D.stats(own, c)[0]) for c in range(D.G)], size=110)
         ax.set_ylim(-0.08, 1.08)
         ax.set_xlabel("x1")
@@ -850,6 +878,7 @@ def draw_class_plane(ax, S, F, gx):
         class_boundaries(ax, P1, P2, A0, colors=T.start_colour, linestyles="--", linewidths=1.0)
     if D.n > D.G:
         ax.scatter(X[:, 0], X[:, 1], c=colours, s=4)
+    test_marks(ax, S, lambda Xt, yt: (Xt[:, 0], Xt[:, 1], [T.class_colour[int(v)] for v in yt]))
     for c in range(D.G):
         yi = group_style(S, c)[3]
         ax.scatter(*gx[c], s=160, color=T.class_colour[yi], edgecolor=T.marker_edge, zorder=3)
@@ -910,7 +939,10 @@ def draw_target_curves(ax, S, F):
     for k in range(A.shape[1]):
         ax.plot(u, A[:, k], LINE_STYLES[k], color=T.neutral_colour, lw=2, label=f"ŷ{k + 1}")
         ax.scatter(X[:, 0], Y[:, k], s=40, zorder=3, **target_marks(T, k))
+        test_marks(ax, S, lambda Xt, Yt, k=k: (Xt[:, 0], Yt.reshape(len(Xt), -1)[:, k], T.point_neutral), k == 0)
         handles.append(target_handle(T, k))
+    if test_handle(S) is not None:
+        handles.append(test_handle(S))
     ax.set_xlabel("x1")
     ax.set_ylabel("ŷ and y")
     ax.legend(handles=handles, fontsize=T.legend_size, loc="best")
@@ -932,6 +964,11 @@ def draw_parity(ax, S, F):
     handles = [Line2D([], [], color=T.muted, lw=1.4, label="ŷ = y")]
     for k in range(K):
         ax.scatter(Y[:, k], A[:, k], s=36 if D.n <= 40 else 16, zorder=3, **target_marks(T, k))
+    if S.test is not None:
+        Yt = S.test.y.numpy().reshape(S.test.n, -1)
+        At = np.asarray(net_on(S, S.test.X.numpy(), F.w), dtype=float).reshape(S.test.n, -1)
+        for k in range(K):
+            test_marks(ax, S, lambda *_, k=k: (Yt[:, k], At[:, k], T.point_neutral), k == 0)
         handles.append(target_handle(T, k, line=False, label=f"target {k + 1}" if K > 1 else "cases"))
     if D.G > 1:
         for c in range(D.G):
@@ -951,6 +988,8 @@ def draw_parity(ax, S, F):
     ax.set_xlim(lo, hi)
     ax.set_ylim(lo, hi)
     ax.set_aspect("equal")
+    if test_handle(S) is not None:
+        handles.append(test_handle(S))
     ax.set_xlabel("target y")
     ax.set_ylabel("prediction ŷ")
     ax.legend(handles=handles, fontsize=T.legend_size, loc="upper left")
@@ -966,16 +1005,20 @@ def draw_history(ax, S, F):
     T = S.theme
     history = F.history
     ax.plot(range(len(history)), history, "o-", color=T.ink, ms=4, label="R after the step")
+    test = [v for v in F.history_test if v is not None]
+    if test:
+        ax.plot(range(len(test)), test, "x--", color=T.muted, ms=5, lw=1.2, label="R on the test data")
     predicted = [(k + 1, p.predicted) for k, p in enumerate(F.predictions)]
     if S.log_scale:
         predicted = [(k, v) for k, v in predicted if v > 0]
     if predicted:
         ks, vs = zip(*predicted)
         ax.plot(ks, vs, "o", mfc=T.paper, mec=T.prediction_colour, ms=6, ls="none", label="first-order prediction")
+    if predicted or test:
         ax.legend(fontsize=T.legend_size, loc="lower left")
     ax.set_xlabel("gradient steps taken")
     ax.set_ylabel("R")
-    values = list(history) + [v for _, v in predicted]
+    values = list(history) + [v for _, v in predicted] + test
     if S.log_scale:
         positive = [v for v in values if v > 0] or [1.0]
         ax.set_yscale("log")

@@ -16,7 +16,8 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PKG = ROOT / "src" / "slopewalk"
 OUT = ROOT / "dist" / "slopewalk_single.py"
-ORDER = [
+ORDER = [  # modules in the order of their dependencies
+    "optim",
     "model",
     "data",
     "layout",

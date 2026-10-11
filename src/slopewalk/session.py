@@ -12,6 +12,7 @@ from .draw import THEMES, as_theme
 from .host import auto_theme
 from .layout import Layout
 from .model import Model
+from .optim import Optimizer
 from .picture import Picture
 from .static import NO_WIDGETS_MESSAGE, STATIC_MESSAGE, still_picture
 from .views import VIEWS
@@ -94,11 +95,25 @@ class Session:
         backprop_step=0,
         backprop_case=0,
         focus=None,
+        X_test=None,
+        y_test=None,
+        optimizer=None,
+        weight_decay=None,
+        beta2=0.999,
     ):
         self.model = Model(net)
         M = self.model
         self.data = prepare(X, y, groups, n_inputs=M.n_inputs, dtype=M.dtype, task=task, n_outputs=M.n_outputs)
         self.task = self.model.task = self.data.task
+        if (X_test is None) != (y_test is None):
+            raise ValueError("slopewalk: give X_test and y_test together, or neither.")
+        self.test = None  # test data: drawn hollow, R on it in the status and the R panel, never in the steps
+        if X_test is not None:
+            self.test = prepare(
+                X_test, y_test, None, n_inputs=M.n_inputs, dtype=M.dtype, task=self.task, n_outputs=M.n_outputs
+            )
+        self.optimizer_asked = optimizer is not None or weight_decay is not None  # the widgets then show the row
+        self.optimizer = Optimizer(optimizer or "gd", weight_decay or 0.0, check_beta(beta), beta2)
         self.layout = Layout(M.n_inputs, M.hidden, self.task, style=layout, width=width, outputs=M.n_outputs)
         self.base_theme, self.theme_name = THEMES["light"], "light"
         self.shown = list(range(self.data.G))
@@ -137,9 +152,10 @@ class Session:
         start = self.model.forward(self.data.X, self.data.y)
         self.loss0 = [self.data.stats(start.loss, c)[0] for c in range(self.data.G)]
         self.history = [self.risk(self.w0)]
+        self.history_test = [self.risk_test(self.w0)]
         self.predictions = []
         self.path = [list(self.w0)]
-        self.undo = []  # per step taken: the weights before it, and the length of path before it
+        self.undo = []  # per step taken: the weights before it, the length of path before it, the optimizer's state
         self.last_moved = None
         self.cache = {}
         self.fig = None
@@ -213,12 +229,30 @@ class Session:
         """dR/dw at the weights w (default: the current ones). Sets the network to w."""
         return self.model.slopes(self.data.X, self.data.y, w)
 
-    def predict(self, eta=None, w=None):
-        """The first-order prediction of the change of R for one step from w: -eta times the sum of the squared
-        slopes of the weights that move."""
+    def risk_test(self, w=None):
+        """R on the test data at the weights w (default: the current ones), or None without test data. Sets the
+        network to w."""
+        if self.test is None:
+            if w is not None:
+                self.model.set_weights(w)
+            return None
+        return self.model.risk(self.test.X, self.test.y, w)
+
+    def next_step(self, eta=None, w=None, g=None):
+        """The change of each weight that the next step would make, as {k: dw}, from w (default: the current weights)
+        and the slopes g (computed when not given), without taking it."""
         eta = self.eta if eta is None else check_eta(eta)
+        w = self.weights() if w is None else [float(v) for v in w]
+        g = self.slopes(w) if g is None else g
+        return self.optimizer.direction(g, w, self.active, eta)
+
+    def predict(self, eta=None, w=None):
+        """The first-order prediction of the change of R for one step from w: the slopes times the step, g . dw
+        (-eta times the sum of the squared slopes of the weights that move, for plain gradient descent)."""
+        w = self.weights() if w is None else [float(v) for v in w]
         g = self.slopes(w)
-        return -eta * float(sum(g[k] ** 2 for k in self.active))
+        dw = self.next_step(eta, w, g)
+        return float(sum(g[k] * dw[k] for k in dw))
 
     def step(self, k=1, eta=None, w=None):
         """k gradient steps, w <- w - eta * dR/dw for the weights that move, from w (default: the current weights).
@@ -231,14 +265,16 @@ class Session:
             self.path.append(list(w))
         R = self.risk(w)
         for i in range(k):
-            self.undo.append((list(w), mark if i == 0 else len(self.path)))
+            self.undo.append((list(w), mark if i == 0 else len(self.path), self.optimizer.copy()))
             g = self.slopes(w)
-            g2 = float(sum(g[i] ** 2 for i in self.active))
-            for i in self.active:
-                w[i] -= eta * float(g[i])
+            dw = self.optimizer.step(g, w, self.active, eta)
+            predicted = R + float(sum(g[j] * dw[j] for j in dw))
+            for j, d in dw.items():
+                w[j] += d
             R_new = self.risk(w)
-            self.predictions.append(Prediction(R, R - eta * g2, R_new))
+            self.predictions.append(Prediction(R, predicted, R_new))
             self.history.append(R_new)
+            self.history_test.append(self.risk_test(w))
             self.path.append(list(w))
             R = R_new
         self.last_moved = None  # a step moves every weight
@@ -252,9 +288,11 @@ class Session:
         None when there is no step to undo."""
         if not self.undo:
             return None
-        w, mark = self.undo.pop()
+        w, mark, state = self.undo.pop()
+        self.optimizer = state
         del self.path[mark:]
         self.history.pop()
+        self.history_test.pop()
         self.predictions.pop()
         self.last_moved = None
         self.model.set_weights(w)
@@ -265,9 +303,11 @@ class Session:
         """Back to the weights at the start, with no steps taken. Returns the weights."""
         self.model.set_weights(self.w0)
         self.history = [self.risk(self.w0)]
+        self.history_test = [self.risk_test(self.w0)]
         self.predictions = []
         self.path = [list(self.w0)]
         self.undo = []
+        self.optimizer.reset()
         self.last_moved = None
         self.changed()
         return list(self.w0)
@@ -309,14 +349,18 @@ class Session:
         w = self.weights() if w is None else list(w)
         g = self.slopes(w)
         g2 = float(sum(g[k] ** 2 for k in self.active))
+        dw = self.next_step(eta, w, g)
         last = self.predictions[-1] if self.predictions else None
+        classify = self.task != "regression"
         out = {
             "R": self.risk(w),
             "grad_norm": math.sqrt(g2),
-            "accuracy": None if self.task == "regression" else self.model.accuracy(self.data.X, self.data.y, w),
+            "accuracy": self.model.accuracy(self.data.X, self.data.y, w) if classify else None,
             "eta": eta,
-            "next_change": -eta * g2,
+            "next_change": float(sum(g[k] * dw[k] for k in dw)),
             "last": None if last is None else (last.predicted - last.before, last.actual - last.before),
+            "R_test": self.risk_test(w),
+            "accuracy_test": self.model.accuracy(self.test.X, self.test.y, w) if classify and self.test else None,
         }
         self.model.set_weights(w)
         return out
@@ -438,6 +482,11 @@ def explore(
     backprop_case=0,
     theme="auto",
     focus=None,
+    X_test=None,
+    y_test=None,
+    optimizer=None,
+    weight_decay=None,
+    beta2=0.999,
 ):
     """Gradient descent by hand on `net`, with inputs X (n x d) and labels y.
 
@@ -464,6 +513,13 @@ def explore(
     light elsewhere, Colab included; SLOPEWALK_THEME=dark (or light) in the environment chooses for every notebook.
     focus: one group ("A" or 0) drawn alone and larger, for a close look at one case; checkboxes under the controls
     add the other groups. R, the table and the panels below the networks stay over every point.
+    X_test, y_test: test data, in the shapes of X and y. Its points are drawn as crosses, R on it joins the R panel
+    and the status, and it takes no part in the steps.
+    optimizer: the rule of a step: "gd" (the default, w <- w - eta * dR/dw), "momentum" (each step keeps the share
+    beta of the last one) or "adam" (beta and beta2 are its shares of the last slopes and squared slopes).
+    weight_decay: lambda, added to each slope as lambda * w before the step (as torch.optim's weight_decay). R stays
+    the mean loss on the data, so the table and the backward pass show its slopes; the first-order prediction is the
+    slopes times the step. Passing optimizer or weight_decay shows a row of controls for them.
 
     Draws one copy of the network per group (every value a mean ± standard deviation over the group), with each
     weight on its line, the units as z, activation and h, then the output and the loss with its change from the
@@ -497,6 +553,11 @@ def explore(
         backprop_step=backprop_step,
         backprop_case=backprop_case,
         focus=focus,
+        X_test=X_test,
+        y_test=y_test,
+        optimizer=optimizer,
+        weight_decay=weight_decay,
+        beta2=beta2,
     )
     session.set_theme(theme)
     if os.environ.get("NB_STATIC") == "1":

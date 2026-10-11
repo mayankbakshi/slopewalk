@@ -37,7 +37,9 @@ from .layout import BOTTOM_HEIGHT, NET_GAP, PANEL_GAP
 from .views import VIEW_DRAWERS, VIEWS, needs_3d
 
 Frame = namedtuple(
-    "Frame", "w out R g deltas changed moving history predictions eta next_change cases lookahead bp stage by_hand"
+    "Frame",
+    "w out R g deltas changed moving history predictions eta next_change cases lookahead bp stage by_hand "
+    "direction history_test R_test",
 )
 LIVE_DPI = 100  # resolution of the picture shown by the widgets
 
@@ -59,7 +61,12 @@ def make_frame(S, w=None):
     changed = {k for k in range(len(w)) if abs(w[k] - S.w0[k]) > 1e-9}  # moved from the start in any way
     ref = S.path[-1]  # the weights after the last step (or at the start): a difference was made by hand
     by_hand = {k for k in range(len(w)) if abs(w[k] - ref[k]) > 1e-6 * max(1.0, abs(ref[k]))}
-    next_change = -S.eta * float(sum(g[k] ** 2 for k in moving))
+    dw = S.next_step(S.eta, w, g)  # the step the optimizer would take, without taking it
+    next_change = float(sum(g[k] * dw[k] for k in dw))
+    direction = np.zeros(len(w))  # the step per unit of eta: -g for plain gradient descent
+    for k, d in dw.items():
+        direction[k] = d / S.eta
+    R_test = S.risk_test(w)
     cases = M.case_slopes(D.X, D.y) if "cases" in S.views else None
     lookahead = S.lookahead(w=w) if "momentum" in S.views else None
     bp = backward_pass(M, D.X, D.y, w) if "backprop" in S.views else None
@@ -82,6 +89,9 @@ def make_frame(S, w=None):
         bp,
         stage,
         by_hand,
+        direction,
+        list(S.history_test),
+        R_test,
     )
 
 

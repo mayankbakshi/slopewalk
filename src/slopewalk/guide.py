@@ -30,6 +30,10 @@ OPTIONS = (  # the arguments of explore, one line each
     ("backprop_case", "the group whose case the Worked example follows ('A' or 0 is the first)"),
     ("theme", "'auto' (the editor's theme where the kernel can read it), 'light' or 'dark'"),
     ("focus", "one group ('A' or 0) drawn alone and larger; checkboxes under the controls add the others"),
+    ("X_test, y_test", "test data in the shapes of X and y: drawn as crosses, R on it in the R panel and the status"),
+    ("optimizer", "the rule of a step: 'gd' (the default), 'momentum' or 'adam'; passing it shows its controls"),
+    ("weight_decay", "lambda: lambda * w is added to each slope before the step; R stays the loss on the data"),
+    ("beta2", "Adam's share of the last squared slopes (beta is its share of the last slopes)"),
 )
 SESSION = (
     "step",
